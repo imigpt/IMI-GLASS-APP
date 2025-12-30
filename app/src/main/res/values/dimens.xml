@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!-- ===== COMMON DP SIZES ===== -->
+    <dimen name="dp_1">1dp</dimen>
+    <dimen name="dp_2">2dp</dimen>
+    <dimen name="dp_4">4dp</dimen>
+    <dimen name="dp_6">6dp</dimen>
+    <dimen name="dp_8">8dp</dimen>
+    <dimen name="dp_10">10dp</dimen>
+    <dimen name="dp_12">12dp</dimen>
+    <dimen name="dp_14">14dp</dimen>
+    <dimen name="dp_16">16dp</dimen>
+    <dimen name="dp_18">18dp</dimen>
+    <dimen name="dp_20">20dp</dimen>
+    <dimen name="dp_24">24dp</dimen>
+    <dimen name="dp_28">28dp</dimen>
+    <dimen name="dp_32">32dp</dimen>
+    <dimen name="dp_40">40dp</dimen>
+    <dimen name="dp_48">48dp</dimen>
+    <dimen name="dp_56">56dp</dimen>
+    <dimen name="dp_60">60dp</dimen>
+    <dimen name="dp_80">80dp</dimen>
+    <dimen name="qc_dp_48">48dp</dimen>
+    <dimen name="qc_sp_22">22sp</dimen>
+    <dimen name="qc_sp_18">18sp</dimen>
+
+
+
+    <!-- ===== PADDING AND MARGIN ===== -->
+    <dimen name="padding_small">8dp</dimen>
+    <dimen name="padding_medium">12dp</dimen>
+    <dimen name="padding_large">16dp</dimen>
+    <dimen name="padding_xlarge">24dp</dimen>
+
+    <!-- ===== ICON SIZES ===== -->
+    <dimen name="icon_small">18dp</dimen>
+    <dimen name="icon_medium">24dp</dimen>
+    <dimen name="icon_large">32dp</dimen>
+    <dimen name="icon_xlarge">48dp</dimen>
+
+    <!-- ===== VOICE UI BUTTONS / MIC / ACTION BUTTONS ===== -->
+    <dimen name="voice_button_size">56dp</dimen>
+    <dimen name="voice_button_radius">28dp</dimen>
+
+    <!-- ===== LIST ITEM HEIGHTS ===== -->
+    <dimen name="list_item_height_small">48dp</dimen>
+    <dimen name="list_item_height_medium">60dp</dimen>
+    <dimen name="list_item_height_large">72dp</dimen>
+
+    <!-- ===== TEXT SIZES ===== -->
+    <dimen name="text_xs">10sp</dimen>
+    <dimen name="text_small">12sp</dimen>
+    <dimen name="text_medium">14sp</dimen>
+    <dimen name="text_large">16sp</dimen>
+    <dimen name="text_xlarge">20sp</dimen>
+    <dimen name="text_title">22sp</dimen>
+    <dimen name="text_header">26sp</dimen>
+
+    <!-- ===== WEARABLE / GLASSES UI SPECIAL DIMENS ===== -->
+    <dimen name="glasses_preview_height">200dp</dimen>
+    <dimen name="glasses_button_height">48dp</dimen>
+    <dimen name="glasses_thumbnail_size">90dp</dimen>
+    <dimen name="wearable_touch_area">80dp</dimen>
+
+</resources>

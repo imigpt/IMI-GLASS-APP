@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="300dp"
+    android:height="300dp"
+    android:viewportWidth="300"
+    android:viewportHeight="300">
+    
+    <!-- Glasses illustration -->
+    <path
+        android:pathData="M50,140 Q50,120 70,120 L120,120 Q130,115 150,115 Q170,115 180,120 L230,120 Q250,120 250,140 Q250,160 230,160 L180,160 Q170,165 150,165 Q130,165 120,160 L70,160 Q50,160 50,140 Z"
+        android:fillColor="#FFFFFF"
+        android:strokeColor="#2196F3"
+        android:strokeWidth="4"/>
+    
+    <!-- Microphone icon -->
+    <path
+        android:pathData="M145,90 L145,105 Q145,110 150,110 Q155,110 155,105 L155,90 Q155,85 150,85 Q145,85 145,90 Z"
+        android:fillColor="#2196F3"/>
+    
+    <path
+        android:pathData="M140,110 Q140,118 150,118 Q160,118 160,110"
+        android:fillColor="#00000000"
+        android:strokeColor="#2196F3"
+        android:strokeWidth="2"/>
+    
+    <path
+        android:pathData="M150,118 L150,125"
+        android:fillColor="#00000000"
+        android:strokeColor="#2196F3"
+        android:strokeWidth="2"/>
+</vector>

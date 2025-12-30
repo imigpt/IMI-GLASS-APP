@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+
+    <!-- === INCLUDE ONLY USEFUL DATA === -->
+
+    <!-- Shared Preferences: Save user settings, AI configs, last device -->
+    <include domain="sharedpref" path="." />
+
+    <!-- App-specific small files (configs, JSON, etc.) -->
+    <include domain="files" path="config/" />
+
+
+
+    <!-- === EXCLUDE LARGE / TEMPORARY DATA === -->
+
+    <!-- Exclude downloaded media (images, videos from glasses) -->
+    <exclude domain="files" path="DCIM_1/" />
+
+    <!-- Exclude cache because it can be re-generated -->
+    <exclude domain="cache" path="." />
+
+    <!-- Exclude temp recordings -->
+    <exclude domain="files" path="temp_audio/" />
+
+</full-backup-content>

@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!-- ===== DARK PREMIUM PALETTE ===== -->
+    
+    <!-- Background Colors -->
+    <color name="background_primary">#0F1113</color>
+    <color name="background_secondary">#141618</color>
+    <color name="card_background">#1B1E21</color>
+    <color name="card_background_elevated">#202428</color>
+    
+    <!-- Text Colors -->
+    <color name="text_primary">#EDEDED</color>
+    <color name="text_secondary">#9A9FA6</color>
+    <color name="text_tertiary">#6B7078</color>
+    
+    <!-- Accent & Highlight Colors -->
+    <color name="accent_warm_gray">#B8BABC</color>
+    <color name="accent_silver">#D4D6D8</color>
+    <color name="accent_glow">#E8EAEC</color>
+    
+    <!-- Dividers & Borders -->
+    <color name="divider_subtle">#2A2D31</color>
+    <color name="border_subtle">#33373B</color>
+    
+    <!-- Interactive States -->
+    <color name="ripple_effect">#33FFFFFF</color>
+    <color name="button_pressed">#252A2E</color>
+    
+    <!-- Semantic Colors (Muted) -->
+    <color name="success_muted">#4A6B5A</color>
+    <color name="warning_muted">#6B5E4A</color>
+    <color name="error_muted">#6B4A4A</color>
+    <color name="info_muted">#4A5A6B</color>
+    
+    <!-- Legacy Material Colors (kept for compatibility) -->
+    <color name="purple_200">#FFBB86FC</color>
+    <color name="purple_500">#FF6200EE</color>
+    <color name="purple_700">#FF3700B3</color>
+    <color name="teal_200">#FF03DAC5</color>
+    <color name="teal_700">#FF018786</color>
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+    
+    <!-- Legacy UI Colors (mapped to new theme) -->
+    <color name="main_nv_text_bg">@color/background_primary</color>
+    <color name="title_bar_center">@color/text_primary</color>
+    <color name="title_bar_right">@color/text_secondary</color>
+    <color name="title_bar_line">@color/divider_subtle</color>
+    <color name="main_nav_selected">@color/text_primary</color>
+    <color name="main_nav_unselected">@color/text_secondary</color>
+    <color name="main_background">@color/background_primary</color>
+    <color name="main_icon_dark">@color/text_primary</color>
+    <color name="main_divider">@color/divider_subtle</color>
+    <color name="title_left">@color/text_primary</color>
+    <color name="title_center">@color/text_primary</color>
+    <color name="title_right">@color/accent_silver</color>
+    <color name="title_divider">@color/divider_subtle</color>
+    <color name="success_green">@color/success_muted</color>
+    <color name="warning_yellow">@color/warning_muted</color>
+    <color name="error_red">@color/error_muted</color>
+    <color name="info_blue">@color/info_muted</color>
+
+</resources>

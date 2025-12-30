@@ -1,0 +1,128 @@
+// 1. Plugins Block MUST be at the very top (Line 1)
+plugins {
+    alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.android)
+}
+
+// 2. Imports come AFTER plugins
+import java.util.Properties
+import java.io.FileInputStream
+
+// Create a variable to hold the properties
+def localProperties = new Properties()
+
+// Load the file if it exists
+def localPropertiesFile = rootProject.file('local.properties')
+if (localPropertiesFile.exists()) {
+    localProperties.load(new FileInputStream(localPropertiesFile))
+}
+
+// Helper function to safely quote string values for BuildConfig
+def safeQuote(value) {
+    if (value == null) return "\"\""
+    def cleanValue = value.toString().replaceAll("^\"|\"\$", "")
+    return "\"${cleanValue}\""
+}
+
+android {
+    namespace = "com.sdk.glassessdksample"
+    compileSdk = 35
+
+    defaultConfig {
+        applicationId = "com.sdk.glassessdksample"
+        minSdk = 24
+        targetSdk = 35
+        versionCode = 1
+        versionName = "1.0"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+
+        vectorDrawables {
+            useSupportLibrary = true
+        }
+
+        // Inject API keys from local.properties
+        buildConfigField("String", "GEMINI_API_KEY", safeQuote(localProperties["GEMINI_API_KEY"] ?: "YOUR_GEMINI_API_KEY_HERE"))
+        buildConfigField("String", "PICOVOICE_ACCESS_KEY", safeQuote(localProperties["PICOVOICE_ACCESS_KEY"] ?: ""))
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
+        }
+        debug {
+            minifyEnabled false
+        }
+    }
+
+    packagingOptions {
+        exclude "META-INF/DEPENDENCIES"
+        exclude "META-INF/INDEX.LIST"
+        exclude "META-INF/AL2.0"
+        exclude "META-INF/LGPL2.1"
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+
+    buildFeatures {
+        viewBinding = true
+        buildConfig = true
+    }
+    
+    lint {
+        abortOnError false
+        checkReleaseBuilds false
+    }
+}
+
+dependencies {
+
+    // Smart Glass AAR File
+    implementation files("libs/LIB_GLASSES_SDK-release_3.aar")
+
+    // Core Android Libraries
+    implementation libs.androidx.core.ktx
+    implementation "com.google.android.material:material:1.12.0"
+    implementation 'com.google.android.gms:play-services-location:21.0.1'
+    implementation "androidx.viewpager2:viewpager2:1.0.0"
+
+    // Permissions
+    implementation "com.github.getActivity:XXPermissions:20.0"
+
+    // EventBus
+    implementation "org.greenrobot:eventbus:3.2.0"
+
+    // Loading Dialog
+    implementation "com.github.ForgetAll:LoadingDialog:v1.1.2"
+
+    // RecyclerView Helper
+    implementation "com.github.CymChad:BaseRecyclerViewAdapterHelper:3.0.4"
+
+    // JSON Parser
+    implementation "com.google.code.gson:gson:2.10.1"
+
+    // Latest OkHttp (WebSocket Stable)
+    implementation "com.squareup.okhttp3:okhttp:4.12.0"
+
+    // Java-WebSocket for Gemini Live API
+    implementation "org.java-websocket:Java-WebSocket:1.5.3"
+
+    // Google AI SDK for Android
+    implementation "com.google.ai.client.generativeai:generativeai:0.9.0"
+
+    // Picovoice Porcupine for Wake Word Detection
+    implementation "ai.picovoice:porcupine-android:4.0.0"
+
+    // Testing
+    testImplementation "junit:junit:4.13.2"
+    androidTestImplementation "androidx.test.ext:junit:1.1.5"
+    androidTestImplementation "androidx.test.espresso:espresso-core:3.5.1"
+}

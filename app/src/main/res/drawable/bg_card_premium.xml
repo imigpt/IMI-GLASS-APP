@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    
+    <!-- Soft Shadow Layer -->
+    <item android:top="2dp" android:bottom="6dp" android:left="2dp" android:right="2dp">
+        <shape android:shape="rectangle">
+            <corners android:radius="20dp" />
+            <solid android:color="#12000000" />
+        </shape>
+    </item>
+    
+    <!-- Main Card with Gradient -->
+    <item>
+        <shape android:shape="rectangle">
+            <gradient
+                android:angle="135"
+                android:startColor="#252A2E"
+                android:centerColor="#1E2225"
+                android:endColor="#1A1D20"
+                android:type="linear" />
+            <corners android:radius="20dp" />
+            <!-- Subtle glowing border -->
+            <stroke
+                android:width="1.5dp"
+                android:color="#3D4247" />
+        </shape>
+    </item>
+    
+    <!-- Top Highlight for Glass Effect -->
+    <item android:top="0dp" android:bottom="160dp">
+        <shape android:shape="rectangle">
+            <gradient
+                android:angle="90"
+                android:startColor="#18FFFFFF"
+                android:endColor="#00FFFFFF"
+                android:type="linear" />
+            <corners android:radius="20dp" />
+        </shape>
+    </item>
+    
+</layer-list>

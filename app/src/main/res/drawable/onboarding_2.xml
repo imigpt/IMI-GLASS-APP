@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="300dp"
+    android:height="300dp"
+    android:viewportWidth="300"
+    android:viewportHeight="300">
+    
+    <!-- Glasses illustration -->
+    <path
+        android:pathData="M50,140 Q50,120 70,120 L120,120 Q130,115 150,115 Q170,115 180,120 L230,120 Q250,120 250,140 Q250,160 230,160 L180,160 Q170,165 150,165 Q130,165 120,160 L70,160 Q50,160 50,140 Z"
+        android:fillColor="#FFFFFF"/>
+    
+    <!-- Location pin icon -->
+    <path
+        android:pathData="M150,90 Q140,90 140,100 Q140,110 150,120 Q160,110 160,100 Q160,90 150,90 Z"
+        android:fillColor="#2196F3"/>
+    
+    <!-- Pin center dot -->
+    <path
+        android:pathData="M150,100 m-3,0 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0"
+        android:fillColor="#1E1E1E"/>
+</vector>

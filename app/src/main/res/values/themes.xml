@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <style name="Theme.GlassesSDKSample" parent="Theme.Material3.DayNight.NoActionBar">
+
+        <!-- Primary Brand Colors (Dark Premium) -->
+        <item name="colorPrimary">@color/accent_warm_gray</item>
+        <item name="colorPrimaryVariant">@color/accent_silver</item>
+        <item name="colorOnPrimary">@color/text_primary</item>
+
+        <!-- Secondary Colors -->
+        <item name="colorSecondary">@color/accent_silver</item>
+        <item name="colorSecondaryVariant">@color/accent_glow</item>
+        <item name="colorOnSecondary">@color/background_primary</item>
+
+        <!-- Background Colors -->
+        <item name="android:colorBackground">@color/background_primary</item>
+        <item name="colorSurface">@color/card_background</item>
+        <item name="colorOnSurface">@color/text_primary</item>
+
+        <!-- Status Bar & Navigation Bar (Dark, Seamless) -->
+        <item name="android:statusBarColor">@color/background_primary</item>
+        <item name="android:navigationBarColor">@color/background_primary</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+
+        <!-- Remove ActionBar -->
+        <item name="windowActionBar">false</item>
+        <item name="windowNoTitle">true</item>
+
+        <!-- Ripple Effect (Subtle) -->
+        <item name="android:colorControlHighlight">@color/ripple_effect</item>
+
+        <!-- Enable Edge-to-Edge -->
+        <item name="android:fitsSystemWindows">false</item>
+
+        <!-- Smooth Animations -->
+        <item name="android:windowAnimationStyle">@style/AppWindowAnimation</item>
+
+    </style>
+
+
+    <!-- Window Transition Animations -->
+    <style name="AppWindowAnimation">
+        <item name="android:activityOpenEnterAnimation">@android:anim/fade_in</item>
+        <item name="android:activityOpenExitAnimation">@android:anim/fade_out</item>
+        <item name="android:activityCloseEnterAnimation">@android:anim/fade_in</item>
+        <item name="android:activityCloseExitAnimation">@android:anim/fade_out</item>
+    </style>
+
+    <!-- Splash Screen Theme -->
+    <style name="Theme.App.Starting" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="android:windowBackground">#1E1E1E</item>
+        <item name="android:statusBarColor">#1E1E1E</item>
+        <item name="android:navigationBarColor">#1E1E1E</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+        <item name="windowActionBar">false</item>
+        <item name="windowNoTitle">true</item>
+    </style>
+
+</resources>

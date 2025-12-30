@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<data-extraction-rules>
+
+    <!-- ===== CLOUD BACKUP (Google Account Restore) ===== -->
+    <cloud-backup>
+
+        <!-- Include Shared Preferences -->
+        <include domain="sharedpref" path="." />
+
+        <!-- Include small config files -->
+        <include domain="files" path="config/" />
+
+        <!-- Exclude large media folders (Glasses downloaded files) -->
+        <exclude domain="files" path="DCIM_1/" />
+
+        <!-- Exclude cache because it is re-generated -->
+        <exclude domain="cache" path="." />
+
+        <!-- Exclude temporary audio recordings -->
+        <exclude domain="files" path="temp_audio/" />
+
+    </cloud-backup>
+
+
+    <!-- ===== DEVICE-TO-DEVICE TRANSFER (Nearby, cable) ===== -->
+    <device-transfer>
+
+        <!-- Include settings for smooth transfer -->
+        <include domain="sharedpref" path="." />
+        <include domain="files" path="config/" />
+
+        <!-- Exclude unnecessary, large or sensitive items -->
+        <exclude domain="files" path="DCIM_1/" />
+        <exclude domain="cache" path="." />
+        <exclude domain="files" path="temp_audio/" />
+
+    </device-transfer>
+
+</data-extraction-rules>

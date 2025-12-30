@@ -1,0 +1,122 @@
+import java.util.Properties
+import java.io.FileInputStream
+
+// 1. Load API keys safely
+val localProps = Properties()
+val localPropertiesFile = project.rootProject.file("local.properties")
+if (localPropertiesFile.exists()) {
+    localProps.load(FileInputStream(localPropertiesFile))
+}
+
+// Read keys (default to empty string if missing to avoid build errors)
+val picovoiceKey = localProps.getProperty("PICOVOICE_ACCESS_KEY") ?: ""
+val geminiKey = localProps.getProperty("GEMINI_API_KEY") ?: ""
+val googleCloudKey = localProps.getProperty("GOOGLE_CLOUD_API_KEY") ?: ""
+val googleSearchKey = localProps.getProperty("GOOGLE_SEARCH_API_KEY") ?: ""
+val googleSearchCx = localProps.getProperty("GOOGLE_SEARCH_CX") ?: ""
+
+plugins {
+    alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.android)
+}
+
+android {
+    namespace = "com.sdk.glassessdksample"
+    compileSdk = 35
+
+    defaultConfig {
+        applicationId = "com.sdk.glassessdksample"
+        minSdk = 24
+        targetSdk = 35
+        versionCode = 1
+        versionName = "1.0"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        
+        // Inject keys into BuildConfig so Kotlin code can read them
+        buildConfigField("String", "PICOVOICE_ACCESS_KEY", "\"$picovoiceKey\"")
+        buildConfigField("String", "GEMINI_API_KEY", "\"$geminiKey\"")
+        buildConfigField("String", "GOOGLE_CLOUD_API_KEY", "\"$googleCloudKey\"")
+        buildConfigField("String", "GOOGLE_SEARCH_API_KEY", "\"$googleSearchKey\"")
+        buildConfigField("String", "GOOGLE_SEARCH_CX", "\"$googleSearchCx\"")
+        
+        vectorDrawables {
+            useSupportLibrary = true
+        }
+    }
+
+    buildTypes {
+        release {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+        }
+        debug {
+            isMinifyEnabled = false
+        }
+    }
+
+    packaging {
+        resources {
+            excludes += "/META-INF/{AL2.0,LGPL2.1}"
+            excludes += "/META-INF/DEPENDENCIES"
+            excludes += "/META-INF/INDEX.LIST"
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+
+    buildFeatures {
+        viewBinding = true
+        buildConfig = true
+    }
+}
+
+dependencies {
+
+    // Smart Glass AAR File
+    implementation(files("libs/LIB_GLASSES_SDK-release_3.aar"))
+
+    // Core Android Libraries
+    implementation(libs.androidx.core.ktx)
+    implementation("com.google.android.material:material:1.12.0")
+    implementation("com.google.android.gms:play-services-location:21.0.1")
+
+    // Permissions
+    implementation("com.github.getActivity:XXPermissions:20.0")
+
+    // EventBus
+    implementation("org.greenrobot:eventbus:3.2.0")
+
+    // Loading Dialog
+    implementation("com.github.ForgetAll:LoadingDialog:v1.1.2")
+
+    // RecyclerView Helper
+    implementation("com.github.CymChad:BaseRecyclerViewAdapterHelper:3.0.4")
+
+    // JSON Parser
+    implementation("com.google.code.gson:gson:2.10.1")
+
+    // Latest OkHttp (includes WebSocket support)
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+
+    // Google AI SDK for Android (Latest stable version)
+    implementation("com.google.ai.client.generativeai:generativeai:0.10.0")
+
+    // Picovoice Porcupine (Wake Word Detection - Hey Imi)
+    implementation("ai.picovoice:porcupine-android:3.0.0")
+    
+    // TensorFlow Lite for optional custom KWS model
+    implementation("org.tensorflow:tensorflow-lite:2.12.0")
+
+    // Testing
+    testImplementation("junit:junit:4.13.2")
+    androidTestImplementation("androidx.test.ext:junit:1.1.5")
+    androidTestImplementation("androidx.test.espresso:espresso-core:3.5.1")
+}
