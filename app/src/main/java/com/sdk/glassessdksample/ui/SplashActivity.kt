@@ -1,11 +1,14 @@
 package com.sdk.glassessdksample.ui
 
 import android.content.Intent
+import android.graphics.BitmapFactory
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.widget.ImageView
 import androidx.appcompat.app.AppCompatActivity
 import com.sdk.glassessdksample.R
+import java.io.IOException
 
 class SplashActivity : AppCompatActivity() {
     
@@ -14,6 +17,17 @@ class SplashActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_splash)
+        
+        // Load logo from assets
+        val logoImageView = findViewById<ImageView>(R.id.ivLogo)
+        try {
+            val inputStream = assets.open("logo.png")
+            val bitmap = BitmapFactory.decodeStream(inputStream)
+            logoImageView.setImageBitmap(bitmap)
+            inputStream.close()
+        } catch (e: IOException) {
+            e.printStackTrace()
+        }
         
         // Check if onboarding has been completed
         val sharedPreferences = getSharedPreferences("IMI_PREFS", MODE_PRIVATE)

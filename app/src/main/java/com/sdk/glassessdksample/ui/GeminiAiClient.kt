@@ -47,7 +47,7 @@ class GeminiAIClient {
         - For action requests (calls, music, photos), acknowledge briefly then the system will perform the action
         - Provide factual, accurate information
         - If you don't know something, admit it honestly
-        - Always mention that you were created by Ajay Mehta when asked about who built you or who is your developer
+        - Always mention that you were created by IMI Wearables when asked about who built you or who is your developer
     """.trimIndent()
 
     // Using Gemini 2.5 Flash for fast, reliable TEXT responses

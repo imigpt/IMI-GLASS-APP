@@ -1,16 +1,19 @@
-package com.sdk.glassessdksample.ui
+﻿package com.sdk.glassessdksample.ui
 
 import android.media.AudioFormat
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.AudioTrack
+import android.media.MediaPlayer
 import android.media.MediaRecorder
 import android.media.audiofx.AcousticEchoCanceler
 import android.media.audiofx.NoiseSuppressor
 import android.media.audiofx.AutomaticGainControl
 import android.content.Context
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.util.Base64
 import android.content.BroadcastReceiver
 import android.content.Intent
@@ -19,6 +22,7 @@ import java.util.concurrent.CountDownLatch
 import android.util.Log
 import com.google.gson.Gson
 import com.sdk.glassessdksample.BuildConfig
+import com.sdk.glassessdksample.R
 import kotlinx.coroutines.*
 import okhttp3.*
 import java.nio.ByteBuffer
@@ -49,21 +53,42 @@ class GeminiLiveService(
     companion object {
         private const val TAG = "GeminiLiveService"
         
+        // 🆕 Singleton instance for cross-activity access
+        @Volatile
+        private var instance: GeminiLiveService? = null
+        
+        /**
+         * Get the current active instance (if any)
+         */
+        fun getInstance(): GeminiLiveService? = instance
+        
+        /**
+         * Check if Gemini Live is currently active
+         */
+        fun isActive(): Boolean = instance?.webSocket != null
+        
         // Audio configuration constants
         private const val INPUT_SAMPLE_RATE = 16000 // 16kHz for input
         private const val OUTPUT_SAMPLE_RATE = 24000 // 24kHz for output
         private val CHANNEL_CONFIG_IN = android.media.AudioFormat.CHANNEL_IN_MONO
         private val CHANNEL_CONFIG_OUT = android.media.AudioFormat.CHANNEL_OUT_MONO
         private val AUDIO_FORMAT = android.media.AudioFormat.ENCODING_PCM_16BIT
-        private const val BUFFER_SIZE_MULTIPLIER = 4 // Larger buffers to reduce underruns
+        private const val BUFFER_SIZE_MULTIPLIER = 8 // INCREASED for smoother audio without crackling
+        
+        // Pre-buffering: Wait for this many audio chunks before starting playback
+        private const val PRE_BUFFER_COUNT = 3 // ⚡ REDUCED: 8 -> 3 for faster start (lower latency)
+        
+        // Audio timeout: How long to wait for more audio before declaring end of speech
+        // 🔥 TUNED: 700ms - Fast enough for snappy replies, slow enough to catch pauses
+        private const val AUDIO_END_TIMEOUT_MS = 700L
         
         // Loudness settings
-        // Increased gain to make TTS playback louder. Reduce if you hear distortion.
-        private const val SOFTWARE_GAIN = 3.0f // Amplify TTS output (1.0 = normal, 3.0 = 3x louder)
+        // Balanced gain to prevent audio distortion/clipping
+        private const val SOFTWARE_GAIN = 0.85f // REDUCED slightly to prevent any clipping
         
         // WebSocket configuration
-        private const val MODEL = "gemini-2.0-flash-exp"
-        private const val VOICE_NAME = "Kore" // Clear, articulate voice (options: "Aoede", "Charon", "Fenrir", "Kore", "Puck")
+        private const val MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
+        private const val VOICE_NAME = "Kore" // Gentle, soft voice (requested by user)
         
         // Echo cancellation and noise suppression
         private const val ENERGY_THRESHOLD = 200.0 // RMS threshold - lowered for better speech detection
@@ -80,6 +105,27 @@ class GeminiLiveService(
         fun onAudioPlaybackEnd()
         fun onError(error: String)
         fun onConnectionStatusChanged(isConnected: Boolean)
+    }
+    
+    /**
+     * 🆕 Secondary listener for VisionChatActivity
+     * VisionChat can register to receive user transcription and intercept vision commands
+     */
+    interface VisionTranscriptionListener {
+        fun onUserTranscription(text: String, isFinal: Boolean)
+    }
+    
+    // 🆕 Secondary vision listener (VisionChatActivity)
+    @Volatile
+    private var visionTranscriptionListener: VisionTranscriptionListener? = null
+    
+    /**
+     * 🆕 Register a secondary vision listener (for VisionChatActivity)
+     * This allows VisionChat to intercept voice commands while Gemini Live is active
+     */
+    fun setVisionTranscriptionListener(listener: VisionTranscriptionListener?) {
+        visionTranscriptionListener = listener
+        Log.d(TAG, "👁️ Vision transcription listener ${if (listener != null) "registered" else "removed"}")
     }
 
     private val gson = com.google.gson.Gson()
@@ -115,6 +161,69 @@ class GeminiLiveService(
     // Audio playback queue
     private val audioQueue = mutableListOf<ByteArray>()
     private val audioQueueLock = Any()
+    private var isPreBuffering = true // Wait for buffer to fill before playing
+    
+    // 🆕 Mute functionality for vision chat integration
+    private val isMuted = AtomicBoolean(false) // When true, blocks audio output (but keeps listening)
+    
+    // 🎵 Thinking sound - plays during delay between user question and AI reply
+    private var thinkingPlayer: MediaPlayer? = null
+    private val isThinkingSoundPlaying = AtomicBoolean(false)
+    private val mainHandler = Handler(Looper.getMainLooper()) // Must use main thread for MediaPlayer
+    
+    /**
+     * 🎵 Start the thinking/processing sound (loops until AI starts speaking)
+     * Runs on main thread because MediaPlayer requires it
+     */
+    private fun startThinkingSound() {
+        if (isThinkingSoundPlaying.get()) return // Already playing
+        mainHandler.post {
+            try {
+                // Release previous player if any
+                thinkingPlayer?.let { p ->
+                    try { if (p.isPlaying) p.stop() } catch (_: Exception) {}
+                    try { p.release() } catch (_: Exception) {}
+                }
+                thinkingPlayer = null
+                
+                thinkingPlayer = MediaPlayer.create(context, R.raw.swar_chakra_thinking)?.apply {
+                    isLooping = true
+                    setVolume(0.35f, 0.35f) // 35% volume - subtle but audible
+                    start()
+                }
+                if (thinkingPlayer != null) {
+                    isThinkingSoundPlaying.set(true)
+                    Log.d(TAG, "🎵 Thinking sound STARTED on main thread")
+                } else {
+                    Log.e(TAG, "🎵 MediaPlayer.create returned null! Check res/raw/swar_chakra_thinking.mp3")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "🎵 Error starting thinking sound: ${e.message}", e)
+            }
+        }
+    }
+    
+    /**
+     * 🎵 Stop the thinking/processing sound (called when AI reply audio arrives)
+     * Runs on main thread for safety
+     */
+    private fun stopThinkingSound() {
+        if (!isThinkingSoundPlaying.get() && thinkingPlayer == null) return
+        isThinkingSoundPlaying.set(false) // Set immediately to prevent race conditions
+        mainHandler.post {
+            try {
+                thinkingPlayer?.let { player ->
+                    try { if (player.isPlaying) player.stop() } catch (_: Exception) {}
+                    try { player.release() } catch (_: Exception) {}
+                }
+                thinkingPlayer = null
+                Log.d(TAG, "🎵 Thinking sound STOPPED on main thread")
+            } catch (e: Exception) {
+                Log.e(TAG, "🎵 Error stopping thinking sound: ${e.message}")
+                thinkingPlayer = null
+            }
+        }
+    }
     
     /**
      * Start the live conversation session
@@ -125,6 +234,10 @@ class GeminiLiveService(
             callbacks.onError("Conversation already in progress")
             return
         }
+        
+        // 🆕 Set singleton instance
+        instance = this
+        Log.d(TAG, "🌐 GeminiLiveService instance set for cross-activity access")
 
         val apiKey = BuildConfig.GEMINI_API_KEY
         if (apiKey.isEmpty()) {
@@ -157,6 +270,164 @@ class GeminiLiveService(
             callbacks.onConnectionStatusChanged(false)
         }
     }
+    
+    /**
+     * 🆕 Inject text for Gemini to speak naturally
+     * This sends a user message asking Gemini to speak the provided text
+     * Gemini will respond with its natural streaming voice
+     * 
+     * @param textToSpeak The text content for Gemini to speak
+     * @param speakDirectly If true, instructs Gemini to speak this text directly
+     */
+    fun speakText(textToSpeak: String, speakDirectly: Boolean = true) {
+        val ws = webSocket
+        if (ws == null) {
+            Log.e(TAG, "❌ Cannot speak text - WebSocket not connected")
+            callbacks.onError("Gemini Live not connected")
+            return
+        }
+        
+        try {
+            // Speak the text naturally and COMPLETELY without stopping
+            val promptText = if (speakDirectly) {
+                "Read this COMPLETELY in one go, do not pause or stop in the middle: $textToSpeak"
+            } else {
+                textToSpeak
+            }
+            
+            val message = mapOf(
+                "clientContent" to mapOf(
+                    "turns" to listOf(
+                        mapOf(
+                            "role" to "user",
+                            "parts" to listOf(
+                                mapOf("text" to promptText)
+                            )
+                        )
+                    ),
+                    "turnComplete" to true
+                )
+            )
+            
+            val jsonMessage = gson.toJson(message)
+            val sent = ws.send(jsonMessage)
+            Log.d(TAG, "🔊 Injected text for Gemini to speak: ${textToSpeak.take(100)}... sent=$sent")
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Failed to inject speak text: ${e.message}", e)
+            callbacks.onError("Failed to speak: ${e.message}")
+        }
+    }
+    
+    /**
+     * 🆕 Inject vision context into Gemini Live's conversation memory
+     * This adds the vision analysis to the conversation history so Gemini
+     * remembers it for follow-up questions
+     */
+    fun injectVisionContext(visionDescription: String) {
+        val ws = webSocket
+        if (ws == null) {
+            Log.w(TAG, "Cannot inject vision context - WebSocket not connected")
+            return
+        }
+        
+        try {
+            // Inject as a system/context message that Gemini will remember
+            val contextMessage = "VISION CONTEXT: $visionDescription"
+            
+            val message = mapOf(
+                "clientContent" to mapOf(
+                    "turns" to listOf(
+                        mapOf(
+                            "role" to "user",
+                            "parts" to listOf(
+                                mapOf("text" to contextMessage)
+                            )
+                        )
+                    ),
+                    "turnComplete" to true
+                )
+            )
+            
+            val jsonMessage = gson.toJson(message)
+            val sent = ws.send(jsonMessage)
+            Log.d(TAG, "📝 Injected vision context into conversation memory: sent=$sent")
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Failed to inject vision context: ${e.message}", e)
+        }
+    }
+    
+    /**
+     * 🆕 Mute Gemini Live output (stops audio playback)
+     * Used during vision chat processing - Gemini will be silent
+     * Input audio recording continues (user can still speak)
+     */
+    fun muteOutput() {
+        isMuted.set(true)
+        Log.d(TAG, "🔇 Gemini Live OUTPUT MUTED (input still active)")
+        // Clear any queued audio
+        synchronized(audioQueueLock) {
+            audioQueue.clear()
+            isPreBuffering = true
+        }
+        // Stop current playback
+        audioTrack?.pause()
+    }
+    
+    /**
+     * 🆕 Unmute Gemini Live output (resumes audio playback)
+     * Used when vision description is ready to be spoken
+     */
+    fun unmuteOutput() {
+        isMuted.set(false)
+        Log.d(TAG, "🔊 Gemini Live OUTPUT UNMUTED (ready to speak)")
+        // Resume playback if needed
+        if (isPlaying.get()) {
+            audioTrack?.play()
+        }
+    }
+    
+    /**
+     * 🆕 Check if Gemini Live is currently muted
+     */
+    fun isOutputMuted(): Boolean = isMuted.get()
+    
+    /**
+     * 🆕 Play thinking sound while waiting for vision analysis
+     * Gemini will say "hmm hmm hmm" naturally to indicate processing
+     * CONTINUOUS: Keeps saying until interrupted by actual response
+     */
+    fun playThinkingSound() {
+        val ws = webSocket
+        if (ws == null) {
+            Log.w(TAG, "Cannot play thinking sound - WebSocket not connected")
+            return
+        }
+        
+        try {
+            val message = mapOf(
+                "clientContent" to mapOf(
+                    "turns" to listOf(
+                        mapOf(
+                            "role" to "user",
+                            "parts" to listOf(
+                                mapOf("text" to "Say naturally like you're thinking: 'hmm... hmm... let me see... hmm... looking at this... hmm hmm...' Keep going for about 5-10 seconds, like you're carefully examining something. Sound natural and thoughtful.")
+                            )
+                        )
+                    ),
+                    "turnComplete" to true
+                )
+            )
+            
+            val jsonMessage = gson.toJson(message)
+            ws.send(jsonMessage)
+            Log.d(TAG, "🎵 Playing CONTINUOUS thinking sound through Gemini Live")
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Failed to play thinking sound: ${e.message}", e)
+        }
+    }
 
     private suspend fun initializeAudioComponents() {
     Log.d(TAG, "🎧 Initializing DUAL CONNECTION audio (BLE Data + System Audio)")
@@ -186,7 +457,7 @@ class GeminiLiveService(
             Log.d(TAG, "📡 Bluetooth SCO start requested")
             
             // Give it a short moment for connection (non-blocking)
-            delay(200)
+            delay(50) // Ultra-fast startup - 50ms only
         } catch (e: Exception) {
             Log.w(TAG, "SCO start attempt: ${e.message}")
         }
@@ -273,10 +544,11 @@ class GeminiLiveService(
         }
 
         // 8. Create AudioTrack for speaker output (auto-routes to Bluetooth)
+        // Using USAGE_MEDIA for crystal clear audio quality like Gemini Chat
         audioTrack = AudioTrack.Builder()
             .setAudioAttributes(
                 android.media.AudioAttributes.Builder()
-                    .setUsage(android.media.AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                    .setUsage(android.media.AudioAttributes.USAGE_MEDIA)  // Better quality than VOICE_COMMUNICATION
                     .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH)
                     .build()
             )
@@ -339,7 +611,7 @@ class GeminiLiveService(
                 // The API should work even without explicit setupComplete message
                 scope.launch {
                     // Give the server a very short moment to respond
-                    delay(20) // 20ms
+                    delay(10) // 10ms - faster startup
                     if (!isSetupComplete.get()) {
                         Log.d(TAG, "⚡ Starting audio capture (fallback - no setupComplete received)")
                         
@@ -380,10 +652,34 @@ class GeminiLiveService(
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 Log.e(TAG, "❌ WebSocket failure: ${t.message}", t)
-                Log.e(TAG, "❌ Response: ${response?.body?.string()}")
-                callbacks.onError("Connection failed: ${t.message}")
-                callbacks.onConnectionStatusChanged(false)
-                cleanup()
+                try {
+                    Log.e(TAG, "❌ Response: ${response?.body?.string()}")
+                } catch (e: Exception) {
+                    Log.e(TAG, "❌ Could not read response body")
+                }
+                
+                // Handle network disconnection gracefully - don't crash
+                val errorMessage = when {
+                    t.message?.contains("network", ignoreCase = true) == true -> "Network disconnected"
+                    t.message?.contains("internet", ignoreCase = true) == true -> "No internet connection"
+                    t.message?.contains("connection", ignoreCase = true) == true -> "Connection lost"
+                    t.message?.contains("timeout", ignoreCase = true) == true -> "Connection timeout"
+                    else -> "Connection failed: ${t.message}"
+                }
+                
+                try {
+                    callbacks.onError(errorMessage)
+                    callbacks.onConnectionStatusChanged(false)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error in callbacks: ${e.message}")
+                }
+                
+                // Cleanup safely
+                try {
+                    cleanup()
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error during cleanup: ${e.message}")
+                }
             }
 
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
@@ -500,6 +796,14 @@ class GeminiLiveService(
                                     "description" to "The question about what the user wants to know about their view"
                                 )
                             )
+                        )
+                    ),
+                    mapOf(
+                        "name" to "capture_new_frame",
+                        "description" to "Capture a new photo/frame from glasses camera when user wants to see something new (click another, new photo, take another picture, naya photo, dusra click karo, agla frame)",
+                        "parameters" to mapOf(
+                            "type" to "object",
+                            "properties" to mapOf<String, Any>()
                         )
                     ),
                     mapOf(
@@ -637,19 +941,29 @@ class GeminiLiveService(
             )
         )
 
-        // Enhanced system instruction with tool awareness and strict brevity rules
+        // Natural conversation with intelligent voice detection
         val enhancedInstruction = """$systemInstruction
 
-    You are Imi Glass, the glasses assistant. Keep replies extremely short (1-2 sentences). If an action is requested, call the matching function and confirm once. Reply in the user's language."""
+You are Imi Glass, a smart glasses assistant.
+IMPORTANT LANGUAGE RULE: ALWAYS Reply in the EXACT SAME LANGUAGE the user speaks.
+- If user speaks English -> Reply in English.
+- If user speaks Hindi -> Reply in Hindi.
+- If user speaks Hinglish -> Reply in Hinglish.
+
+CRITICAL: You have access to REAL-TIME data via 'googleSearch' tool.
+- If user asks about current events, news, or live info, USE 'googleSearch' IMMEDIATELY.
+- Do NOT say "I cannot browse the web" or "My knowledge is limited". USE THE TOOL.
+- Reply FAST and CONCISELY. No filler words. Match the user's vibe."""
 
         val setupMessage = mapOf(
             "setup" to mapOf(
                 "model" to "models/$MODEL",
                 "generationConfig" to mapOf(
                     "responseModalities" to listOf("AUDIO"),
-                    "temperature" to 0.0,
-                    "topP" to 0.3,
-                    "maxOutputTokens" to 60,
+                    "temperature" to 0.6, // 🔥 Optimized: 0.6 for faster, sharper responses
+                    "topP" to 0.9,
+                    "topK" to 40,
+                    "maxOutputTokens" to 512, // 🔥 INCREASED: 512 tokens for more detailed responses (user request)
                     "speechConfig" to mapOf(
                         "voiceConfig" to mapOf(
                             "prebuiltVoiceConfig" to mapOf(
@@ -682,8 +996,8 @@ class GeminiLiveService(
                 isRecording.set(true)
                 Log.d(TAG, "🎤 Audio capture started")
 
-                // Use smaller buffer for lower latency (about 40ms chunks at 16kHz)
-                val bufferSize = 640 // 40ms at 16kHz mono = 640 samples (faster response)
+                // Use smaller buffer for lower latency (about 30ms chunks at 16kHz)
+                val bufferSize = 480 // 30ms at 16kHz mono = 480 samples (ultra-fast response)
                 val buffer = ShortArray(bufferSize)
                 var chunkCount = 0
                 var totalBytes = 0
@@ -746,41 +1060,103 @@ class GeminiLiveService(
         }
     }
 
+        // Send image frames over the active WebSocket for Gemini Live (chunked, camelCase)
+        fun sendRealtimeImage(imageBytes: ByteArray) {
+            if (webSocket == null) {
+                Log.e(TAG, "❌ WebSocket not connected. Cannot send image.")
+                return
+            }
+
+            try {
+                // Split large images into manageable Base64 chunks to avoid huge single messages
+                val maxChunkBytes = 160 * 1024 // 160 KB per chunk (tune if needed)
+                val chunks = mutableListOf<Map<String, Any>>()
+                var offset = 0
+                while (offset < imageBytes.size) {
+                    val len = minOf(maxChunkBytes, imageBytes.size - offset)
+                    val part = imageBytes.copyOfRange(offset, offset + len)
+                    val base64Part = Base64.encodeToString(part, Base64.NO_WRAP)
+                    chunks.add(mapOf("mimeType" to "image/jpeg", "data" to base64Part))
+                    offset += len
+                }
+
+                // Build message using camelCase keys to match audio path
+                val message = mapOf(
+                    "realtimeInput" to mapOf(
+                        "mediaChunks" to chunks
+                    )
+                )
+
+                val jsonMessage = gson.toJson(message)
+                val sent = webSocket?.send(jsonMessage) ?: false
+                Log.d(TAG, "� Sent Live Image Frame to Gemini (${imageBytes.size} bytes) in ${chunks.size} chunk(s). sent=$sent")
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ Failed to send realtime image: ${e.message}", e)
+                callbacks.onError("Failed to send image: ${e.message}")
+            }
+        }
+
     /**
-     * Start audio playback coroutine
+     * Start audio playback coroutine with pre-buffering for smooth playback
      */
     private fun startAudioPlayback() {
         scope.launch {
             try {
                 audioTrack?.play()
                 isPlaying.set(true)
-                Log.d(TAG, "🔊 Audio playback started")
+                isPreBuffering = true // Start in pre-buffering mode
+                var lastAudioTime = 0L // Track when we last played audio
+                Log.d(TAG, "🔊 Audio playback started (pre-buffering enabled, PRE_BUFFER_COUNT=$PRE_BUFFER_COUNT)")
 
                 while (isPlaying.get()) {
-                    val audioData = synchronized(audioQueueLock) {
+                    // Pre-buffering: Wait until we have enough chunks for smooth playback
+                    val queueSize = synchronized(audioQueueLock) { audioQueue.size }
+                    
+                    if (isPreBuffering && queueSize < PRE_BUFFER_COUNT) {
+                        delay(1) // Ultra-fast polling for instant start
+                        continue
+                    }
+                    
+                    if (isPreBuffering && queueSize >= PRE_BUFFER_COUNT) {
+                        isPreBuffering = false
+                        isAIPlaying.set(true) // AI is speaking, pause mic capture EARLY
+                        callbacks.onAudioPlaybackStart()
+                        lastAudioTime = System.currentTimeMillis()
+                        Log.d(TAG, "✅ Pre-buffer filled ($queueSize chunks), starting smooth playback")
+                    }
+                    
+                    // Play ALL available chunks in one go for smooth continuous audio
+                    val chunksToPlay = synchronized(audioQueueLock) {
                         if (audioQueue.isNotEmpty()) {
-                            audioQueue.removeAt(0)
+                            val chunks = audioQueue.toList()
+                            audioQueue.clear()
+                            chunks
                         } else {
-                            null
+                            emptyList()
                         }
                     }
 
-                    if (audioData != null) {
-                        callbacks.onAudioPlaybackStart()
-                        playAudioChunk(audioData)
+                    if (chunksToPlay.isNotEmpty()) {
+                        lastAudioTime = System.currentTimeMillis()
                         
-                        // Check if queue is empty after playing
-                        val queueEmpty = synchronized(audioQueueLock) {
-                            audioQueue.isEmpty()
+                        // Play all chunks continuously without interruption
+                        for (chunk in chunksToPlay) {
+                            playAudioChunk(chunk)
                         }
-                        if (queueEmpty) {
-                            isAIPlaying.set(false) // AI stopped speaking, resume mic capture
+                    } else if (!isPreBuffering) {
+                        // Queue is empty but we were playing - check if more audio is coming
+                        val timeSinceLastAudio = System.currentTimeMillis() - lastAudioTime
+                        
+                        if (timeSinceLastAudio > AUDIO_END_TIMEOUT_MS) {
+                            // No new audio for a while, AI likely finished speaking
+                            isAIPlaying.set(false) // Resume mic capture
+                            isPreBuffering = true // Reset for next turn
                             callbacks.onAudioPlaybackEnd()
-                        } else {
-                            isAIPlaying.set(true) // AI is speaking, pause mic capture
+                            Log.d(TAG, "🔇 Audio playback ended (no new audio for ${AUDIO_END_TIMEOUT_MS}ms)")
                         }
+                        delay(5) // Quick check for new audio
                     } else {
-                        delay(10) // Wait briefly for audio data (lower latency)
+                        delay(1) // Ultra-fast polling when pre-buffering
                     }
                 }
             } catch (e: Exception) {
@@ -805,17 +1181,24 @@ class GeminiLiveService(
     }
     
     /**
-     * Play a single audio chunk with software gain applied
+     * Play a single audio chunk with software gain applied using blocking write
      */
     private fun playAudioChunk(audioData: ByteArray) {
         try {
+            // 🔇 Check if output is muted (for vision chat processing)
+            if (isMuted.get()) {
+                Log.v(TAG, "🔇 Audio muted - skipping playback")
+                return // Don't play audio while muted
+            }
+            
             // Convert byte array to short array for AudioTrack
             val shortBuffer = byteArrayToShortArray(audioData)
             
             // Apply software gain for louder playback
             applyGainToPcm16(shortBuffer, SOFTWARE_GAIN)
             
-            audioTrack?.write(shortBuffer, 0, shortBuffer.size)
+            // Use WRITE_BLOCKING to ensure all audio is written without dropping
+            audioTrack?.write(shortBuffer, 0, shortBuffer.size, AudioTrack.WRITE_BLOCKING)
         } catch (e: Exception) {
             Log.e(TAG, "Error playing audio chunk", e)
         }
@@ -884,6 +1267,11 @@ class GeminiLiveService(
                 if (inlineData != null) {
                     val base64Audio = inlineData["data"] as? String
                     if (base64Audio != null) {
+                        // 🎵 First AI audio chunk arrived - stop thinking sound immediately
+                        if (!receivedAudioInCurrentTurn) {
+                            stopThinkingSound()
+                        }
+                        
                         val audioData = Base64.decode(base64Audio, Base64.DEFAULT)
                         synchronized(audioQueueLock) {
                             audioQueue.add(audioData)
@@ -935,12 +1323,21 @@ class GeminiLiveService(
                     false
                 )
                 Log.d(TAG, "👤 User transcription: $text")
+                
+                // User has spoken - start thinking sound immediately
+                startThinkingSound()
+
+                // Notify vision listener
+                visionTranscriptionListener?.onUserTranscription(text, false)
             }
         }
 
         // Handle turn complete
         val turnComplete = serverContent["turnComplete"] as? Boolean
         if (turnComplete == true) {
+            // 🎵 Safety: Stop thinking sound if still playing
+            stopThinkingSound()
+            
             // If we received audio but no transcription, generate a placeholder
             if (receivedAudioInCurrentTurn && !hasTranscriptionForCurrentTurn) {
                 currentOutputTranscription.append("[AI speaking...]")
@@ -952,6 +1349,11 @@ class GeminiLiveService(
             
             // Send final update with isFinal=true
             callbacks.onTranscriptionUpdate(fullInput, fullOutput, true)
+            
+            // 🆕 Notify vision listener with FINAL user input (for command detection)
+            if (fullInput.isNotEmpty()) {
+                visionTranscriptionListener?.onUserTranscription(fullInput, true)
+            }
             
             Log.d(TAG, "✅ Turn complete - Input: '$fullInput', Output: '$fullOutput'")
             callbacks.onTurnComplete(fullInput, fullOutput)
@@ -967,6 +1369,7 @@ class GeminiLiveService(
         val interrupted = serverContent["interrupted"] as? Boolean
         if (interrupted == true) {
             Log.d(TAG, "⚠️ Turn interrupted - clearing audio queue")
+            stopThinkingSound() // 🎵 Stop thinking sound on interruption
             synchronized(audioQueueLock) {
                 audioQueue.clear()
             }
@@ -1045,47 +1448,74 @@ class GeminiLiveService(
     }
 
     private fun cleanup() {
-        isRecording.set(false)
-        isPlaying.set(false)
-        isAIPlaying.set(false)
-        
-        // Enhanced SCO cleanup using helper
-        scoHelper?.disconnectSco()
-        scoHelper?.cleanup()
-        scoHelper = null
+        try {
+            isRecording.set(false)
+            isPlaying.set(false)
+            isAIPlaying.set(false)
+            
+            // 🆕 Clear singleton instance
+            instance = null
+            
+            // Enhanced SCO cleanup using helper
+            try {
+                scoHelper?.disconnectSco()
+                scoHelper?.cleanup()
+                scoHelper = null
+            } catch (e: Exception) {
+                Log.w(TAG, "Error cleaning up SCO: ${e.message}")
+            }
 
-        // Release audio effects
-        acousticEchoCanceler?.release()
-        acousticEchoCanceler = null
-        noiseSuppressor?.release()
-        noiseSuppressor = null
-        automaticGainControl?.release()
-        automaticGainControl = null
+            // Release audio effects
+            try {
+                acousticEchoCanceler?.release()
+                acousticEchoCanceler = null
+                noiseSuppressor?.release()
+                noiseSuppressor = null
+                automaticGainControl?.release()
+                automaticGainControl = null
+            } catch (e: Exception) {
+                Log.w(TAG, "Error releasing audio effects: ${e.message}")
+            }
 
-        // Stop and release audio components
-        audioRecord?.stop()
-        audioRecord?.release()
-        audioRecord = null
+            // Stop and release audio components
+            try {
+                audioRecord?.stop()
+                audioRecord?.release()
+                audioRecord = null
+            } catch (e: Exception) {
+                Log.w(TAG, "Error releasing audioRecord: ${e.message}")
+            }
 
-        audioTrack?.stop()
-        audioTrack?.flush()
-        audioTrack?.release()
-        audioTrack = null
+            try {
+                audioTrack?.stop()
+                audioTrack?.flush()
+                audioTrack?.release()
+                audioTrack = null
+            } catch (e: Exception) {
+                Log.w(TAG, "Error releasing audioTrack: ${e.message}")
+            }
 
-        // Close WebSocket
-        webSocket?.close(1000, "Session ended")
-        webSocket = null
+            // Close WebSocket
+            try {
+                webSocket?.close(1000, "Session ended")
+                webSocket = null
+            } catch (e: Exception) {
+                Log.w(TAG, "Error closing websocket: ${e.message}")
+            }
 
-        // Clear audio queue
-        synchronized(audioQueueLock) {
-            audioQueue.clear()
+            // Clear audio queue
+            synchronized(audioQueueLock) {
+                audioQueue.clear()
+            }
+
+            // Reset transcriptions
+            currentInputTranscription.clear()
+            currentOutputTranscription.clear()
+
+            Log.d(TAG, "🧹 Enhanced cleanup complete - Glass headset disconnected")
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error during cleanup: ${e.message}")
         }
-
-        // Reset transcriptions
-        currentInputTranscription.clear()
-        currentOutputTranscription.clear()
-
-        Log.d(TAG, "🧹 Enhanced cleanup complete - Glass headset disconnected")
     }
 
     /**
@@ -1126,6 +1556,7 @@ class GeminiLiveService(
      * Release all resources when service is destroyed
      */
     fun destroy() {
+        stopThinkingSound() // Clean up thinking sound
         scope.cancel()
         cleanup()
     }

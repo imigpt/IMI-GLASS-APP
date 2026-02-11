@@ -2,17 +2,16 @@ package com.sdk.glassessdksample.ui
 
 import android.Manifest
 import android.annotation.SuppressLint
-import android.bluetooth.BluetoothAdapter
-import android.bluetooth.BluetoothDevice
+import android.bluetooth.*
 import android.bluetooth.le.ScanResult
-import android.content.Intent
-import android.content.Context
+import android.content.*
 import android.content.pm.PackageManager
+import android.media.AudioManager
 import android.media.RingtoneManager
 import android.os.*
 import android.util.Log
-import android.view.View
 import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
 import androidx.core.app.ActivityCompat
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.hjq.permissions.OnPermissionCallback
@@ -36,7 +35,13 @@ class DeviceBindActivity : BaseActivity() {
 
     private var scanSize = 0
     private var loadingDialog: LoadingDialog? = null
+    private var autoConnectDialog: AlertDialog? = null
     private val mainHandler = Handler(Looper.getMainLooper())
+
+    private var connectedDeviceAddress: String? = null
+    private var headsetProxy: BluetoothHeadset? = null
+    private var hfpReceiverRegistered = false
+    private var bondStateReceiverRegistered = false
 
     private val scanStopRunnable = Runnable {
         BleScannerHelper.getInstance().stopScan(this)
@@ -45,45 +50,87 @@ class DeviceBindActivity : BaseActivity() {
 
     private val bleScanCallback = BleCallback()
 
+    private val profileListener = object : BluetoothProfile.ServiceListener {
+        @SuppressLint("MissingPermission")
+        override fun onServiceConnected(profile: Int, proxy: BluetoothProfile) {
+            Log.d("DeviceBindActivity", "Profile proxy connected for profile: $profile")
+            if (profile == BluetoothProfile.HEADSET) {
+                headsetProxy = proxy as BluetoothHeadset
+                val classicDevice = connectedDeviceAddress?.let { BluetoothAdapter.getDefaultAdapter().getRemoteDevice(it) }
+                if (classicDevice != null) {
+                    mainHandler.post { attemptHfpConnection(classicDevice) }
+                } else {
+                    Log.e("DeviceBindActivity", "Cannot attempt HFP connection, connectedDeviceAddress is null.")
+                }
+            }
+        }
+
+        override fun onServiceDisconnected(profile: Int) {
+            if (profile == BluetoothProfile.HEADSET) {
+                headsetProxy = null
+                Log.w("DeviceBindActivity", "Headset profile proxy disconnected.")
+            }
+        }
+    }
+
+    private val headsetConnectionReceiver = object : BroadcastReceiver() {
+        @SuppressLint("MissingPermission")
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action == BluetoothHeadset.ACTION_CONNECTION_STATE_CHANGED) {
+                val state = intent.getIntExtra(BluetoothProfile.EXTRA_STATE, BluetoothProfile.STATE_DISCONNECTED)
+                val device = intent.getParcelableExtra<BluetoothDevice>(BluetoothDevice.EXTRA_DEVICE)
+
+                Log.d("DeviceBindActivity", "HFP connection state changed to $state for device ${device?.address}")
+
+                if (device?.address == connectedDeviceAddress && state == BluetoothProfile.STATE_CONNECTED) {
+                    Log.d("DeviceBindActivity", "✅ Headset Profile Connected via BroadcastReceiver")
+                    handleHfpConnectionSuccess()
+                }
+            }
+        }
+    }
+
+    private val bondStateReceiver = object : BroadcastReceiver() {
+        @SuppressLint("MissingPermission")
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action == BluetoothDevice.ACTION_BOND_STATE_CHANGED) {
+                val device = intent.getParcelableExtra<BluetoothDevice>(BluetoothDevice.EXTRA_DEVICE)
+                val bondState = intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, BluetoothDevice.BOND_NONE)
+
+                if (device != null && device.address == connectedDeviceAddress && bondState == BluetoothDevice.BOND_BONDED) {
+                    Log.d("DeviceBindActivity", "✅ Device bonded. Now getting HFP proxy.")
+                    cleanUpReceivers() // Clean up bond receiver
+                    getHeadsetProxyAndConnect(device) // Proceed to connect HFP
+                }
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityDeviceBindBinding.inflate(layoutInflater)
         setContentView(binding.root)
-        // Views should be setup after permissions are granted
     }
 
     override fun setupViews() {
-
         adapter = DeviceListAdapter(this, deviceList)
         binding.deviceRcv.layoutManager = LinearLayoutManager(this)
         binding.deviceRcv.adapter = adapter
-
         binding.titleBar.tvTitle.text = "Scan Smart Glass"
         binding.titleBar.ivNavigateBefore.setOnClickListener { finish() }
 
         adapter.setOnItemClickListener { _, _, position ->
             mainHandler.removeCallbacks(scanStopRunnable)
-
             val device = deviceList[position]
-            BleOperateManager.getInstance().connectDirectly(device.deviceAddress)
-
-            loadingDialog = LoadingDialog(this)
-            loadingDialog?.setLoadingText(getString(R.string.text_22))?.show()
+            
+            // 🆕 Show confirmation dialog before pairing
+            showPairConfirmationDialog(device)
         }
 
-        binding.startScan.setOnClickListener {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-                ActivityCompat.checkSelfPermission(
-                    this,
-                    Manifest.permission.BLUETOOTH_CONNECT
-                ) != PackageManager.PERMISSION_GRANTED
-            ) {
-                requestPermissions()
-                return@setOnClickListener
-            }
-
-            startScanning()
-        }
+        binding.startScan.setOnClickListener { startScanning() }
+        
+        // 🆕 Check for auto-connect
+        mainHandler.postDelayed({ checkAutoConnect() }, 500)
     }
 
     override fun onResume() {
@@ -100,236 +147,343 @@ class DeviceBindActivity : BaseActivity() {
 
     @Subscribe(threadMode = ThreadMode.MAIN)
     fun onMessageEvent(event: BluetoothEvent) {
+        if (event.type == BluetoothEvent.EventType.CONNECTED) {
+            loadingDialog?.close()
+            Log.d("DeviceBindActivity", "✅ BLE Connected. Starting classic connection flow...")
+            Toast.makeText(this, "✅ Glass Connected (Data)", Toast.LENGTH_SHORT).show()
+            mainHandler.postDelayed({ connectedDeviceAddress?.let { startClassicConnectionFlow(it) } }, 500)
+        }
+    }
 
-        when (event.type) {
+    private fun handleHfpConnectionSuccess() {
+        mainHandler.removeCallbacksAndMessages(null)
+        Log.d("DeviceBindActivity", "🎧 HFP Connected, configuring audio...")
+        (getSystemService(Context.AUDIO_SERVICE) as AudioManager).apply {
+            mode = AudioManager.MODE_IN_CALL
+            startBluetoothSco()
+            isBluetoothScoOn = true
+        }
+        Toast.makeText(this, "🎧 Glass mic ready!", Toast.LENGTH_SHORT).show()
+        Log.d("DeviceBindActivity", "✅ Both BLE and Audio connections active")
+        cleanUpReceivers()
+        mainHandler.postDelayed({ finish() }, 500)
+    }
 
-            BluetoothEvent.EventType.CONNECTED -> {
-                loadingDialog?.close()
-
-                // ========== OPTION A: Check for audio connection after BLE connects ==========
-                Log.d("DeviceBindActivity", "✅ BLE Connected - Checking audio connection...")
-
-                Toast.makeText(this, "✅ Glass Connected (Data)", Toast.LENGTH_SHORT).show()
-
-                // Check if audio is also connected shortly after BLE connects
-                Handler(Looper.getMainLooper()).postDelayed({
-                    checkAudioConnectionAndPrompt()
-                }, 1500)
-
-                finish()
+    private fun cleanUpReceivers() {
+        mainHandler.removeCallbacksAndMessages(null)
+        if (hfpReceiverRegistered) {
+            try { unregisterReceiver(headsetConnectionReceiver) } catch (e: Exception) {}
+            hfpReceiverRegistered = false
+        }
+        if (bondStateReceiverRegistered) {
+            try { unregisterReceiver(bondStateReceiver) } catch (e: Exception) {}
+            bondStateReceiverRegistered = false
+        }
+    }
+    
+    /**
+     * 🆕 Show confirmation dialog before pairing with glasses
+     * This ensures pairing ONLY happens through app, not system settings
+     */
+    private fun showPairConfirmationDialog(device: SmartWatch) {
+        AlertDialog.Builder(this)
+            .setTitle("Pair with Glasses?")
+            .setMessage("Do you want to connect to ${device.deviceName}?\n\nThis will pair the glasses with your phone for:\n• Voice AI Assistant\n• Camera & Media\n• Smart Features")
+            .setPositiveButton("Pair") { dialog, _ ->
+                dialog.dismiss()
+                proceedWithPairing(device)
             }
+            .setNegativeButton("Cancel") { dialog, _ ->
+                dialog.dismiss()
+                Toast.makeText(this, "Pairing cancelled", Toast.LENGTH_SHORT).show()
+            }
+            .setCancelable(false)
+            .show()
+    }
+    
+    /**
+     * 🆕 Proceed with pairing after user confirmation
+     */
+    private fun proceedWithPairing(device: SmartWatch) {
+        // ✅ Check Bluetooth state first
+        if (!isBluetoothEnabled()) {
+            Log.w("DeviceBindActivity", "⚠️ Bluetooth is OFF, cannot pair")
+            showBluetoothOffDialog(device.deviceAddress, device.deviceName)
+            return
+        }
+        
+        connectedDeviceAddress = device.deviceAddress
+        
+        // Save device info for auto-connect next time
+        savePairedDevice(device)
+        
+        // Start BLE connection
+        BleOperateManager.getInstance().connectDirectly(device.deviceAddress)
+        loadingDialog = LoadingDialog(this)
+        loadingDialog?.setLoadingText(getString(R.string.text_22))?.show()
+        
+        Log.d("DeviceBindActivity", "✅ User confirmed pairing with ${device.deviceName}")
+    }
+    
+    /**
+     * 🆕 Save paired device for auto-connect
+     */
+    private fun savePairedDevice(device: SmartWatch) {
+        val prefs = getSharedPreferences("glass_pairing", MODE_PRIVATE)
+        prefs.edit().apply {
+            putString("paired_device_name", device.deviceName)
+            putString("paired_device_address", device.deviceAddress)
+            putLong("paired_timestamp", System.currentTimeMillis())
+            apply()
+        }
+        Log.d("DeviceBindActivity", "💾 Saved device for auto-connect: ${device.deviceName}")
+    }
+    
+    /**
+     * 🆕 Check if there's a previously paired device for auto-connect
+     */
+    private fun checkAutoConnect() {
+        val prefs = getSharedPreferences("glass_pairing", MODE_PRIVATE)
+        val pairedAddress = prefs.getString("paired_device_address", null)
+        val pairedName = prefs.getString("paired_device_name", null)
+        
+        if (pairedAddress != null && pairedName != null) {
+            Log.d("DeviceBindActivity", "📱 Found saved device: $pairedName")
+            
+            if (isFinishing || isDestroyed) return
 
-            BluetoothEvent.EventType.VOICE_TEXT -> {
-                val text = (event.data as? String)?.lowercase() ?: ""
+            // Try auto-connect
+            autoConnectDialog = AlertDialog.Builder(this)
+                .setTitle("Auto-Connect?")
+                .setMessage("Connect to previously paired glasses:\n$pairedName")
+                .setPositiveButton("Connect") { dialog, _ ->
+                    dialog.dismiss()
+                    attemptAutoConnect(pairedAddress, pairedName)
+                }
+                .setNegativeButton("Scan New") { dialog, _ ->
+                    dialog.dismiss()
+                }
+                .show()
+        }
+    }
+    
+    /**
+     * 🆕 Attempt auto-connect to saved device
+     */
+    private fun attemptAutoConnect(address: String, name: String) {
+        // ✅ Check if activity is still valid
+        if (isFinishing || isDestroyed) return
+        
+        // ✅ Check Bluetooth state first
+        if (!isBluetoothEnabled()) {
+            Log.w("DeviceBindActivity", "⚠️ Bluetooth is OFF, cannot connect")
+            showBluetoothOffDialog(address, name)
+            return
+        }
+        
+        connectedDeviceAddress = address
+        BleOperateManager.getInstance().connectDirectly(address)
+        loadingDialog = LoadingDialog(this)
+        loadingDialog?.setLoadingText("Connecting to $name...")?.show()
+        
+        // ⏱️ Set timeout for connection (increased from 10s to 30s for slower devices)
+        mainHandler.postDelayed({
+            if (!isFinishing && !isDestroyed) {
+                loadingDialog?.close()
+                showConnectionTimeoutDialog(address, name)
+            }
+        }, 30000) // 30 second timeout (previously 10s - too quick)
+        
+        Log.d("DeviceBindActivity", "🔄 Auto-connecting to: $name")
+    }
 
-                if (text.contains("wake up") || text.contains("hey imi")) {
-                    playNotificationSound()
-                    Toast.makeText(this, "Wake word detected!", Toast.LENGTH_SHORT).show()
+    @SuppressLint("MissingPermission")
+    private fun startClassicConnectionFlow(deviceMac: String) {
+        val classicDevice = BluetoothAdapter.getDefaultAdapter().getRemoteDevice(deviceMac)
+        Log.d("DeviceBindActivity", "Starting classic flow. Bond state: ${classicDevice.bondState}")
+        when (classicDevice.bondState) {
+            BluetoothDevice.BOND_BONDED -> {
+                Log.d("DeviceBindActivity", "Device already bonded.")
+                getHeadsetProxyAndConnect(classicDevice)
+            }
+            BluetoothDevice.BOND_NONE -> {
+                Log.d("DeviceBindActivity", "Device not bonded. Starting pairing...")
+                Toast.makeText(this, "Pairing with glasses... Please confirm.", Toast.LENGTH_LONG).show()
+                registerBondStateReceiver()
+                if (!classicDevice.createBond()) {
+                    Log.e("DeviceBindActivity", "createBond() failed.")
+                    cleanUpReceivers()
                 }
             }
-            else -> {}
+            BluetoothDevice.BOND_BONDING -> {
+                Log.d("DeviceBindActivity", "Device is bonding. Waiting for result...")
+                registerBondStateReceiver()
+            }
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun getHeadsetProxyAndConnect(classicDevice: BluetoothDevice) {
+        Log.d("DeviceBindActivity", "Getting Headset profile proxy for ${classicDevice.address}")
+        BluetoothAdapter.getDefaultAdapter().getProfileProxy(this, profileListener, BluetoothProfile.HEADSET)
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun attemptHfpConnection(classicDevice: BluetoothDevice) {
+        val headset = headsetProxy ?: run {
+            Log.e("DeviceBindActivity", "Headset proxy is null, cannot attempt connection.")
+            return
+        }
+        val state = headset.getConnectionState(classicDevice)
+        Log.d("DeviceBindActivity", "Attempting HFP connection. Current state: $state")
+        when (state) {
+            BluetoothProfile.STATE_CONNECTED -> handleHfpConnectionSuccess()
+            BluetoothProfile.STATE_CONNECTING -> {
+                Log.d("DeviceBindActivity", "HFP is connecting. Waiting...")
+                registerHfpReceiverAndSetTimeout()
+            }
+            else -> {
+                registerHfpReceiverAndSetTimeout()
+                try {
+                    val connectMethod = headset.javaClass.getMethod("connect", BluetoothDevice::class.java)
+                    val success = connectMethod.invoke(headset, classicDevice) as? Boolean ?: false
+                    if (success) Log.d("DeviceBindActivity", "HFP connect command issued successfully.")
+                    else {
+                        Log.e("DeviceBindActivity", "HFP connect command failed immediately.")
+                        cleanUpReceivers()
+                        finish()
+                    }
+                } catch (e: Exception) {
+                    Log.e("DeviceBindActivity", "Error invoking HFP connect method", e)
+                    cleanUpReceivers()
+                    finish()
+                }
+            }
+        }
+    }
+
+    private fun registerHfpReceiverAndSetTimeout() {
+        if (!hfpReceiverRegistered) {
+            registerReceiver(headsetConnectionReceiver, IntentFilter(BluetoothHeadset.ACTION_CONNECTION_STATE_CHANGED))
+            hfpReceiverRegistered = true
+        }
+        mainHandler.postDelayed({
+            if (hfpReceiverRegistered) {
+                Log.w("DeviceBindActivity", "HFP connection timed out.")
+                cleanUpReceivers()
+                finish()
+            }
+        }, 15000)
+    }
+
+    private fun registerBondStateReceiver() {
+        if (!bondStateReceiverRegistered) {
+            registerReceiver(bondStateReceiver, IntentFilter(BluetoothDevice.ACTION_BOND_STATE_CHANGED))
+            bondStateReceiverRegistered = true
         }
     }
 
     private fun playNotificationSound() {
         try {
-            val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-            val ring = RingtoneManager.getRingtone(applicationContext, uri)
-            ring.play()
+            RingtoneManager.getRingtone(applicationContext, RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)).play()
         } catch (e: Exception) {
             e.printStackTrace()
         }
     }
 
-    /**
-     * Check if audio connection exists and prompt if missing
-     */
-    private fun checkAudioConnectionAndPrompt() {
-        val audioManager = getSystemService(Context.AUDIO_SERVICE) as? android.media.AudioManager
-        val hasAudioConnection = audioManager?.isBluetoothScoAvailableOffCall == true
-
-        if (!hasAudioConnection) {
-            // Audio not connected - show setup guide
-            showAudioConnectionPrompt()
-        } else {
-            // All good!
-            Toast.makeText(this, "🎧 Glass mic ready!", Toast.LENGTH_SHORT).show()
-            Log.d("DeviceBindActivity", "✅ Both BLE and Audio connections active")
-        }
-    }
-
-    /**
-     * Prompt user to setup audio connection
-     */
-    private fun showAudioConnectionPrompt() {
-        val dialog = android.app.AlertDialog.Builder(this)
-            .setTitle("🎤 One More Step!")
-            .setMessage(
-                "Your glasses are connected for data ✅\n\n" +
-                "To use the glass microphone:\n\n" +
-                "1️⃣ Go to Bluetooth Settings\n" +
-                "2️⃣ Tap your glasses name\n" +
-                "3️⃣ Enable 'Phone Audio' ✅\n\n" +
-                "This enables the microphone & speaker.\n" +
-                "Skip if you want to use phone mic only."
-            )
-            .setPositiveButton("Open Settings") { _, _ ->
-                openBluetoothSettingsAndGuide()
-            }
-            .setNegativeButton("Later") { dialog, _ ->
-                Toast.makeText(
-                    this,
-                    "You can enable glass mic anytime from Bluetooth settings",
-                    Toast.LENGTH_LONG
-                ).show()
-                dialog.dismiss()
-            }
-            .setNeutralButton("Help") { _, _ ->
-                showDetailedSetupHelp()
-            }
-            .create()
-
-        dialog.show()
-    }
-
-    /**
-     * Open Bluetooth settings with guidance
-     */
-    private fun openBluetoothSettingsAndGuide() {
-        try {
-            val intent = Intent(android.provider.Settings.ACTION_BLUETOOTH_SETTINGS)
-            startActivity(intent)
-
-            // Show step-by-step toast after opening settings
-            Handler(Looper.getMainLooper()).postDelayed({
-                Toast.makeText(
-                    this,
-                    "1️⃣ Find your glasses\n2️⃣ Tap ⚙️ settings\n3️⃣ Enable 'Phone Audio'",
-                    Toast.LENGTH_LONG
-                ).show()
-            }, 1000)
-
-        } catch (e: Exception) {
-            Log.e("DeviceBindActivity", "Failed to open Bluetooth settings: ${e.message}")
-            Toast.makeText(
-                this,
-                "Please manually go to: Settings → Bluetooth",
-                Toast.LENGTH_LONG
-            ).show()
-        }
-    }
-
-    /**
-     * Show detailed setup help
-     */
-    private fun showDetailedSetupHelp() {
-        val dialog = android.app.AlertDialog.Builder(this)
-            .setTitle("📖 Setup Guide")
-            .setMessage(
-                "Why do I need this?\n\n" +
-                "Your glasses use TWO Bluetooth connections:\n\n" +
-                "📡 BLE (Low Energy):\n" +
-                "   ✅ Already connected!\n" +
-                "   • Photos, commands, data\n\n" +
-                "🎧 Classic Bluetooth:\n" +
-                "   ⚠️ Needs setup\n" +
-                "   • Microphone & speaker\n" +
-                "   • Called 'Phone Audio'\n\n" +
-                "How to enable Phone Audio:\n" +
-                "1. Settings → Bluetooth\n" +
-                "2. Find your glasses\n" +
-                "3. Tap the ⚙️ icon\n" +
-                "4. Toggle 'Phone Audio' ON\n\n" +
-                "That's it! Your glass mic will work."
-            )
-            .setPositiveButton("Open Settings") { _, _ ->
-                openBluetoothSettingsAndGuide()
-            }
-            .setNegativeButton("Got It") { dialog, _ ->
-                dialog.dismiss()
-            }
-            .create()
-
-        dialog.show()
-    }
-
     private fun requestPermissions() {
-
-        val permissions = mutableListOf(
-            Manifest.permission.ACCESS_FINE_LOCATION,
-            Manifest.permission.ACCESS_COARSE_LOCATION,
-            Manifest.permission.RECORD_AUDIO
-        )
-
+        val perms = mutableListOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.RECORD_AUDIO)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            permissions.add(Manifest.permission.BLUETOOTH_SCAN)
-            permissions.add(Manifest.permission.BLUETOOTH_CONNECT)
+            perms.add(Manifest.permission.BLUETOOTH_SCAN)
+            perms.add(Manifest.permission.BLUETOOTH_CONNECT)
         }
-
-        XXPermissions.with(this)
-            .permission(permissions)
-            .request(object : OnPermissionCallback {
-                override fun onGranted(list: MutableList<String>, all: Boolean) {
-                    if (all) {
-                        setupViews()
-                        startScanning()
-                    }
-                }
-
-                override fun onDenied(list: MutableList<String>, never: Boolean) {
-                    if (never) {
-                        XXPermissions.startPermissionActivity(this@DeviceBindActivity, list)
-                    }
-                }
-            })
+        XXPermissions.with(this).permission(perms).request(object : OnPermissionCallback {
+            override fun onGranted(list: MutableList<String>, all: Boolean) { if (all) setupViews() }
+            override fun onDenied(list: MutableList<String>, never: Boolean) {
+                if (never) XXPermissions.startPermissionActivity(this@DeviceBindActivity, list)
+            }
+        })
     }
 
+    @SuppressLint("MissingPermission")
     private fun startScanning() {
-
         if (!isBluetoothEnabled()) {
             startActivity(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
             return
         }
-
         deviceList.clear()
         adapter.notifyDataSetChanged()
-
         scanSize = 0
-
         BleScannerHelper.getInstance().reSetCallback()
         BleScannerHelper.getInstance().scanDevice(this, null, bleScanCallback)
-
         binding.startScan.text = "Stop Scan"
-
-        mainHandler.removeCallbacks(scanStopRunnable)
         mainHandler.postDelayed(scanStopRunnable, 15000)
     }
     
-    private fun isBluetoothEnabled(): Boolean {
-        val bluetoothAdapter = BluetoothAdapter.getDefaultAdapter()
-        return bluetoothAdapter?.isEnabled ?: false
+    private fun isBluetoothEnabled(): Boolean = BluetoothAdapter.getDefaultAdapter()?.isEnabled ?: false
+    
+    /**
+     * 🆕 Show dialog when Bluetooth is OFF
+     */
+    private fun showBluetoothOffDialog(address: String, name: String) {
+        // Check if activity is finishing to prevent window leak
+        if (isFinishing || isDestroyed) return
+        
+        AlertDialog.Builder(this)
+            .setTitle("Bluetooth is OFF")
+            .setMessage("Please turn ON Bluetooth to connect to $name")
+            .setPositiveButton("Turn ON") { dialog, _ ->
+                dialog.dismiss()
+                // Open Bluetooth settings
+                startActivity(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
+                
+                // Retry connection after delay
+                mainHandler.postDelayed({
+                    // Check if activity is still valid before attempting connection
+                    if (!isFinishing && !isDestroyed && isBluetoothEnabled()) {
+                        attemptAutoConnect(address, name)
+                    } else if (!isFinishing && !isDestroyed) {
+                        Toast.makeText(this, "Please enable Bluetooth manually", Toast.LENGTH_LONG).show()
+                    }
+                }, 2000)
+            }
+            .setNegativeButton("Cancel") { dialog, _ ->
+                dialog.dismiss()
+            }
+            .setCancelable(false)
+            .show()
+    }
+    
+    /**
+     * 🆕 Show dialog when connection times out
+     */
+    private fun showConnectionTimeoutDialog(address: String, name: String) {
+        if (isFinishing || isDestroyed) return
+        
+        AlertDialog.Builder(this)
+            .setTitle("Connection Timeout")
+            .setMessage("Could not connect to $name.\n\nMake sure glasses are:\n• Powered ON\n• In range\n• Not connected to another device")
+            .setPositiveButton("Retry") { dialog, _ ->
+                dialog.dismiss()
+                attemptAutoConnect(address, name)
+            }
+            .setNegativeButton("Scan New") { dialog, _ ->
+                dialog.dismiss()
+            }
+            .show()
     }
 
     inner class BleCallback : ScanWrapperCallback {
-
         @SuppressLint("MissingPermission")
         override fun onLeScan(device: BluetoothDevice?, rssi: Int, scanRecord: ByteArray?) {
             if (device == null || device.name.isNullOrEmpty()) return
-
             val newDevice = SmartWatch(device.name, device.address, rssi = rssi)
-
             if (deviceList.any { it.deviceAddress == newDevice.deviceAddress }) return
-
             deviceList.add(newDevice)
             deviceList.sortByDescending { it.rssi }
             adapter.notifyDataSetChanged()
-
-            scanSize++
-            if (scanSize > 30) {
-                BleScannerHelper.getInstance().stopScan(this@DeviceBindActivity)
-            }
+            if (++scanSize > 30) BleScannerHelper.getInstance().stopScan(this@DeviceBindActivity)
         }
-
         override fun onStart() {}
         override fun onStop() {}
         override fun onScanFailed(errorCode: Int) {}
@@ -339,9 +493,16 @@ class DeviceBindActivity : BaseActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        mainHandler.removeCallbacks(scanStopRunnable)
-        if (EventBus.getDefault().isRegistered(this)) {
-            EventBus.getDefault().unregister(this)
+        // Dismiss loading dialog to prevent window leak
+        loadingDialog?.close()
+        loadingDialog = null
+        if (autoConnectDialog?.isShowing == true) {
+            autoConnectDialog?.dismiss()
         }
+        autoConnectDialog = null
+
+        cleanUpReceivers()
+        EventBus.getDefault().unregister(this)
+        headsetProxy?.let { BluetoothAdapter.getDefaultAdapter().closeProfileProxy(BluetoothProfile.HEADSET, it) }
     }
 }

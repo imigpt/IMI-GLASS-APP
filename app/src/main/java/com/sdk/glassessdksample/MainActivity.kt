@@ -27,6 +27,8 @@ import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
+import androidx.localbroadcastmanager.content.LocalBroadcastManager
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import com.google.android.gms.location.LocationServices
@@ -40,6 +42,10 @@ import com.oudmon.wifi.bean.GlassAlbumEntity
 import com.sdk.glassessdksample.databinding.ActivityMainBinding
 import com.sdk.glassessdksample.ui.*
 import com.sdk.glassessdksample.ui.wifi.WifiTransferManager
+import com.sdk.glassessdksample.ui.wifi.WifiP2PLiveCamera
+import com.sdk.glassessdksample.ui.wifi.GlassMediaTransfer
+import com.sdk.glassessdksample.ui.gallery.GlassMediaGalleryActivity
+import com.sdk.glassessdksample.utils.SafeBleCommandHelper
 import kotlinx.coroutines.*
 import org.greenrobot.eventbus.EventBus
 import org.greenrobot.eventbus.Subscribe
@@ -66,11 +72,15 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private var isInConversationMode = false
     private var isGeminiLiveMode = false // Track if using Gemini Live bidirectional audio
     private var aiIsPlaying = false // true when AI audio playback is active; used to prevent interrupts
+    private var isInterruptEnabled = false // Interrupt mode: when enabled, user voice stops AI immediately
     private var lastCapturedPhoto: ByteArray? = null // Store last photo for object detection
     private var lastSavedPhotoFile: File? = null
     private var glassBatteryLevel: Int? = null // Store glass battery percentage
     private var isWaitingForVisionPhoto = false // Flag to auto-analyze next photo
     private var lastVisionRequestType: String? = null // "person" | "general"
+    // Interactive Vision Mode flags (step-by-step photo capture)
+    private var isInteractiveVisionMode = false // Control step-by-step mode
+    private var isProcessingVisionRequest = false // Prevent double clicks
     private var currentTtsJob: Job? = null
     private var noMatchRetryCount = 0
     // Speech recognizer error/backoff tracking
@@ -96,6 +106,17 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private var pendingScoUtteranceId: String? = null
     private var scoStateDeferred: CompletableDeferred<Int>? = null
     private var scoHelper: ScoConnectionHelper? = null
+    
+    // Broadcast receiver for resuming Gemini Live after VisionChat completes
+    private var geminiLiveResumeReceiver: BroadcastReceiver? = null
+
+    // Live Camera Streaming - Direct Bluetooth photo capture + Gemini AI
+    // NO WiFi/Hotspot needed - works via Bluetooth directly
+    private var liveCameraJob: Job? = null
+    private var isLiveCameraActive = false
+    private val CAMERA_CAPTURE_INTERVAL_MS = 2000L // Capture every 2 seconds
+    private var lastLiveCameraAnalysis = ""
+    private var lastLiveCameraSpeakTime = 0L
 
     private val aiHistory = mutableListOf<Pair<String, String>>()
     
@@ -106,6 +127,16 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     
     // WiFi Transfer Manager for downloading media from glasses
     private var wifiTransferManager: WifiTransferManager? = null
+    
+    // WiFi P2P Live Camera for fast image streaming via WiFi + Mobile Data for AI
+    private var wifiP2PLiveCamera: WifiP2PLiveCamera? = null
+    private var isWifiP2PLiveMode = false
+    
+    // 🆕 Thinking tune player for Gemini Live delays
+    private var geminiThinkingPlayer: MediaPlayer? = null
+    private var thinkingTuneStartTime: Long = 0
+    private var lastUserInputTime: Long = 0
+    private val THINKING_TUNE_DELAY_MS = 800L // Start tuning if no AI response within 0.8s (faster feedback)
     
     // Image Upload Service for transferring photos to server
     private var imageUploadService: ImageUploadService? = null
@@ -129,6 +160,10 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private var lastButtonPressTime: Long = 0L
     private var lastButtonCode: Int = -1
     private val DOUBLE_CLICK_INTERVAL_MS = 500L // Max time between clicks to count as double-click
+    
+    // Chat adapter and messages
+    private lateinit var chatAdapter: ChatAdapter
+    private val chatMessages = mutableListOf<ChatMessage>()
     
     private val audioFocusListener = AudioManager.OnAudioFocusChangeListener { /* no-op */ }
     private val deviceNotifyListener by lazy { MyDeviceNotifyListener() }
@@ -162,6 +197,9 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         geminiClient = GeminiLiveApiClient()
         visionClient = GeminiAIClient() // Initialize vision client
         wifiTransferManager = WifiTransferManager(this) // Initialize WiFi transfer
+        
+        // Initialize WiFi P2P Live Camera for fast image streaming
+        initWifiP2PLiveCamera()
         
         // Image upload feature temporarily disabled (removed per request)
         val uploadUrl = prefs.getString("image_upload_url", "http://10.0.2.2:8080/upload") ?: "http://10.0.2.2:8080/upload"
@@ -285,6 +323,64 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 Log.e(TAG, "❌ Failed to start HotHelper: ${e.message}", e)
             }
         }
+        
+        // Register broadcast receiver to resume Gemini Live after VisionChat TTS finishes
+        registerGeminiLiveResumeReceiver()
+    }
+    
+    /**
+     * Register broadcast receiver for resuming Gemini Live after VisionChat completes
+     */
+    private fun registerGeminiLiveResumeReceiver() {
+        geminiLiveResumeReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                if (intent?.action == VisionChatActivity.ACTION_RESUME_GEMINI_LIVE) {
+                    // 🆕 Get vision text from broadcast (if available)
+                    val visionText = intent.getStringExtra(VisionChatActivity.EXTRA_VISION_TEXT)
+                    Log.d(TAG, "📡 Received broadcast to resume Gemini Live. Vision text: ${visionText?.take(50)}...")
+                    
+                    // Small delay to ensure VisionChatActivity has fully finished
+                    Handler(Looper.getMainLooper()).postDelayed({
+                        if (visionText != null) {
+                            // 🆕 Start Gemini Live with instruction to speak the vision result
+                            Log.d(TAG, "🎙️ Starting Gemini Live to speak vision result...")
+                            startGeminiLiveWithVisionResult(visionText)
+                        } else {
+                            // Regular resume without vision text
+                            Log.d(TAG, "🎙️ Auto-resuming Gemini Live conversation...")
+                            startGeminiLiveConversation()
+                        }
+                    }, 500)
+                }
+            }
+        }
+        
+        val filter = IntentFilter(VisionChatActivity.ACTION_RESUME_GEMINI_LIVE)
+        LocalBroadcastManager.getInstance(this).registerReceiver(geminiLiveResumeReceiver!!, filter)
+        Log.d(TAG, "📡 Registered Gemini Live resume receiver")
+    }
+    
+    /**
+     * 🆕 Start Gemini Live with a vision result to speak immediately
+     * The AI will naturally speak the vision analysis in its own voice
+     * 🆕 NOW: Just unmutes Gemini Live (kept active) and injects vision text
+     */
+    private fun startGeminiLiveWithVisionResult(visionText: String) {
+        try {
+            // 🔊 UNMUTE Gemini Live - it was kept active but muted during vision processing
+            geminiLiveService?.unmuteOutput()
+            Log.d(TAG, "🔊 Gemini Live unmuted - ready to speak vision result")
+            
+            // Inject the vision text for Gemini to speak naturally
+            geminiLiveService?.speakText(visionText, speakDirectly = true)
+            Log.i(TAG, "🎙️ Vision result sent to Gemini Live for speaking")
+            
+            updateConversation("System", "🎧 Speaking vision result...")
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to speak vision result: ${e.message}", e)
+            Toast.makeText(this@MainActivity, "Failed to speak: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
     }
 
     override fun onStart() {
@@ -348,6 +444,16 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             scoConnectionReceiver?.let { unregisterReceiver(it) }
         } catch (e: Exception) {
             Log.w(TAG, "Error unregistering receiver: ${e.message}")
+        }
+        
+        // Unregister Gemini Live resume receiver
+        try {
+            geminiLiveResumeReceiver?.let {
+                LocalBroadcastManager.getInstance(this).unregisterReceiver(it)
+                Log.d(TAG, "📡 Unregistered Gemini Live resume receiver")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Error unregistering Gemini Live resume receiver: ${e.message}")
         }
         
         // Clean up glass headset if active
@@ -578,10 +684,20 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
      * Uses best available device voice with optimized settings
      */
     private fun speakOut(text: String?, utteranceId: String = "DEFAULT") {
-        // DISABLED: Only use Gemini Live audio, no local TTS
-        // This prevents dual voices when using Gemini Live API
-        Log.d(TAG, "speakOut disabled (Live API mode): $text")
-        return
+        // ✅ ENABLE for specific cases like Vision Chat trigger
+        if (text == null || text.isEmpty()) {
+            Log.w(TAG, "speakOut: empty text")
+            return
+        }
+        
+        // Allow Vision Chat and important notifications
+        if (utteranceId == "VISION" || utteranceId == "ERROR") {
+            Log.d(TAG, "🔊 Speaking: $text (ID: $utteranceId)")
+            speakWithLocalTTS(text, utteranceId)
+        } else {
+            // Other cases: Use Gemini Live audio
+            Log.d(TAG, "speakOut disabled (Live API mode): $text")
+        }
     }
     
     /**
@@ -1352,18 +1468,21 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
          speechRecognizer?.setRecognitionListener(object : RecognitionListener {
             override fun onReadyForSpeech(params: Bundle?) {}
             override fun onBeginningOfSpeech() {
-                Log.d(TAG, "🛑 User started speaking - attempting to interrupt AI if playing")
+                Log.d(TAG, "🛑 User started speaking - checking interrupt mode")
                 try {
-                    // If AI is currently playing, interrupt immediately so user can take over
-                    if (aiIsPlaying) {
-                        Log.d(TAG, "🛑 Interrupting AI playback because user started speaking")
+                    // If INTERRUPT MODE IS ENABLED and AI is currently playing, interrupt immediately
+                    if (isInterruptEnabled && aiIsPlaying) {
+                        Log.d(TAG, "🛑 [INTERRUPT MODE ON] Stopping AI because user started speaking")
                         try {
                             geminiLiveService?.interruptCurrentResponse()
                         } catch (ex: Exception) {
                             Log.w(TAG, "Failed to interrupt Gemini service: ${ex.message}")
                         }
                         aiIsPlaying = false
+                    } else if (!isInterruptEnabled && aiIsPlaying) {
+                        Log.d(TAG, "ℹ️ [INTERRUPT MODE OFF] AI continues speaking - user must wait")
                     }
+                } catch (e: Exception) {
 
                     if (tts?.isSpeaking == true) {
                         tts?.stop()
@@ -1678,59 +1797,81 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 }
             }
             BluetoothEvent.EventType.PHOTO_CAPTURED -> {
-                 Log.d(TAG, "📥 PHOTO_CAPTURED EventBus event received, data type: ${event.data?.javaClass?.simpleName}")
-                 (event.data as? ByteArray)?.let { photoBytes ->
-                     Log.d(TAG, "📸 PHOTO_CAPTURED event - ${photoBytes.size} bytes received, isWaitingForVisionPhoto=$isWaitingForVisionPhoto")
-                    lastCapturedPhoto = photoBytes // Store for object detection
-                    savePhoto(photoBytes)
+                Log.d(TAG, "📥 PHOTO_CAPTURED EventBus event received, data type: ${event.data?.javaClass?.simpleName}")
+                (event.data as? ByteArray)?.let { photoBytes ->
+                    Log.d(TAG, "📸 PHOTO_CAPTURED event - ${photoBytes.size} bytes received")
+                    
+                    lastCapturedPhoto = photoBytes 
+                    savePhoto(photoBytes) // Gallery mein save
 
-                    // Display preview in conversation UI
+                    // UI Update
                     try {
                         runOnUiThread {
-                            try {
-                                binding.llPhotoPreview.visibility = android.view.View.VISIBLE
-                                val bmp = android.graphics.BitmapFactory.decodeByteArray(photoBytes, 0, photoBytes.size)
-                                binding.ivConversationImage.setImageBitmap(bmp)
-                            } catch (e: Exception) {
-                                Log.w(TAG, "Failed to decode image for preview: ${e.message}")
-                            }
+                            binding.llPhotoPreview.visibility = android.view.View.VISIBLE
+                            val bmp = android.graphics.BitmapFactory.decodeByteArray(photoBytes, 0, photoBytes.size)
+                            binding.ivConversationImage.setImageBitmap(bmp)
                         }
-                    } catch (e: Exception) {
-                        Log.w(TAG, "UI preview update failed: ${e.message}")
-                    }
+                    } catch (e: Exception) { Log.w(TAG, "UI preview update failed") }
 
-                    // Automatically send this photo to Gemini Vision for a short caption/description
-                    try {
-                        mainScope.launch {
+                    // ==================================================================
+                    // 🔥 FIX START: Logic Corrected for Gemini Live
+                    // ==================================================================
+                    
+                    // Check: 
+                    // 1. Agar 'isProcessingVisionRequest' TRUE hai (Matlab Gemini AI ne tool call kiya tha)
+                    // 2. Ya purana 'isWaitingForVisionPhoto' TRUE hai (Voice triggered Vision Chat)
+                    // ❌ REMOVED: isGeminiLiveMode - Normal conversation mein photo click pe vision analysis NAHI chahiye
+                    // Vision analysis sirf explicit vision commands pe hogi (samne kya hai, etc.)
+                    
+                    if (isProcessingVisionRequest || isWaitingForVisionPhoto) {
+                        
+                        Log.d(TAG, "🚀 Sending image to Gemini Live (Vision Request Active)")
+                        
+                        // Check if this is a Vision Chat trigger from voice command
+                        val visionQuery = pendingVisionQuery
+                        if (visionQuery != null) {
+                            Log.d(TAG, "👁️ Vision query from voice: $visionQuery")
+                            speakOut("Photo dekh raha hun... Analyzing photo", "VISION")
+                        } else {
+                            speakOut("Dekh raha hu...", "VIEW")
+                        }
+                        
+                        // Clear the pending query
+                        pendingVisionQuery = null
+
+                        if (geminiLiveService != null) {
                             try {
-                                val autoPrompt = "Provide a short 1-2 sentence caption suitable for voice, then a more detailed description of visible objects and people. Be concise."
-                                val aiResp = visionClient?.analyzeImage(photoBytes, autoPrompt) ?: "(Vision not available)"
-                                Log.d(TAG, "📤 Auto vision response: $aiResp")
-                                aiHistory.add("model" to aiResp)
-                                updateConversation("Imi", aiResp)
+                                // 🔥 Resize & compress before sending to speed up transfer
+                                val fastImage = resizeAndCompressImage(photoBytes)
+                                geminiLiveService?.sendRealtimeImage(fastImage)
+                                Log.d(TAG, "🚀 Image sent to Live Service directly via WebSocket (compressed)")
                             } catch (e: Exception) {
-                                Log.w(TAG, "Auto vision analysis failed: ${e.message}")
+                                Log.e(TAG, "❌ WebSocket send failed, trying fallback: ${e.message}")
+                                analyzeImageWithGemini(photoBytes)
                             }
+                        } else {
+                            Log.w(TAG, "⚠️ Live Service NULL, falling back to HTTP")
+                            analyzeImageWithGemini(photoBytes)
                         }
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Failed to launch auto vision analysis: ${e.message}")
-                    }
-                     
-                    // If this photo was requested for vision analysis, analyze it now
-                    if (isWaitingForVisionPhoto) {
+
+                        // Flags reset
+                        isProcessingVisionRequest = false
                         isWaitingForVisionPhoto = false
-                        Log.d(TAG, "🎥 Auto-analyzing photo for vision request (type=${lastVisionRequestType})")
-                        when (lastVisionRequestType) {
-                            "person" -> performPersonAnalysis(photoBytes)
-                            else -> performObjectDetection(photoBytes)
-                        }
                         lastVisionRequestType = null
                     } else {
-                        Log.d(TAG, "📸 Photo saved but not for vision analysis (flag was false)")
+                        // ✅ Normal photo - just save, NO vision analysis
+                        Log.d(TAG, "📸 Photo saved locally (Normal mode - no vision analysis)")
+                        runOnUiThread {
+                            Toast.makeText(this@MainActivity, "📷 Photo saved to gallery", Toast.LENGTH_SHORT).show()
+                        }
                     }
-                 } ?: run {
-                     Log.e(TAG, "❌ PHOTO_CAPTURED event but no photo data (event.data was null or wrong type)")
-                 }
+                    // ==================================================================
+                    // 🔥 FIX END
+                    // ==================================================================
+
+                } ?: run {
+                    Log.e(TAG, "❌ PHOTO_CAPTURED event but no photo data")
+                }
             }
             BluetoothEvent.EventType.BATTERY_LEVEL -> {
                 (event.data as? Int)?.let { batteryPercent ->
@@ -1946,7 +2087,108 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         
         val lowerCmd = command.lowercase()
         
+        // PRIORITY 0: PHOTO/VIDEO CAPTURE COMMANDS (SIRF click, no vision analysis!)
+        // ══════════════════════════════════════════════════════════════════════════
+        // ✅ These commands ONLY capture photo/video - NO vision analysis!
+        // Check these BEFORE any vision-related commands
+        // ══════════════════════════════════════════════════════════════════════════
+        
+        // Photo click commands - ONLY take photo, NO vision analysis
+        val isPhotoClickCommand = lowerCmd.contains("photo click") || 
+            lowerCmd.contains("click photo") ||
+            lowerCmd.contains("photo lo") || 
+            lowerCmd.contains("photo lelo") ||
+            lowerCmd.contains("photo khinch") ||
+            lowerCmd.contains("photo khicho") ||
+            lowerCmd.contains("foto lo") ||
+            lowerCmd.contains("take photo") ||
+            lowerCmd.contains("take a photo") ||
+            lowerCmd.contains("take picture") ||
+            lowerCmd.contains("click picture") ||
+            lowerCmd.contains("capture photo") ||
+            (lowerCmd.contains("photo") && !lowerCmd.contains("analyze") && !lowerCmd.contains("samne") && !lowerCmd.contains("dekh"))
+        
+        if (isPhotoClickCommand) {
+            Log.d(TAG, "📷 PHOTO CLICK command (no vision): '$command'")
+            SafeBleCommandHelper.takePhoto()
+            speakOut("Photo le raha hu", "ACTION")
+            return
+        }
+        
+        // Video recording commands - ONLY record, NO vision analysis
+        val isVideoCommand = (lowerCmd.contains("video") || lowerCmd.contains("recording")) &&
+            (lowerCmd.contains("start") || lowerCmd.contains("shuru") || lowerCmd.contains("on") || lowerCmd.contains("begin") || lowerCmd.contains("record"))
+        
+        val isStopVideoCommand = (lowerCmd.contains("video") || lowerCmd.contains("recording")) &&
+            (lowerCmd.contains("stop") || lowerCmd.contains("band") || lowerCmd.contains("off") || lowerCmd.contains("end") || lowerCmd.contains("finish"))
+        
+        if (isStopVideoCommand) {
+            Log.d(TAG, "🎬 STOP VIDEO command: '$command'")
+            SafeBleCommandHelper.stopRecording()
+            speakOut("Video recording band", "ACTION")
+            return
+        }
+        
+        if (isVideoCommand) {
+            Log.d(TAG, "🎬 START VIDEO command: '$command'")
+            SafeBleCommandHelper.startRecording()
+            speakOut("Video recording shuru", "ACTION")
+            return
+        }
+        
         // PRIORITY 1: Direct action commands (before VoiceCommandInterpreter)
+        
+        // ══════════════════════════════════════════════════════════════════════════
+        // LIVE CAMERA STREAMING COMMANDS
+        // ══════════════════════════════════════════════════════════════════════════
+        // Start continuous or interactive live camera based on wording
+        if (lowerCmd.contains("continuous camera") || lowerCmd.contains("keep watching") ||
+            lowerCmd.contains("continuous dekho") || lowerCmd.contains("continuous dekhte raho") ||
+            lowerCmd.contains("keep watching") ) {
+            // Explicit continuous mode request
+            startLiveCameraStream()
+            return
+        }
+
+        // Interactive Vision Mode (step-by-step) - default when user says live camera/vision mode
+        if (lowerCmd.contains("start live camera") || lowerCmd.contains("live camera on") ||
+            lowerCmd.contains("enable live vision") || lowerCmd.contains("live camera") ||
+            lowerCmd.contains("vision mode") || lowerCmd.contains("camera on") ||
+            lowerCmd.contains("live camera shuru karo") || lowerCmd.contains("camera chalu rakho")) {
+            startInteractiveVisionMode()
+            return
+        }
+        
+        if (lowerCmd.contains("stop live camera") || lowerCmd.contains("live camera off") ||
+            lowerCmd.contains("disable live vision") || lowerCmd.contains("stop watching") ||
+            lowerCmd.contains("live camera band karo") || lowerCmd.contains("camera band karo")) {
+            stopLiveCameraStream()
+            stopWifiP2PLiveCamera() // Also stop WiFi mode if running
+            return
+        }
+
+        // Interactive Vision Mode controls: Next/Click and Stop
+        if (isInteractiveVisionMode && (lowerCmd.contains("next") || lowerCmd.contains("another") || lowerCmd.contains("aur dikhao") || lowerCmd.contains("click") || lowerCmd.contains("naya"))) {
+            if (!isProcessingVisionRequest) {
+                captureAndAnalyzeInteractive()
+            } else {
+                speakOut("Abhi purani photo process ho rahi hai, kripya wait karein.", "WAIT")
+            }
+            return
+        }
+
+        if (lowerCmd.contains("stop camera") || lowerCmd.contains("band karo") || lowerCmd.contains("exit vision") || lowerCmd.contains("vision band karo")) {
+            if (isInteractiveVisionMode) stopInteractiveVisionMode()
+            return
+        }
+        
+        // WiFi P2P Live Camera - Fast mode via WiFi hotspot
+        if (lowerCmd.contains("wifi live camera") || lowerCmd.contains("fast live camera") ||
+            lowerCmd.contains("wifi camera shuru") || lowerCmd.contains("fast camera") ||
+            lowerCmd.contains("wifi mode") && lowerCmd.contains("camera")) {
+            startWifiP2PLiveCamera()
+            return
+        }
         
         // WiFi Transfer commands - download photos/videos from glasses
         if (lowerCmd.contains("download") || lowerCmd.contains("transfer") ||
@@ -1956,6 +2198,17 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             lowerCmd.contains("मेरी फ़ोटो") || lowerCmd.contains("photos lao") ||
             lowerCmd.contains("photo download") || lowerCmd.contains("video download")) {
             startWifiTransfer()
+            return
+        }
+        
+        // Glass Media Gallery - View photos/videos from glass via WiFi hotspot
+        if (lowerCmd.contains("glass gallery") || lowerCmd.contains("glass photos") ||
+            lowerCmd.contains("glass videos") || lowerCmd.contains("glass media") ||
+            lowerCmd.contains("show my photos") || lowerCmd.contains("show my videos") ||
+            lowerCmd.contains("open gallery") || lowerCmd.contains("glass ki photos") ||
+            lowerCmd.contains("glass ki gallery") || lowerCmd.contains("meri gallery") ||
+            lowerCmd.contains("photos dikhao") || lowerCmd.contains("videos dikhao")) {
+            openGlassMediaGallery()
             return
         }
         
@@ -1991,20 +2244,16 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         
         if (isVisionRequest) {
             Log.d(TAG, "🎥 Vision request detected: '$command'")
-            // Check if user wants detailed Vision Chat analysis
-            if (lowerCmd.contains("vision chat") || lowerCmd.contains("detailed") || 
-                lowerCmd.contains("show me") || lowerCmd.contains("in detail")) {
-                Log.d(TAG, "👓 Triggering Vision Chat with Gemini integration")
-                triggerVisionChatWithGemini(command)
-            } else {
-                // If this is a person-identification request, use the person analyzer
-                if (lowerCmd.contains("who") || lowerCmd.contains("kaun hai") || lowerCmd.contains("who is") || lowerCmd.contains("identify person") || lowerCmd.contains("who is this") || lowerCmd.contains("kaun hai samne")) {
-                    analyzePersonInFront()
-                } else {
-                    // Quick vision analysis in main conversation
-                    analyzeCurrentView()
-                }
+            
+            // 🆕 CHECK: If VisionChat is already open, do nothing (let VisionChat's listener handle it)
+            if (visionChatOpenFlag) {
+                Log.d(TAG, "👁️ VisionChat already open - listener will handle vision request automatically")
+                return  // VisionChatActivity's VisionTranscriptionListener will capture new photo
             }
+            
+            // VisionChat NOT open - trigger it with auto-capture
+            Log.d(TAG, "👓 VisionChat not open - opening with auto-capture for: '$command'")
+            triggerVisionChatFromLive(command, forceNewCapture = true)
             return
         }
         
@@ -2037,6 +2286,21 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         // YouTube open commands - auto-play trending
         if (lowerCmd.contains("open youtube") || lowerCmd.contains("launch youtube")) {
             playYouTube("trending") // Auto-play trending when opening YouTube
+            return
+        }
+        
+        // Interrupt mode toggle commands (enable/disable AI interruption when user speaks)
+        if (lowerCmd.contains("enable interrupt") || lowerCmd.contains("interrupt on") || 
+            lowerCmd.contains("interrupt mode enable")) {
+            isInterruptEnabled = true
+            Toast.makeText(this, "Interrupt Mode: ON", Toast.LENGTH_SHORT).show()
+            return
+        }
+        
+        if (lowerCmd.contains("disable interrupt") || lowerCmd.contains("interrupt off") || 
+            lowerCmd.contains("interrupt mode disable")) {
+            isInterruptEnabled = false
+            Toast.makeText(this, "Interrupt Mode: OFF", Toast.LENGTH_SHORT).show()
             return
         }
         
@@ -2163,15 +2427,15 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         
         when (action) {
             GlassAction.TAKE_PHOTO -> {
-                LargeDataHandler.getInstance().glassesControl(byteArrayOf(0x02, 0x01, 0x01)) { _, _ -> }
+                SafeBleCommandHelper.takePhoto()
                 speakOut("Taking photo", "ACTION")
             }
             GlassAction.START_VIDEO -> {
-                LargeDataHandler.getInstance().glassesControl(byteArrayOf(0x02, 0x01, 0x02)) { _, _ -> }
+                SafeBleCommandHelper.startRecording()
                 speakOut("Starting video", "ACTION")
             }
             GlassAction.STOP_VIDEO -> {
-                LargeDataHandler.getInstance().glassesControl(byteArrayOf(0x02, 0x01, 0x03)) { _, _ -> }
+                SafeBleCommandHelper.stopRecording()
                 speakOut("Stopping video", "ACTION")
             }
             GlassAction.GET_NEWS -> getLatestNews()
@@ -2822,16 +3086,15 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         // Clear previous photo
         lastCapturedPhoto = null
         
-        // Request photo from glasses camera
-        LargeDataHandler.getInstance().glassesControl(byteArrayOf(0x02, 0x01, 0x01)) { code, error ->
-            // SDK returns code=65 for async operations - don't treat as error
-            // Photo notification will arrive separately via Bluetooth
-            if (code != 0 && code != 65) {
-                Log.e(TAG, "❌ Camera trigger failed: code=$code, error=$error")
+        // Request photo from glasses camera using SafeBleCommandHelper
+        // This handles the SDK bug (ArrayIndexOutOfBoundsException in GlassModelControlResponse)
+        SafeBleCommandHelper.takePhoto { success, error ->
+            if (!success) {
+                Log.e(TAG, "❌ Camera trigger failed: $error")
                 isWaitingForVisionPhoto = false
                 speakOut("Camera unavailable. Please try again.", "ERROR")
             } else {
-                Log.d(TAG, "✅ Camera trigger sent (code=$code), waiting for photo...")
+                Log.d(TAG, "✅ Camera trigger sent, waiting for photo...")
             }
         }
         
@@ -2928,14 +3191,15 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         isWaitingForVisionPhoto = true
         lastCapturedPhoto = null
 
-        LargeDataHandler.getInstance().glassesControl(byteArrayOf(0x02, 0x01, 0x01)) { code, error ->
-            if (code != 0 && code != 65) {
-                Log.e(TAG, "❌ Camera trigger failed for person analysis: code=$code, error=$error")
+        // Use SafeBleCommandHelper to avoid SDK ArrayIndexOutOfBoundsException bug
+        SafeBleCommandHelper.takePhoto { success, error ->
+            if (!success) {
+                Log.e(TAG, "❌ Camera trigger failed for person analysis: $error")
                 isWaitingForVisionPhoto = false
                 lastVisionRequestType = null
                 speakOut("Camera unavailable. Please try again.", "ERROR")
             } else {
-                Log.d(TAG, "✅ Camera trigger sent for person analysis (code=$code), waiting for photo...")
+                Log.d(TAG, "✅ Camera trigger sent for person analysis, waiting for photo...")
             }
         }
 
@@ -3053,12 +3317,22 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     /**
      * Open Vision Chat activity for enhanced image analysis with Gemini Vision
      */
-    private fun openVisionChat() {
+    private fun openVisionChat(autoCapture: Boolean = false, forceNew: Boolean = false, query: String? = null) {
         try {
             val intent = Intent(this, VisionChatActivity::class.java)
+            if (autoCapture) {
+                // Use literal strings "auto_capture", "force_new_capture", "vision_query" to match VisionChatActivity
+                intent.putExtra("auto_capture", true)
+                intent.putExtra("force_new_capture", forceNew)
+                if (query != null) intent.putExtra("vision_query", query)
+            }
+            // Ensure onNewIntent is called if already running
+            intent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            
             startActivity(intent)
             speakOut("Opening Vision Chat for detailed analysis", "ACTION")
-            Log.d(TAG, "👓 Vision Chat launched from Gemini conversation")
+            Log.d(TAG, "👓 Vision Chat launched (auto=$autoCapture)")
         } catch (e: Exception) {
             Log.e(TAG, "Error launching Vision Chat", e)
             speakOut("Failed to open Vision Chat", "ERROR")
@@ -3070,35 +3344,19 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
      * This captures an image, sends it to Vision Chat, and makes results available to main AI
      */
     private fun triggerVisionChatWithGemini(userQuery: String) {
-        speakOut("Capturing image for detailed Vision Chat analysis", "VISION")
+        speakOut("Opening Vision Chat for analysis", "VISION")
         
-        try {
-            // Capture photo from glasses
-            LargeDataHandler.getInstance().glassesControl(byteArrayOf(0x02, 0x01, 0x01)) { code, error ->
-                if (code == 0 || code == 65) {
-                    Log.d(TAG, "📸 Photo captured for Vision Chat + Gemini integration")
-                    
-                    // Add to conversation that analysis is starting
-                    val analysisNote = "Image captured! Opening Vision Chat for detailed AI analysis. Results will be shared here."
-                    aiHistory.add("user" to userQuery)
-                    aiHistory.add("model" to analysisNote)
-                    updateConversation("Imi", analysisNote)
-                    speakOnGlass(analysisNote, "VISION_START")
-                    
-                    // Open Vision Chat after brief delay
-                    Handler(Looper.getMainLooper()).postDelayed({
-                        openVisionChat()
-                    }, 1000)
-                    
-                } else {
-                    Log.e(TAG, "❌ Failed to capture photo for Vision Chat integration")
-                    speakOut("Failed to capture image", "ERROR")
-                }
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error triggering Vision Chat with Gemini", e)
-            speakOut("Camera error", "ERROR")
-        }
+        // Add to conversation that analysis is starting
+        val analysisNote = "Opening Vision Chat for detailed AI analysis..."
+        aiHistory.add("user" to userQuery)
+        aiHistory.add("model" to analysisNote)
+        updateConversation("Imi", analysisNote)
+        
+        // Open Vision Chat immediately and let IT handle the capture
+        // This avoids double capture and handles re-entry gracefully with onNewIntent
+        Handler(Looper.getMainLooper()).postDelayed({
+            openVisionChat(autoCapture = true, forceNew = true, query = userQuery)
+        }, 500)
     }
     
     private fun performObjectDetection(imageBytes: ByteArray) {
@@ -3348,16 +3606,17 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         Log.d(TAG, "🎥 Starting video recording")
         speakOut("Starting video recording", "ACTION")
         
-        // Send video start command to glasses (0x02, 0x01, 0x02 = video mode)
-        LargeDataHandler.getInstance().glassesControl(byteArrayOf(0x02, 0x01, 0x02)) { code, error ->
-            if (code == 0 || code == 65) {
-                Log.d(TAG, "✅ Video recording started")
-                updateConversation("Imi", "Video recording started")
-            } else {
-                Log.e(TAG, "❌ Failed to start video: code=$code, error=$error")
-                speakOut("Failed to start video recording", "ERROR")
+        // Use SafeBleCommandHelper to avoid SDK bug crash
+        SafeBleCommandHelper.startRecording(
+            onSuccess = { code ->
+                Log.d(TAG, "✅ Video recording started (code: $code)")
+                runOnUiThread { updateConversation("Imi", "Video recording started") }
+            },
+            onError = { error ->
+                Log.e(TAG, "❌ Failed to start video: $error")
+                runOnUiThread { speakOut("Failed to start video recording", "ERROR") }
             }
-        }
+        )
     }
     
     /**
@@ -3367,22 +3626,23 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         Log.d(TAG, "🎥 Stopping video recording")
         speakOut("Stopping video recording", "ACTION")
         
-        // Send stop command (0x02, 0x01, 0x00 = stop)
-        LargeDataHandler.getInstance().glassesControl(byteArrayOf(0x02, 0x01, 0x00)) { code, error ->
-            Log.d(TAG, "Stop video response: code=$code, error=$error")
-            runOnUiThread {
-                // Try with any non-negative code as success, not just 0 and 65
-                if (code >= 0) {
-                    Log.d(TAG, "✅ Video recording stopped successfully")
+        // Use SafeBleCommandHelper to avoid SDK bug crash
+        SafeBleCommandHelper.stopRecording(
+            onSuccess = { code ->
+                Log.d(TAG, "✅ Video recording stopped successfully (code: $code)")
+                runOnUiThread {
                     updateConversation("Imi", "Video recording stopped. Video saved to glasses memory.")
                     speakOut("Video saved", "ACTION")
-                } else {
-                    Log.e(TAG, "❌ Failed to stop video: code=$code, error=$error")
+                }
+            },
+            onError = { error ->
+                Log.e(TAG, "❌ Failed to stop video: $error")
+                runOnUiThread {
                     speakOut("Stop command sent to glasses", "ACTION")
                     updateConversation("Imi", "Stop command sent to glasses")
                 }
             }
-        }
+        )
     }
     
     /**
@@ -3690,6 +3950,40 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     }
 
     private fun initView() {
+        // Initialize chat RecyclerView
+        chatAdapter = ChatAdapter(chatMessages)
+        binding.rvChatMessages.apply {
+            layoutManager = androidx.recyclerview.widget.LinearLayoutManager(this@MainActivity)
+            adapter = chatAdapter
+        }
+        
+        // Update location and time
+        updateLocationAndTime()
+        
+        // Load glass image from assets
+        try {
+            val inputStream = assets.open("glass1.png")
+            val bitmap = android.graphics.BitmapFactory.decodeStream(inputStream)
+            binding.ivGlassImage.setImageBitmap(bitmap)
+            inputStream.close()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error loading glass1.png: ${e.message}")
+        }
+        
+        // Handle send button
+        binding.btnSendMessage.setOnClickListener {
+            val message = binding.etChatInput.text.toString().trim()
+            if (message.isNotEmpty()) {
+                // Add user message
+                chatAdapter.addMessage(ChatMessage(text = message, isFromUser = true))
+                binding.rvChatMessages.scrollToPosition(chatMessages.size - 1)
+                binding.etChatInput.setText("")
+                
+                // Process with Gemini
+                processUserMessage(message)
+            }
+        }
+        
         binding.btnVoice.isEnabled = voiceCommandEnabled
         // Setup switch if it exists in layout, else ignore
         // Glass microphone UI removed — do not auto-enable glass mic on wake.
@@ -3705,14 +3999,105 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             EventBus.getDefault().post(BluetoothEvent(BluetoothEvent.EventType.VOICE_TEXT, "wake up"))
         }
         
+        // Interrupt Mode Switch - Enable/Disable AI interruption when user speaks
+        binding.switchInterruptMode.setOnCheckedChangeListener { _, isChecked ->
+            isInterruptEnabled = isChecked
+            val status = if (isChecked) "ON - AI stops when you speak" else "OFF - AI finishes speaking"
+            Toast.makeText(this, "Interrupt Mode: $status", Toast.LENGTH_SHORT).show()
+            Log.d(TAG, "🎙️ Interrupt Mode: ${if (isChecked) "ENABLED" else "DISABLED"}")
+        }
+        
         // Vision Chat removed per user request
         
         binding.btnBt.setOnClickListener { startKtxActivity<DeviceBindActivity>() }
         
-        // Setup other buttons
-        binding.btnCamera.setOnClickListener { LargeDataHandler.getInstance().glassesControl(byteArrayOf(0x02, 0x01, 0x01)) { _, _ -> } }
-        binding.btnVideo.setOnClickListener { LargeDataHandler.getInstance().glassesControl(byteArrayOf(0x02, 0x01, 0x02)) { _, _ -> } }
+        // Setup other buttons - use SafeBleCommandHelper to avoid SDK bug crash
+        binding.btnCamera.setOnClickListener { SafeBleCommandHelper.takePhoto() }
+        binding.btnVideo.setOnClickListener { SafeBleCommandHelper.startRecording() }
+        
+        // Glass Gallery button
+        binding.btnGlassGallery.setOnClickListener { openGlassMediaGallery() }
+        
+        // Vision Chat button - AI-powered image analysis via Bluetooth
+        binding.btnVisionChat.setOnClickListener { openVisionChat() }
+        
         // Upload settings removed per user request
+    }
+    
+    /**
+     * Process user message from chat input
+     */
+    private fun processUserMessage(message: String) {
+        lifecycleScope.launch {
+            try {
+                // Get AI response
+                val response = withContext(Dispatchers.IO) {
+                    geminiClient?.chat(message, aiHistory) ?: "I'm sorry, I couldn't process that."
+                }
+                
+                // Add to history
+                aiHistory.add(Pair("user", message))
+                aiHistory.add(Pair("model", response))
+                
+                // Update UI
+                chatAdapter.addMessage(ChatMessage(text = response, isFromUser = false))
+                binding.rvChatMessages.scrollToPosition(chatMessages.size - 1)
+            } catch (e: Exception) {
+                Log.e(TAG, "Error processing message: ${e.message}", e)
+                chatAdapter.addMessage(ChatMessage(text = "Sorry, I encountered an error.", isFromUser = false))
+                binding.rvChatMessages.scrollToPosition(chatMessages.size - 1)
+            }
+        }
+    }
+    
+    /**
+     * Update current location and time display
+     */
+    private fun updateLocationAndTime() {
+        // Update time every minute
+        lifecycleScope.launch {
+            while (isActive) {
+                val currentTime = java.text.SimpleDateFormat("HH:mm", Locale.getDefault()).format(java.util.Date())
+                val currentDate = java.text.SimpleDateFormat("EEE, MMM dd", Locale.getDefault()).format(java.util.Date())
+                binding.tvCurrentTime.text = "$currentDate • $currentTime"
+                delay(60000) // Update every minute
+            }
+        }
+        
+        // Get current location
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+            lifecycleScope.launch(Dispatchers.IO) {
+                try {
+                    val fusedLocationClient = LocationServices.getFusedLocationProviderClient(this@MainActivity)
+                    fusedLocationClient.lastLocation.addOnSuccessListener { location ->
+                        location?.let {
+                            // Get address from coordinates
+                            val geocoder = android.location.Geocoder(this@MainActivity, Locale.getDefault())
+                            try {
+                                val addresses = geocoder.getFromLocation(it.latitude, it.longitude, 1)
+                                if (addresses?.isNotEmpty() == true) {
+                                    val address = addresses[0]
+                                    val locationText = buildString {
+                                        address.locality?.let { append(it) }
+                                        if (address.locality != null && address.adminArea != null) append(", ")
+                                        address.adminArea?.let { append(it) }
+                                        if (address.countryName != null && (address.locality != null || address.adminArea != null)) append(", ")
+                                        address.countryName?.let { append(it) }
+                                    }
+                                    lifecycleScope.launch(Dispatchers.Main) {
+                                        binding.tvLocationName.text = locationText.ifEmpty { "Location unavailable" }
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Error getting address: ${e.message}")
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error getting location: ${e.message}")
+                }
+            }
+        }
     }
     
     override fun onPause() {
@@ -4000,7 +4385,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                                             1 -> {
                                                 Log.d(TAG, "🔘 Button 1 pressed - taking photo")
                                                 Toast.makeText(this@MainActivity, "📷 Taking photo", Toast.LENGTH_SHORT).show()
-                                                LargeDataHandler.getInstance().glassesControl(byteArrayOf(0x02, 0x01, 0x01)) { _, _ -> }
+                                                SafeBleCommandHelper.takePhoto()
                                                 speakOut("Taking photo", "ACTION")
                                             }
                                             2 -> {
@@ -4082,15 +4467,33 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                     0x03 -> {
                         dataBytes?.let { photoData ->
                             try {
-                                Log.d(TAG, "📷 Photo received from glasses (${photoData.size} bytes)")
+                                Log.d(TAG, "📷 [Photo Received] Photo from glasses (${photoData.size} bytes) | Live Camera: $isLiveCameraActive")
+                                
+                                // Save photo to storage
                                 savePhoto(photoData)
-                                runOnUiThread {
-                                    speakOut("Photo saved to gallery", "PHOTO_SAVED")
+                                Log.d(TAG, "💾 Photo saved successfully")
+                                
+                                // 🔥 IMPORTANT: Broadcast photo to all activities via EventBus
+                                // This allows VisionChatActivity to receive photos even when it's in foreground
+                                Log.d(TAG, "📡 Broadcasting PHOTO_CAPTURED event via EventBus")
+                                EventBus.getDefault().post(BluetoothEvent(BluetoothEvent.EventType.PHOTO_CAPTURED, photoData))
+                                
+                                // If live camera is active, analyze immediately
+                                if (isLiveCameraActive) {
+                                    Log.d(TAG, "🎥 [Live Camera] ACTIVE - Triggering analysis now")
+                                    analyzeLiveStreamPhoto(photoData)
+                                } else {
+                                    // Normal photo capture - just confirm saved
+                                    Log.d(TAG, "📸 Normal photo mode - no analysis")
+                                    runOnUiThread {
+                                        speakOut("Photo saved to gallery", "PHOTO_SAVED")
+                                    }
                                 }
                             } catch (e: Exception) {
-                                Log.e(TAG, "Error saving photo from glasses: ${e.message}", e)
+                                Log.e(TAG, "❌ Error processing photo from glasses: ${e.message}", e)
+                                e.printStackTrace()
                             }
-                        }
+                        } ?: Log.e(TAG, "❌ Photo data is null!")
                     }
                     
                     // Text message/command from glasses
@@ -4214,6 +4617,24 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
      * Handle tool calls from Gemini Live API
      */
     private fun handleGeminiToolCall(toolName: String, args: Map<String, Any>): String {
+        // ONLY analyze_view should open Vision Chat (for "what is in front of me" type queries)
+        // take_photo should just take photo, not open Vision Chat
+        if (toolName == "analyze_view") {
+            try {
+                val question = args["question"] as? String ?: "What is in front of me?"
+                Log.d(TAG, "👁️ Tool call 'analyze_view' - Opening Vision Chat for: $question")
+                
+                // Open Vision Chat with auto-capture (this handles camera + hotspot + P2P + download + analysis)
+                runOnUiThread {
+                    triggerVisionChatFromLive(question)
+                }
+                
+                return "Opening Vision Chat to analyze the view. Please wait..."
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to trigger Vision Chat: ${e.message}", e)
+                return "Failed to open Vision Chat: ${e.message}"
+            }
+        }
         Log.d(TAG, "🔧 Handling tool call: $toolName")
         
         return try {
@@ -4378,6 +4799,16 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                     if (action == "start") "Started video recording..." else "Stopped video recording."
                 }
                 
+                "capture_new_frame" -> {
+                    // 🆕 User wants to capture a NEW photo (not follow-up on existing)
+                    Log.d(TAG, "📸 Tool call 'capture_new_frame' - Opening Vision Chat for NEW capture")
+                    runOnUiThread {
+                        // Clear any previous image context by opening fresh Vision Chat
+                        triggerVisionChatFromLive("What is in front of me?", forceNewCapture = true)
+                    }
+                    "Capturing new photo from glasses camera..."
+                }
+                
                 "analyze_view" -> {
                     val question = args["question"] as? String ?: "What is in front of me?"
                     runOnUiThread {
@@ -4534,7 +4965,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private fun openCamera() {
         try {
             Log.d(TAG, "📷 Opening glass camera (view mode)")
-            LargeDataHandler.getInstance().glassesControl(byteArrayOf(0x02, 0x01, 0x01)) { _, _ -> }
+            SafeBleCommandHelper.takePhoto()
             speakOut("Opening camera", "ACTION")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to open glass camera: ${e.message}")
@@ -4547,7 +4978,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private fun openCameraForPhoto() {
         try {
             Log.d(TAG, "📷 Taking photo with glass camera")
-            LargeDataHandler.getInstance().glassesControl(byteArrayOf(0x02, 0x01, 0x01)) { _, _ -> }
+            SafeBleCommandHelper.takePhoto()
             speakOut("Taking photo", "ACTION")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to take photo with glass: ${e.message}")
@@ -4560,7 +4991,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private fun openCameraForVideo() {
         try {
             Log.d(TAG, "🎥 Starting video with glass camera")
-            LargeDataHandler.getInstance().glassesControl(byteArrayOf(0x02, 0x01, 0x02)) { _, _ -> }
+            SafeBleCommandHelper.startRecording()
             speakOut("Starting video", "ACTION")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start video with glass: ${e.message}")
@@ -4573,7 +5004,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private fun takePhoto() {
         try {
             Log.d(TAG, "📷 Taking photo with glass camera")
-            LargeDataHandler.getInstance().glassesControl(byteArrayOf(0x02, 0x01, 0x01)) { _, _ -> }
+            SafeBleCommandHelper.takePhoto()
             speakOut("Taking photo", "ACTION")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to take photo with glass: ${e.message}")
@@ -4728,8 +5159,14 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                     // Update UI with live transcriptions
                     if (input.isNotEmpty()) {
                         updateConversation("You", input)
+                        
+                        // ⛔ REMOVED: Thinking tune in normal conversation
+                        // Thinking tune ONLY plays in Vision Chat (VisionChatActivity)
+                        // Normal conversation mein tuning nahi chahiye
                     }
                     if (output.isNotEmpty()) {
+                        // ⛔ REMOVED: Stop thinking tune (not used in normal conversation anymore)
+                        
                         updateConversation("Imi", output)
 
                         // Only update the glasses display when the AI output is final to
@@ -4766,8 +5203,65 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                         saveConversationHistory()
                     }
                     
-                    // Check if user wants to exit
+                    // ❌ REMOVED: Vision Chat triggers from Gemini Live - Vision Chat sirf manual open hoga
                     val lowerInput = fullInput.lowercase()
+                    
+                    // 🛑 Check for stop vision streaming commands
+                    if (isStopVisionCommand(lowerInput)) {
+                        Log.d(TAG, "🛑 Stop vision streaming command detected: '$fullInput'")
+                        sendStopVisionStreamingBroadcast()
+                        return@runOnUiThread
+                    }
+                    
+                    // 📷 PHOTO CLICK commands - sirf photo click, NO vision analysis!
+                    val isPhotoClickCommand = lowerInput.contains("photo click") || 
+                        lowerInput.contains("click photo") ||
+                        lowerInput.contains("photo lo") || 
+                        lowerInput.contains("photo lelo") ||
+                        lowerInput.contains("photo lele") ||
+                        lowerInput.contains("photo khinch") ||
+                        lowerInput.contains("photo khicho") ||
+                        lowerInput.contains("foto lo") ||
+                        lowerInput.contains("take photo") ||
+                        lowerInput.contains("take a photo") ||
+                        lowerInput.contains("take picture") ||
+                        lowerInput.contains("click picture") ||
+                        lowerInput.contains("capture photo") ||
+                        lowerInput.contains("capture image")
+                    
+                    if (isPhotoClickCommand) {
+                        Log.d(TAG, "📷 PHOTO CLICK in Gemini Live (no vision): '$fullInput'")
+                        SafeBleCommandHelper.takePhoto()
+                        // Don't trigger vision chat - just take photo
+                        return@runOnUiThread
+                    }
+                    
+                    // 🎬 VIDEO commands - sirf video start/stop, NO vision chat!
+                    val isVideoStartCommand = (lowerInput.contains("video") || lowerInput.contains("recording")) &&
+                        (lowerInput.contains("start") || lowerInput.contains("shuru") || 
+                         lowerInput.contains("on") || lowerInput.contains("begin") || 
+                         lowerInput.contains("record") || lowerInput.contains("chalu"))
+                    
+                    val isVideoStopCommand = (lowerInput.contains("video") || lowerInput.contains("recording")) &&
+                        (lowerInput.contains("stop") || lowerInput.contains("band") || 
+                         lowerInput.contains("off") || lowerInput.contains("end") || 
+                         lowerInput.contains("finish") || lowerInput.contains("roko"))
+                    
+                    if (isVideoStopCommand) {
+                        Log.d(TAG, "🎬 STOP VIDEO in Gemini Live: '$fullInput'")
+                        SafeBleCommandHelper.stopRecording()
+                        return@runOnUiThread
+                    }
+                    
+                    if (isVideoStartCommand) {
+                        Log.d(TAG, "🎬 START VIDEO in Gemini Live (no vision): '$fullInput'")
+                        SafeBleCommandHelper.startRecording()
+                        return@runOnUiThread
+                    }
+                    
+                    // ❌ REMOVED: isVisionChatTrigger check - Vision Chat sirf manual open hoga, voice se nahi
+                    
+                    // Check if user wants to exit
                     if (lowerInput.contains("goodbye") || 
                         lowerInput.contains("exit") || 
                         lowerInput.contains("stop conversation")) {
@@ -4787,6 +5281,9 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                     Log.d(TAG, "🔊 AI audio playback started")
                     aiIsPlaying = true
                     // Optionally update UI to show AI is speaking
+                    
+                    // 🆕 AI started speaking - stop thinking tune immediately
+                    stopGeminiThinkingTune()
                 }
             }
             
@@ -4795,12 +5292,19 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                     Log.d(TAG, "🎤 AI audio playback ended, listening...")
                     aiIsPlaying = false
                     // Optionally update UI to show listening state
+                    
+                    // 🆕 Reset last user input time so tune doesn't trigger immediately
+                    lastUserInputTime = 0
                 }
             }
             
             override fun onError(error: String) {
                 runOnUiThread {
                     Log.e(TAG, "❌ Gemini Live error: $error")
+                    
+                    // 🆕 Stop thinking tune on error
+                    stopGeminiThinkingTune()
+                    
                     Toast.makeText(this@MainActivity, "Gemini Live error: $error", Toast.LENGTH_LONG).show()
                     updateConversation("System", "Error: $error")
                     
@@ -4895,15 +5399,64 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     }
     
     /**
+     * 🆕 Start playing thinking tune for Gemini Live delays (loops until stopped)
+     */
+    private fun startGeminiThinkingTune() {
+        try {
+            stopGeminiThinkingTune() // Stop any existing playback first
+            
+            geminiThinkingPlayer = MediaPlayer.create(this, R.raw.thinking_tune)
+            geminiThinkingPlayer?.apply {
+                isLooping = true // Loop until AI responds
+                setVolume(0.4f, 0.4f) // 40% volume so it's subtle
+                start()
+            }
+            thinkingTuneStartTime = System.currentTimeMillis()
+            Log.d(TAG, "🎵 Gemini thinking tune started")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error playing thinking tune: ${e.message}")
+        }
+    }
+    
+    /**
+     * 🆕 Stop thinking tune when AI starts responding
+     */
+    private fun stopGeminiThinkingTune() {
+        try {
+            geminiThinkingPlayer?.apply {
+                if (isPlaying) {
+                    stop()
+                }
+                release()
+            }
+            geminiThinkingPlayer = null
+            if (thinkingTuneStartTime > 0) {
+                val playedMs = System.currentTimeMillis() - thinkingTuneStartTime
+                Log.d(TAG, "🎵 Gemini thinking tune stopped (played ${playedMs}ms)")
+                thinkingTuneStartTime = 0
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error stopping thinking tune: ${e.message}")
+        }
+    }
+    
+    /**
      * Stop Gemini Live conversation session
      */
-    private fun stopGeminiLiveConversation() {
+    private fun stopGeminiLiveConversation(keepHeadsetConnected: Boolean = false) {
         try {
-            Log.d(TAG, "🛑 Stopping Gemini Live conversation...")
+            Log.d(TAG, "🛑 Stopping Gemini Live conversation... (keepHeadset=$keepHeadsetConnected)")
             geminiLiveService?.stopLiveConversation()
             
-            // ✅ Disable glass headset mode
-            disableGlassHeadset()
+            // ✅ ONLY disable glass headset if explicitly requested
+            // Don't disconnect SCO - it breaks wake word and causes glass disconnect!
+            if (!keepHeadsetConnected) {
+                // Just stop the Gemini session, keep SCO connected for wake word
+                audioManager?.let { am ->
+                    // Keep SCO ON for wake word detection
+                    Log.d(TAG, "🔇 Keeping SCO connected for wake word detection")
+                }
+            }
             
             isGeminiLiveMode = false
             isInConversationMode = false
@@ -4951,5 +5504,659 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         } catch (e: Exception) {
             Log.e(TAG, "Failed to disable glass headset: ${e.message}", e)
         }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // LIVE CAMERA STREAMING - Continuous Vision Analysis
+    // ═══════════════════════════════════════════════════════════════════════════
+    
+    /**
+     * Start live camera streaming mode
+     * DIRECT BLUETOOTH PHOTO CAPTURE - No WiFi/Hotspot needed!
+     * Photos come directly via Bluetooth → Gemini AI → Voice response
+     */
+    fun startLiveCameraStream() {
+        if (isLiveCameraActive) {
+            Log.d(TAG, "[Live Camera] Already active")
+            speakOut("Live camera pehle se chal rahi hai", "INFO")
+            return
+        }
+        
+        Log.d(TAG, "📷 [Live Camera] Starting DIRECT Bluetooth capture mode...")
+        
+        // Initialize vision client
+        if (visionClient == null) {
+            visionClient = GeminiAIClient()
+        }
+        
+        isLiveCameraActive = true
+        lastLiveCameraAnalysis = ""
+        lastLiveCameraSpeakTime = 0L
+        
+        speakOut("Live camera shuru. Main batata rahunga kya dikh raha hai.", "LIVE_CAMERA")
+        updateConversation("System", "📷 Live Camera ON - Direct Bluetooth Mode")
+        Toast.makeText(this, "📷 Live Camera ON", Toast.LENGTH_LONG).show()
+        
+        // Start continuous photo capture loop
+        liveCameraJob = mainScope.launch {
+            Log.d(TAG, "🔄 [Live Camera] Starting capture loop...")
+            delay(500) // Brief delay to let speech finish
+            
+            while (isLiveCameraActive) {
+                try {
+                    // Take photo - comes via Bluetooth directly!
+                    Log.d(TAG, "📸 [Live Camera] Capturing photo via Bluetooth...")
+                    
+                    LargeDataHandler.getInstance().glassesControl(
+                        byteArrayOf(0x02, 0x01, 0x01) // Take photo command
+                    ) { code, error ->
+                        if (code == 0 || code == 65) {
+                            Log.d(TAG, "✅ [Live Camera] Photo command sent (code: $code)")
+                            // Photo will arrive via cmdType 0x03 → analyzeLiveStreamPhoto()
+                        } else {
+                            Log.w(TAG, "⚠️ [Live Camera] Photo command: code=$code")
+                        }
+                    }
+                    
+                    // Wait before next capture
+                    delay(CAMERA_CAPTURE_INTERVAL_MS)
+                    
+                } catch (e: Exception) {
+                    Log.e(TAG, "[Live Camera] Error: ${e.message}")
+                    if (!isLiveCameraActive) break
+                    delay(1000)
+                }
+            }
+            Log.d(TAG, "🔄 [Live Camera] Capture loop ended")
+        }
+    }
+    
+    /**
+     * Stop live camera streaming
+     */
+    fun stopLiveCameraStream() {
+        if (!isLiveCameraActive) {
+            Log.d(TAG, "[Live Camera] Already stopped")
+            return
+        }
+        
+        Log.d(TAG, "📷 [Live Camera] Stopping...")
+        
+        isLiveCameraActive = false
+        liveCameraJob?.cancel()
+        liveCameraJob = null
+        lastLiveCameraAnalysis = ""
+        lastLiveCameraSpeakTime = 0L
+        
+        speakOut("Live camera band.", "LIVE_CAMERA")
+        updateConversation("System", "📷 Live Camera OFF")
+        Toast.makeText(this, "📷 Live Camera OFF", Toast.LENGTH_SHORT).show()
+        Log.d(TAG, "📷 [Live Camera] Stopped")
+    }
+    
+    /**
+     * Analyze captured photo using Gemini Vision API
+     * Called when a photo is received while live camera is active
+     * Speaks the analysis via live audio
+     */
+    private fun analyzeLiveStreamPhoto(imageBytes: ByteArray) {
+        if (!isLiveCameraActive) {
+            Log.d(TAG, "[Live Camera] Not active, skipping analysis")
+            return
+        }
+        
+        // Check if image is valid
+        if (imageBytes.size < 1000) {
+            Log.w(TAG, "[Live Camera] Image too small (${imageBytes.size} bytes), skipping")
+            return
+        }
+        
+        mainScope.launch {
+            try {
+                Log.d(TAG, "🔍 [Live Camera] Analyzing frame (${imageBytes.size} bytes)...")
+                
+                // Simple prompt for faster response
+                val prompt = """Describe what you see in 1-2 short sentences. Be direct and natural."""
+                
+                // Send to Gemini Vision API
+                Log.d(TAG, "📤 [Live Camera] Sending to Gemini...")
+                val response = withContext(Dispatchers.IO) {
+                    try {
+                        val result = visionClient?.analyzeImage(imageBytes, prompt)
+                        Log.d(TAG, "📥 [Live Camera] Got response: $result")
+                        result
+                    } catch (e: Exception) {
+                        Log.e(TAG, "[Live Camera] Gemini API error: ${e.message}", e)
+                        null
+                    }
+                }
+                
+                // Skip if response is null, empty, or error
+                if (response.isNullOrBlank()) {
+                    Log.w(TAG, "[Live Camera] Empty response")
+                    return@launch
+                }
+                
+                if (response.contains("try again", ignoreCase = true) || 
+                    response.contains("error", ignoreCase = true) ||
+                    response.contains("couldn't", ignoreCase = true)) {
+                    Log.w(TAG, "[Live Camera] Error response: $response")
+                    return@launch  // Don't speak error messages
+                }
+                
+                Log.d(TAG, "📥 [Live Camera] Gemini says: $response")
+                
+                // Check similarity
+                val similarity = if (lastLiveCameraAnalysis.isNotEmpty()) {
+                    calculateSimilarity(response, lastLiveCameraAnalysis)
+                } else 0.0
+                
+                // Speak if different enough (< 70% similar)
+                if (similarity < 0.70 || lastLiveCameraAnalysis.isEmpty()) {
+                    lastLiveCameraAnalysis = response
+                    lastLiveCameraSpeakTime = System.currentTimeMillis()
+                    
+                    // Update UI
+                    withContext(Dispatchers.Main) {
+                        updateConversation("📷 Live", response)
+                    }
+                    
+                    // SPEAK!
+                    speakOnGlass(response, "LIVE_VISION")
+                    Log.d(TAG, "✅ [Live Camera] SPOKEN: $response")
+                } else {
+                    Log.d(TAG, "⏭️ [Live Camera] Skipped - ${(similarity * 100).toInt()}% similar")
+                }
+                
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ [Live Camera] Analysis error: ${e.message}", e)
+                // Don't speak errors - just log
+            }
+        }
+    }
+    
+    /**
+     * Calculate text similarity (0.0 to 1.0)
+     * Simple word-based similarity to avoid repeating same observations
+     */
+    private fun calculateSimilarity(text1: String, text2: String): Double {
+        if (text1.isEmpty() || text2.isEmpty()) return 0.0
+        
+        val words1 = text1.lowercase().split(Regex("\\W+")).filter { it.isNotEmpty() }.toSet()
+        val words2 = text2.lowercase().split(Regex("\\W+")).filter { it.isNotEmpty() }.toSet()
+        
+        if (words1.isEmpty() || words2.isEmpty()) return 0.0
+        
+        val intersection = words1.intersect(words2).size
+        val union = words1.union(words2).size
+        
+        return if (union > 0) intersection.toDouble() / union.toDouble() else 0.0
+    }
+
+    /**
+     * Interactive Vision Mode - Step-by-step user-controlled photo capture
+     */
+    private fun startInteractiveVisionMode() {
+        isInteractiveVisionMode = true
+        isProcessingVisionRequest = false
+
+        val msg = "Vision Mode On. Main dekhne ke liye taiyaar hu. Jab bhi photo leni ho, boliye 'Click' ya 'Next'."
+        speakOut(msg, "VISION_START")
+        updateConversation("System", "👁️ Interactive Vision Mode Active")
+    }
+
+    private fun stopInteractiveVisionMode() {
+        isInteractiveVisionMode = false
+        isProcessingVisionRequest = false
+        speakOut("Vision Mode band kar diya hai.", "VISION_STOP")
+        updateConversation("System", "👁️ Vision Mode Ended")
+    }
+
+    private fun captureAndAnalyzeInteractive() {
+        if (isProcessingVisionRequest) return
+        isProcessingVisionRequest = true
+
+        speakOut("Photo le raha hu...", "CAPTURE_START")
+
+        // Use SafeBleCommandHelper to avoid SDK bug crash
+        SafeBleCommandHelper.takePhoto(
+            onSuccess = { code ->
+                Log.d(TAG, "✅ Command sent (code: $code), waiting for photo...")
+                // Safety timeout: if photo doesn't arrive within 25s, reset
+                Handler(Looper.getMainLooper()).postDelayed({
+                    if (isProcessingVisionRequest) {
+                        Log.w(TAG, "⚠️ Photo timeout")
+                        speakOut("Photo mobile tak nahi pahunchi. Dobara 'Click' boliye.", "TIMEOUT")
+                        isProcessingVisionRequest = false
+                    }
+                }, 25000)
+            },
+            onError = { error ->
+                Log.e(TAG, "❌ Camera trigger failed: $error")
+                runOnUiThread {
+                    speakOut("Camera connect nahi ho paya. Phir se try karein.", "ERROR")
+                    isProcessingVisionRequest = false
+                }
+            },
+            timeoutMs = 15000
+        )
+    }
+
+    private fun analyzeImageWithGemini(imageBytes: ByteArray) {
+        mainScope.launch {
+            try {
+                val prompt = """
+                    Describe exactly what is in this image. 
+                    Identify objects, people (gender/age estimate), text, or animals.
+                    Keep the response concise (2-3 sentences) and direct for a blind user.
+                    Start directly with "I see..." or "This is..."
+                """.trimIndent()
+
+                val response = withContext(Dispatchers.IO) {
+                    try {
+                        visionClient?.analyzeImage(imageBytes, prompt)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "❌ Gemini analyze error: ${e.message}", e)
+                        null
+                    }
+                }
+
+                if (response.isNullOrBlank()) {
+                    speakOut("Mujhe samajh nahi aaya, kripya dobara click karein.", "AI_ERROR")
+                } else {
+                    Log.d(TAG, "✅ Gemini Response: $response")
+                    updateConversation("Imi", response)
+                    try { speakOnGlass(response, "AI_RESPONSE") } catch (e: Exception) { speakOut(response, "AI_RESPONSE") }
+                }
+
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ AI Error: ${e.message}", e)
+                speakOut("Internet issue hai ya AI respond nahi kar raha.", "NET_ERROR")
+            } finally {
+                // Allow next interactive capture
+                isProcessingVisionRequest = false
+            }
+        }
+    }
+    
+    // ═══════════════════════════════════════════════════════════════════════════
+    // WIFI P2P LIVE CAMERA - Fast Image Transfer via WiFi + Mobile Data for AI
+    // ═══════════════════════════════════════════════════════════════════════════
+    
+    /**
+     * Initialize WiFi P2P Live Camera
+     * Hybrid approach: WiFi for fast images, Mobile Data for Gemini AI
+     */
+    private fun initWifiP2PLiveCamera() {
+        wifiP2PLiveCamera = WifiP2PLiveCamera(this)
+        wifiP2PLiveCamera?.setListener(object : WifiP2PLiveCamera.LiveCameraListener {
+            override fun onPhotoReceived(imageBytes: ByteArray) {
+                Log.d(TAG, "📷 [WiFi P2P] Photo received: ${imageBytes.size} bytes")
+                // Analyze using the same function as Bluetooth mode
+                analyzeWifiP2PPhoto(imageBytes)
+            }
+            
+            override fun onStatusUpdate(status: String) {
+                Log.i(TAG, "📶 [WiFi P2P] Status: $status")
+                runOnUiThread {
+                    updateConversation("System", "📶 $status")
+                }
+            }
+            
+            override fun onError(error: String) {
+                Log.e(TAG, "❌ [WiFi P2P] Error: $error")
+                runOnUiThread {
+                    Toast.makeText(this@MainActivity, error, Toast.LENGTH_LONG).show()
+                }
+            }
+        })
+        
+        // Pre-bind cellular network for Gemini API
+        wifiP2PLiveCamera?.bindToCellularNetwork()
+        
+        Log.i(TAG, "✅ WiFi P2P Live Camera initialized")
+    }
+    
+    /**
+     * Start WiFi P2P Live Camera mode
+     * Connect to Glass hotspot for fast image transfer
+     * Use Mobile Data for Gemini API calls
+     */
+    fun startWifiP2PLiveCamera() {
+        if (isWifiP2PLiveMode) {
+            speakOut("WiFi live camera pehle se chal rahi hai", "INFO")
+            return
+        }
+        
+        // Stop Bluetooth live camera if active
+        if (isLiveCameraActive) {
+            stopLiveCameraStream()
+        }
+        
+        Log.d(TAG, "📶 [WiFi P2P] Starting live camera...")
+        
+        // Initialize vision client if needed
+        if (visionClient == null) {
+            visionClient = GeminiAIClient()
+        }
+        
+        isWifiP2PLiveMode = true
+        lastLiveCameraAnalysis = ""
+        lastLiveCameraSpeakTime = 0L
+        
+        speakOut("WiFi live camera shuru. Glass hotspot se connect karein.", "WIFI_LIVE")
+        updateConversation("System", "📶 WiFi P2P Live Camera ON")
+        Toast.makeText(this, "📶 WiFi P2P Live Camera ON", Toast.LENGTH_LONG).show()
+        
+        // Start streaming with 2 second interval
+        wifiP2PLiveCamera?.startStreaming(CAMERA_CAPTURE_INTERVAL_MS)
+    }
+    
+    /**
+     * Stop WiFi P2P Live Camera mode
+     */
+    fun stopWifiP2PLiveCamera() {
+        if (!isWifiP2PLiveMode) {
+            return
+        }
+        
+        Log.d(TAG, "📶 [WiFi P2P] Stopping live camera...")
+        
+        isWifiP2PLiveMode = false
+        wifiP2PLiveCamera?.stopStreaming()
+        lastLiveCameraAnalysis = ""
+        
+        speakOut("WiFi live camera band.", "WIFI_LIVE")
+        updateConversation("System", "📶 WiFi P2P Live Camera OFF")
+        Toast.makeText(this, "📶 WiFi P2P Live Camera OFF", Toast.LENGTH_SHORT).show()
+    }
+    
+    /**
+     * Analyze photo received via WiFi P2P
+     * Uses Mobile Data for Gemini API (bound cellular network)
+     */
+    private fun analyzeWifiP2PPhoto(imageBytes: ByteArray) {
+        if (!isWifiP2PLiveMode) {
+            return
+        }
+        
+        // Validate image
+        if (imageBytes.size < 1000) {
+            Log.w(TAG, "[WiFi P2P] Image too small (${imageBytes.size} bytes)")
+            return
+        }
+        
+        mainScope.launch {
+            try {
+                Log.d(TAG, "🔍 [WiFi P2P] Analyzing frame...")
+                
+                val prompt = """Describe what you see in 1-2 short sentences. Be direct and natural."""
+                
+                val response = withContext(Dispatchers.IO) {
+                    try {
+                        // Use vision client (already configured with Gemini)
+                        visionClient?.analyzeImage(imageBytes, prompt)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "[WiFi P2P] Gemini API error: ${e.message}")
+                        null
+                    }
+                }
+                
+                // Skip empty or error responses
+                if (response.isNullOrBlank()) {
+                    return@launch
+                }
+                
+                if (response.contains("try again", ignoreCase = true) || 
+                    response.contains("error", ignoreCase = true) ||
+                    response.contains("couldn't", ignoreCase = true)) {
+                    return@launch
+                }
+                
+                Log.d(TAG, "📥 [WiFi P2P] Gemini: $response")
+                
+                // Check similarity
+                val similarity = if (lastLiveCameraAnalysis.isNotEmpty()) {
+                    calculateSimilarity(response, lastLiveCameraAnalysis)
+                } else 0.0
+                
+                // Speak if different enough
+                if (similarity < 0.70 || lastLiveCameraAnalysis.isEmpty()) {
+                    lastLiveCameraAnalysis = response
+                    lastLiveCameraSpeakTime = System.currentTimeMillis()
+                    
+                    withContext(Dispatchers.Main) {
+                        updateConversation("📶 WiFi Live", response)
+                    }
+                    
+                    speakOnGlass(response, "WIFI_VISION")
+                    Log.d(TAG, "✅ [WiFi P2P] SPOKEN: $response")
+                } else {
+                    Log.d(TAG, "⏭️ [WiFi P2P] Skipped - ${(similarity * 100).toInt()}% similar")
+                }
+                
+            } catch (e: Exception) {
+                Log.e(TAG, "[WiFi P2P] Analysis error: ${e.message}")
+            }
+        }
+    }
+    
+    /**
+     * Toggle between WiFi P2P and Bluetooth live camera modes
+     */
+    fun toggleLiveCameraMode() {
+        if (isWifiP2PLiveMode) {
+            stopWifiP2PLiveCamera()
+        } else if (isLiveCameraActive) {
+            stopLiveCameraStream()
+        } else {
+            // Default to Bluetooth mode (more reliable)
+            // Use WiFi P2P when specifically requested
+            startLiveCameraStream()
+        }
+    }
+    
+    // ═══════════════════════════════════════════════════════════════════════════
+    // GLASS MEDIA GALLERY - View Photos/Videos from Glass via WiFi Hotspot
+    // ═══════════════════════════════════════════════════════════════════════════
+    
+    /**
+     * Open Glass Media Gallery
+     * Shows photos/videos from glass with WiFi hotspot transfer
+     */
+    private fun openGlassMediaGallery() {
+        Log.d(TAG, "📷 Opening Glass Media Gallery...")
+        speakOut("Glass gallery khol raha hoon", "GALLERY")
+
+        // --- NEW CODE: Stop conflicting live camera services before opening gallery ---
+        try {
+            stopLiveCameraStream() // Bluetooth camera stop
+            stopWifiP2PLiveCamera() // WiFi AI camera stop (Network release)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error stopping cameras: ${e.message}")
+        }
+
+        try {
+            GlassMediaGalleryActivity.launch(this)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error opening gallery: ${e.message}")
+            speakOut("Gallery nahi khul saki", "ERROR")
+        }
+    }
+
+    /**
+     * Helper to resize and compress image for faster AI processing
+     */
+    private fun resizeAndCompressImage(originalBytes: ByteArray): ByteArray {
+        try {
+            // 1. Decode bytes to Bitmap
+            val originalBitmap = android.graphics.BitmapFactory.decodeByteArray(originalBytes, 0, originalBytes.size) ?: return originalBytes
+            
+            // 2. Resize to width ~640px (Fastest for AI) while keeping aspect ratio
+            val targetWidth = 640
+            val aspectRatio = originalBitmap.height.toFloat() / originalBitmap.width.toFloat()
+            val targetHeight = (targetWidth * aspectRatio).toInt()
+            
+            val resizedBitmap = android.graphics.Bitmap.createScaledBitmap(originalBitmap, targetWidth, targetHeight, true)
+            
+            // 3. Compress to JPEG at 60% quality
+            val outputStream = java.io.ByteArrayOutputStream()
+            resizedBitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 60, outputStream)
+            
+            val compressedBytes = outputStream.toByteArray()
+            Log.d(TAG, "📉 Image compressed: ${originalBytes.size} -> ${compressedBytes.size} bytes")
+            
+            return compressedBytes
+        } catch (e: Exception) {
+            Log.e(TAG, "Image compression failed: ${e.message}")
+            return originalBytes // Fallback to original if fail
+        }
+    }
+    
+    /**
+     * Check if user input is asking to see/describe what's in front
+     * Supports Hindi + English phrases
+     */
+    private fun isVisionChatTrigger(input: String): Boolean {
+        val visionTriggers = listOf(
+            // English triggers
+            "what is in front of me",
+            "what's in front of me", 
+            "who is in front of me",
+            "who's in front of me",
+            "what do you see",
+            "what can you see",
+            "describe what you see",
+            "look at this",
+            // ❌ REMOVED: "take a photo" - ye sirf photo click hai, vision nahi
+            // ❌ REMOVED: "capture image" - ye sirf photo click hai, vision nahi
+            "analyze this",
+            "what is this",
+            "what's this",
+            "what am i looking at",
+            "describe this",
+            "tell me what you see",
+            "show me",
+            
+            // Hindi triggers (romanized) - ONLY VISION ANALYSIS commands
+            "mere samne kya hai",
+            "mere samne kaun hai",
+            "samne kya hai",
+            "samne kaun hai",
+            "yeh kya hai",
+            "ye kya hai",
+            "kya dekh rahe ho",
+            "dekho yeh",
+            "dekho ye",
+            // ❌ REMOVED: "photo lo", "photo lelo", "photo khicho" - ye sirf photo click hai
+            "camera se dekho",
+            "batao kya hai",
+            "batao kaun hai",
+            "mujhe batao",
+            "kya dikh raha hai"
+        )
+        
+        return visionTriggers.any { trigger -> input.contains(trigger) }
+    }
+    
+    /**
+     * Check if user wants to stop vision streaming
+     */
+    private fun isStopVisionCommand(input: String): Boolean {
+        val stopTriggers = listOf(
+            "stop",
+            "stop streaming",
+            "stop vision",
+            "band karo",
+            "band kar",
+            "ruko",
+            "rok do",
+            "bas karo",
+            "bas kar",
+            "enough"
+        )
+        
+        return stopTriggers.any { trigger -> input.contains(trigger) }
+    }
+    
+    /**
+     * Send broadcast to stop vision streaming
+     */
+    private fun sendStopVisionStreamingBroadcast() {
+        val stopIntent = Intent(VisionChatActivity.ACTION_STOP_VISION_STREAMING)
+        sendBroadcast(stopIntent)
+        Log.i(TAG, "🛑 Sent stop vision streaming broadcast")
+    }
+    
+    /**
+     * Trigger Vision Chat from Gemini Live conversation
+     * Opens VisionChatActivity with auto-capture
+     * 🆕 Keeps Gemini Live ACTIVE so vision result can be spoken through it
+     * 🆕 Adds 300-500ms delay and thinking sound
+     * @param forceNewCapture If true, clears any previous image and forces new capture
+     */
+    private fun triggerVisionChatFromLive(userQuery: String, forceNewCapture: Boolean = false) {
+        Log.d(TAG, "👁️ Triggering Vision Chat from Gemini Live for: $userQuery (forceNew=$forceNewCapture)")
+        
+        // 🆕 ALWAYS open VisionChatActivity (or bring to front via onNewIntent)
+        // Even if already open, sending intent with FLAG_ACTIVITY_SINGLE_TOP triggers onNewIntent()
+        if (visionChatOpenFlag) {
+            Log.d(TAG, "👁️ VisionChat already open - sending onNewIntent to trigger capture")
+        }
+        
+        // 🆕 DON'T stop Gemini Live - keep it active for speaking vision result
+        // The same Gemini Live voice will speak the image description
+        Log.d(TAG, "🎙️ Keeping Gemini Live active for vision result voice")
+        
+        // 🆕 🔇 MUTE Gemini Live output during vision processing
+        // It will stay silent until image description is ready
+        geminiLiveService?.muteOutput()
+        Log.d(TAG, "🔇 Gemini Live muted - will be silent during vision processing")
+        
+        // 🆕 Thinking sound is now WAV tune in VisionChatActivity (not "hmm hmm")
+        // geminiLiveService?.playThinkingSound()  // REMOVED - WAV tune plays instead
+        
+        // 🆕 Add 300-500ms delay after chimi before opening Vision Chat
+        mainScope.launch {
+            delay(400) // 400ms delay
+            
+            // Open VisionChatActivity with auto-capture flag
+            try {
+                val intent = Intent(this@MainActivity, VisionChatActivity::class.java).apply {
+                    putExtra(VisionChatActivity.EXTRA_AUTO_CAPTURE, true)
+                    putExtra(VisionChatActivity.EXTRA_VISION_QUERY, userQuery)
+                    // 🆕 Force new capture - clears any previous image
+                    putExtra(VisionChatActivity.EXTRA_FORCE_NEW_CAPTURE, forceNewCapture)
+                    addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                    addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                }
+                visionChatOpenFlag = true  // Mark as open
+                startActivity(intent)
+                Log.d(TAG, "👓 Vision Chat launched with auto-capture for: $userQuery")
+            } catch (e: Exception) {
+                Log.e(TAG, "Error launching Vision Chat", e)
+                visionChatOpenFlag = false
+                // Unmute and use Gemini Live to speak error if available
+                geminiLiveService?.unmuteOutput()
+                geminiLiveService?.speakText("Vision Chat nahi khul paya. Error ho gaya.")
+            }
+        }
+    }
+    
+    // Vision Chat integration variable (reusing existing isWaitingForVisionPhoto from line 77)
+    private var pendingVisionQuery: String? = null
+    
+    // 🆕 Track if VisionChatActivity is currently open
+    // Prevents opening duplicate VisionChat when user says vision command again
+    @Volatile
+    private var isVisionChatOpen = false
+    
+    /**
+     * 🆕 Called when VisionChatActivity closes - reset the flag
+     * This is a companion function that VisionChatActivity can call
+     */
+    companion object {
+        @Volatile
+        var visionChatOpenFlag = false
     }
 }

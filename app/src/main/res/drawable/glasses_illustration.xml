@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="120dp"
+    android:height="120dp"
+    android:viewportWidth="120"
+    android:viewportHeight="120">
+    
+    <!-- Simple glasses illustration -->
+    <path
+        android:pathData="M20,50 Q20,40 30,40 L50,40 Q55,35 60,35 Q65,35 70,40 L90,40 Q100,40 100,50 Q100,60 90,60 L70,60 Q65,65 60,65 Q55,65 50,60 L30,60 Q20,60 20,50 Z"
+        android:fillColor="#CCCCCC"/>
+</vector>

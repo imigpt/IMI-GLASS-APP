@@ -31,19 +31,25 @@ class AlbumDownloader(private val ctx: Context) {
     companion object {
         private const val TAG = "AlbumDownloader"
         
-        // Common glasses hotspot IP addresses - HeyCyan specific IPs added
+        // ✅ PRIORITY IPs first (most common Glass addresses), then fallbacks
+        // Ordered by likelihood for faster discovery
         val POSSIBLE_IPS = listOf(
+            // Priority: Most common Glass IPs (tested first)
+            "192.168.49.1",   // WiFi Direct Group Owner (most common)
+            "192.168.49.99",  // WiFi Direct typical client
+            "192.168.49.101", // WiFi Direct alternate
             "192.168.42.129", // HeyCyan glasses specific
             "192.168.43.129", // HeyCyan glasses specific 2
-            "192.168.49.1",   // WiFi Direct default
             "192.168.43.1",   // Android hotspot default
+            
+            // Fallback: Less common but possible
             "192.168.4.1",    // ESP default
+            "192.168.137.1",  // Windows hotspot
             "192.168.31.1",   // Xiaomi
             "192.168.1.1",    // Common router
             "192.168.0.1",    // Common router
             "192.168.100.1",  // Some devices
             "192.168.123.1",  // Some devices
-            "192.168.137.1",  // Windows hotspot
             "10.0.0.1",       // Apple default
             "172.20.10.1"     // iOS hotspot
         )
@@ -153,22 +159,39 @@ class AlbumDownloader(private val ctx: Context) {
             
             Log.d(TAG, "Config response: $body")
             
-            // Parse config format: "filename,type" per line
-            // type: 1=JPG, 2=MP4, 3=Audio
+            // Parse config. Support two formats:
+            // 1) legacy CSV per-line: "filename,type" (type: 1=JPG,2=MP4,3=Audio)
+            // 2) plaintext newline-separated filenames (most glass firmwares)
             val items = mutableListOf<MediaItem>()
             body.lines().forEach { line ->
-                val parts = line.trim().split(",")
+                val trimmed = line.trim()
+                if (trimmed.isEmpty()) return@forEach
+
+                val parts = trimmed.split(",")
                 if (parts.size >= 2) {
                     try {
                         val fileName = parts[0].trim()
-                        val fileType = parts[1].trim().toIntOrNull() ?: 1
+                        val fileType = parts[1].trim().toIntOrNull() ?: when {
+                            fileName.endsWith(".mp4", true) -> 2
+                            fileName.endsWith(".jpg", true) -> 1
+                            else -> 1
+                        }
                         items.add(MediaItem(fileName, fileType))
                     } catch (e: Exception) {
                         Log.w(TAG, "Failed to parse line: $line")
                     }
+                } else {
+                    // Plain filename per line — infer type by extension
+                    val fileName = trimmed
+                    val fileType = when {
+                        fileName.endsWith(".mp4", true) -> 2
+                        fileName.endsWith(".jpg", true) -> 1
+                        else -> 1
+                    }
+                    items.add(MediaItem(fileName, fileType))
                 }
             }
-            
+
             Log.i(TAG, "✅ Found ${items.size} media files")
             items
             

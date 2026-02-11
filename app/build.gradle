@@ -118,8 +118,22 @@ dependencies {
     // Google AI SDK for Android
     implementation "com.google.ai.client.generativeai:generativeai:0.9.0"
 
-    // Picovoice Porcupine for Wake Word Detection
-    implementation "ai.picovoice:porcupine-android:4.0.0"
+    // ========================================================================
+    // WAKE WORD DETECTION - Choose ONE option:
+    // ========================================================================
+    
+    // OPTION 1: ONNX Runtime for Custom "Hey IMI" Wake Word (RECOMMENDED - No API Key needed!)
+    // Models required in assets/models/:
+    // - melspectrogram.onnx
+    // - embedding_model.onnx  
+    // - hey_imi_model.onnx
+    implementation "com.microsoft.onnxruntime:onnxruntime-android:1.17.0"
+    
+    // OPTION 2: Picovoice Porcupine (Comment out if using ONNX)
+    // Requires PICOVOICE_ACCESS_KEY in local.properties
+    // implementation "ai.picovoice:porcupine-android:4.0.0"
+    
+    // ========================================================================
 
     // Testing
     testImplementation "junit:junit:4.13.2"

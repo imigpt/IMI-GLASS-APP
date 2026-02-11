@@ -28,7 +28,11 @@ class WifiTransferManager(private val context: Context) {
             "HeyCyan",
             "GLASSES",
             "SmartGlasses",
-            "QCGlasses"
+            "QCGlasses",
+            "CY01",      // 🆕 CY01 Glass WiFi hotspot
+            "M01",       // M01 Glass hotspot
+            "DIRECT-",   // WiFi Direct pattern
+            "Android"    // Generic Android hotspot
         )
     }
     

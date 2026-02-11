@@ -25,6 +25,8 @@
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
+    <uses-permission android:name="android.permission.BLUETOOTH_PRIVILEGED" 
+                 tools:ignore="ProtectedPermissions" />
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" />
 
     <!-- AUDIO -->
@@ -55,7 +57,11 @@
     <!-- WIFI -->
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
-    <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES"
+        android:usesPermissionFlags="neverForLocation"
+        tools:targetApi="s" />
 
     <queries>
         <intent>
@@ -114,6 +120,7 @@
         <activity 
             android:name=".VisionChatActivity"
             android:exported="true"
+            android:launchMode="singleTop"
             android:label="Vision Chat" />
 
             <!-- BLE PCM TEST ACTIVITY -->
@@ -121,6 +128,38 @@
                 android:name=".ui.BlePcmTestActivity"
                 android:exported="true"
                 android:label="BLE PCM Test" />
+
+            <!-- GLASS MEDIA GALLERY -->
+            <activity
+                android:name=".ui.gallery.GlassMediaGalleryActivity"
+                android:exported="false"
+                android:label="Glass Media Gallery" />
+
+            <!-- IMAGE VIEWER - Full screen in-app image viewer -->
+            <activity
+                android:name=".ui.gallery.ImageViewerActivity"
+                android:exported="false"
+                android:theme="@style/Theme.GlassesSDKSample.Fullscreen"
+                android:label="Image Viewer" />
+
+            <!-- VIDEO PLAYER - Full screen in-app video player -->
+            <activity
+                android:name=".ui.gallery.VideoPlayerActivity"
+                android:exported="false"
+                android:theme="@style/Theme.GlassesSDKSample.Fullscreen"
+                android:label="Video Player"
+                android:configChanges="orientation|screenSize" />
+
+            <!-- FILE PROVIDER FOR SHARING MEDIA -->
+            <provider
+                android:name="androidx.core.content.FileProvider"
+                android:authorities="${applicationId}.fileprovider"
+                android:exported="false"
+                android:grantUriPermissions="true">
+                <meta-data
+                    android:name="android.support.FILE_PROVIDER_PATHS"
+                    android:resource="@xml/file_paths" />
+            </provider>
 
             <!-- BACKGROUND LISTENING SERVICE -->
             <service
