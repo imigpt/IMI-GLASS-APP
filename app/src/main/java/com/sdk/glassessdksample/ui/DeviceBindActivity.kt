@@ -2,6 +2,10 @@ package com.sdk.glassessdksample.ui
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.animation.Animator
+import android.animation.ObjectAnimator
+import android.animation.ValueAnimator
+import android.app.Dialog
 import android.bluetooth.*
 import android.bluetooth.le.ScanResult
 import android.content.*
@@ -9,11 +13,23 @@ import android.content.pm.PackageManager
 import android.media.AudioManager
 import android.media.RingtoneManager
 import android.os.*
+import android.graphics.drawable.ColorDrawable
 import android.util.Log
+import android.view.LayoutInflater
+import android.view.View
+import android.view.WindowManager
+import android.view.animation.AccelerateDecelerateInterpolator
+import android.view.animation.DecelerateInterpolator
+import android.widget.Button
+import android.widget.ProgressBar
+import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
-import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.LinearLayoutManager
+import com.google.android.material.bottomsheet.BottomSheetDialog
+import java.text.SimpleDateFormat
+import java.util.Date
 import com.hjq.permissions.OnPermissionCallback
 import com.hjq.permissions.XXPermissions
 import com.oudmon.ble.base.bluetooth.BleOperateManager
@@ -22,7 +38,6 @@ import com.oudmon.ble.base.scan.ScanRecord
 import com.oudmon.ble.base.scan.ScanWrapperCallback
 import com.sdk.glassessdksample.R
 import com.sdk.glassessdksample.databinding.ActivityDeviceBindBinding
-import com.xiasuhuei321.loadingdialog.view.LoadingDialog
 import org.greenrobot.eventbus.EventBus
 import org.greenrobot.eventbus.Subscribe
 import org.greenrobot.eventbus.ThreadMode
@@ -30,12 +45,17 @@ import org.greenrobot.eventbus.ThreadMode
 class DeviceBindActivity : BaseActivity() {
 
     private lateinit var binding: ActivityDeviceBindBinding
-    private lateinit var adapter: DeviceListAdapter
     private val deviceList = mutableListOf<SmartWatch>()
+    private var isScanning = false
+    private lateinit var bleAdapter: BleDeviceAdapter
 
     private var scanSize = 0
-    private var loadingDialog: LoadingDialog? = null
     private var autoConnectDialog: AlertDialog? = null
+    private var autoConnectBottomSheet: BottomSheetDialog? = null
+    private var connectingDialog: Dialog? = null
+    private var connectingStatusText: TextView? = null
+    private val connectingAnimators = mutableListOf<Animator>()
+    private var connectingDotCount = 0
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private var connectedDeviceAddress: String? = null
@@ -43,9 +63,35 @@ class DeviceBindActivity : BaseActivity() {
     private var hfpReceiverRegistered = false
     private var bondStateReceiverRegistered = false
 
+    private val connectingDotAnimRunnable = object : Runnable {
+        override fun run() {
+            val textView = connectingStatusText ?: return
+            val dialog = connectingDialog
+            if (dialog?.isShowing != true) return
+
+            connectingDotCount = (connectingDotCount + 1) % 4
+            val dots = ".".repeat(connectingDotCount)
+            textView.text = "Establishing secure link$dots"
+            mainHandler.postDelayed(this, 480)
+        }
+    }
+
+    // Dot animation for scanning text
+    private var dotCount = 0
+    private val dotAnimRunnable = object : Runnable {
+        override fun run() {
+            if (!isScanning) return
+            dotCount = (dotCount + 1) % 4
+            val dots = ".".repeat(dotCount)
+            try { binding.scanStatus.text = "Searching$dots" } catch (e: Exception) {}
+            mainHandler.postDelayed(this, 500)
+        }
+    }
+
     private val scanStopRunnable = Runnable {
         BleScannerHelper.getInstance().stopScan(this)
-        binding.startScan.text = "Start Scan"
+        isScanning = false
+        updateScanUi()
     }
 
     private val bleScanCallback = BleCallback()
@@ -113,23 +159,28 @@ class DeviceBindActivity : BaseActivity() {
     }
 
     override fun setupViews() {
-        adapter = DeviceListAdapter(this, deviceList)
-        binding.deviceRcv.layoutManager = LinearLayoutManager(this)
-        binding.deviceRcv.adapter = adapter
-        binding.titleBar.tvTitle.text = "Scan Smart Glass"
-        binding.titleBar.ivNavigateBefore.setOnClickListener { finish() }
+        binding.btnBack.setOnClickListener { finish() }
 
-        adapter.setOnItemClickListener { _, _, position ->
+        // RecyclerView with card-per-device + Connect button
+        bleAdapter = BleDeviceAdapter(emptyList()) { tappedDevice ->
             mainHandler.removeCallbacks(scanStopRunnable)
-            val device = deviceList[position]
-            
-            // 🆕 Show confirmation dialog before pairing
-            showPairConfirmationDialog(device)
+            showPairConfirmationDialog(tappedDevice)
+        }
+        binding.rvDevices.layoutManager = LinearLayoutManager(this)
+        binding.rvDevices.adapter = bleAdapter
+
+        binding.startScan.setOnClickListener {
+            if (isScanning) stopScanning() else startScanning()
+        }
+        updateScanUi()
+
+        // Radar kept for SDK compat (lives in scanning layout, visible there)
+        binding.radarView.onDeviceClick = { tappedDevice ->
+            mainHandler.removeCallbacks(scanStopRunnable)
+            showPairConfirmationDialog(tappedDevice)
         }
 
-        binding.startScan.setOnClickListener { startScanning() }
-        
-        // 🆕 Check for auto-connect
+        // Auto-connect check
         mainHandler.postDelayed({ checkAutoConnect() }, 500)
     }
 
@@ -142,13 +193,15 @@ class DeviceBindActivity : BaseActivity() {
     override fun onPause() {
         super.onPause()
         mainHandler.removeCallbacks(scanStopRunnable)
+        mainHandler.removeCallbacks(dotAnimRunnable)
+        binding.radarView.setScanning(false)
         EventBus.getDefault().unregister(this)
     }
 
     @Subscribe(threadMode = ThreadMode.MAIN)
     fun onMessageEvent(event: BluetoothEvent) {
         if (event.type == BluetoothEvent.EventType.CONNECTED) {
-            loadingDialog?.close()
+            dismissConnectingDialog()
             Log.d("DeviceBindActivity", "✅ BLE Connected. Starting classic connection flow...")
             Toast.makeText(this, "✅ Glass Connected (Data)", Toast.LENGTH_SHORT).show()
             mainHandler.postDelayed({ connectedDeviceAddress?.let { startClassicConnectionFlow(it) } }, 500)
@@ -157,13 +210,8 @@ class DeviceBindActivity : BaseActivity() {
 
     private fun handleHfpConnectionSuccess() {
         mainHandler.removeCallbacksAndMessages(null)
-        Log.d("DeviceBindActivity", "🎧 HFP Connected, configuring audio...")
-        (getSystemService(Context.AUDIO_SERVICE) as AudioManager).apply {
-            mode = AudioManager.MODE_IN_CALL
-            startBluetoothSco()
-            isBluetoothScoOn = true
-        }
-        Toast.makeText(this, "🎧 Glass mic ready!", Toast.LENGTH_SHORT).show()
+        Log.d("DeviceBindActivity", "🎧 HFP Connected (no forced SCO in bind flow)")
+        Toast.makeText(this, "🎧 Glass audio profile connected", Toast.LENGTH_SHORT).show()
         Log.d("DeviceBindActivity", "✅ Both BLE and Audio connections active")
         cleanUpReceivers()
         mainHandler.postDelayed({ finish() }, 500)
@@ -219,8 +267,7 @@ class DeviceBindActivity : BaseActivity() {
         
         // Start BLE connection
         BleOperateManager.getInstance().connectDirectly(device.deviceAddress)
-        loadingDialog = LoadingDialog(this)
-        loadingDialog?.setLoadingText(getString(R.string.text_22))?.show()
+        showConnectingDialog(device.deviceName)
         
         Log.d("DeviceBindActivity", "✅ User confirmed pairing with ${device.deviceName}")
     }
@@ -240,31 +287,54 @@ class DeviceBindActivity : BaseActivity() {
     }
     
     /**
-     * 🆕 Check if there's a previously paired device for auto-connect
+     * 🆕 Check if there's a previously paired device and show bottom sheet popup
      */
     private fun checkAutoConnect() {
         val prefs = getSharedPreferences("glass_pairing", MODE_PRIVATE)
         val pairedAddress = prefs.getString("paired_device_address", null)
         val pairedName = prefs.getString("paired_device_name", null)
-        
+        val pairedTime = prefs.getLong("paired_timestamp", 0L)
+
         if (pairedAddress != null && pairedName != null) {
             Log.d("DeviceBindActivity", "📱 Found saved device: $pairedName")
-            
             if (isFinishing || isDestroyed) return
-
-            // Try auto-connect
-            autoConnectDialog = AlertDialog.Builder(this)
-                .setTitle("Auto-Connect?")
-                .setMessage("Connect to previously paired glasses:\n$pairedName")
-                .setPositiveButton("Connect") { dialog, _ ->
-                    dialog.dismiss()
-                    attemptAutoConnect(pairedAddress, pairedName)
-                }
-                .setNegativeButton("Scan New") { dialog, _ ->
-                    dialog.dismiss()
-                }
-                .show()
+            showAutoConnectBottomSheet(pairedAddress, pairedName, pairedTime)
         }
+    }
+
+    private fun showAutoConnectBottomSheet(address: String, name: String, timestamp: Long) {
+        if (isFinishing || isDestroyed) return
+        val sheet = BottomSheetDialog(this, R.style.BottomSheetStyle)
+        val view = LayoutInflater.from(this).inflate(R.layout.bottom_sheet_auto_connect, null)
+        sheet.setContentView(view)
+        sheet.setCancelable(true)
+
+        // Populate name and address
+        view.findViewById<TextView>(R.id.tvAutoConnectName).text = name
+        view.findViewById<TextView>(R.id.tvAutoConnectAddress).text = address
+
+        // Format last connected time
+        val timeText = if (timestamp > 0) {
+            val diff = System.currentTimeMillis() - timestamp
+            when {
+                diff < 60_000 -> "Just now"
+                diff < 3_600_000 -> "${diff / 60_000}m ago"
+                diff < 86_400_000 -> "${diff / 3_600_000}h ago"
+                else -> SimpleDateFormat("MMM d", java.util.Locale.getDefault()).format(Date(timestamp))
+            }
+        } else "Unknown"
+        view.findViewById<TextView>(R.id.tvLastConnected).text = timeText
+
+        view.findViewById<Button>(R.id.btnAutoConnect).setOnClickListener {
+            sheet.dismiss()
+            attemptAutoConnect(address, name)
+        }
+        view.findViewById<Button>(R.id.btnScanNew).setOnClickListener {
+            sheet.dismiss()
+        }
+
+        autoConnectBottomSheet = sheet
+        sheet.show()
     }
     
     /**
@@ -283,13 +353,12 @@ class DeviceBindActivity : BaseActivity() {
         
         connectedDeviceAddress = address
         BleOperateManager.getInstance().connectDirectly(address)
-        loadingDialog = LoadingDialog(this)
-        loadingDialog?.setLoadingText("Connecting to $name...")?.show()
+        showConnectingDialog(name)
         
         // ⏱️ Set timeout for connection (increased from 10s to 30s for slower devices)
         mainHandler.postDelayed({
             if (!isFinishing && !isDestroyed) {
-                loadingDialog?.close()
+                dismissConnectingDialog()
                 showConnectionTimeoutDialog(address, name)
             }
         }, 30000) // 30 second timeout (previously 10s - too quick)
@@ -412,15 +481,229 @@ class DeviceBindActivity : BaseActivity() {
             return
         }
         deviceList.clear()
-        adapter.notifyDataSetChanged()
+        binding.radarView.updateDevices(deviceList)
         scanSize = 0
+        isScanning = true
         BleScannerHelper.getInstance().reSetCallback()
         BleScannerHelper.getInstance().scanDevice(this, null, bleScanCallback)
-        binding.startScan.text = "Stop Scan"
+        updateScanUi()
+        dotCount = 0
+        mainHandler.post(dotAnimRunnable)
         mainHandler.postDelayed(scanStopRunnable, 15000)
+    }
+
+    private fun stopScanning() {
+        BleScannerHelper.getInstance().stopScan(this)
+        mainHandler.removeCallbacks(scanStopRunnable)
+        mainHandler.removeCallbacks(dotAnimRunnable)
+        isScanning = false
+        updateScanUi()
+    }
+
+    private fun updateScanUi() {
+        val hasDevices = deviceList.isNotEmpty()
+        val count = deviceList.size
+
+        binding.startScan.text = if (isScanning) "Stop Scan" else "Scan for Glasses"
+
+        // Show devices as soon as any are found (even while still scanning)
+        if (hasDevices) {
+            // Transition to device list if not already visible
+            if (binding.layoutDevicesFound.visibility != android.view.View.VISIBLE) {
+                binding.layoutScanning.animate().alpha(0f).setDuration(300).withEndAction {
+                    binding.layoutScanning.visibility = android.view.View.GONE
+                }.start()
+                binding.layoutDevicesFound.alpha = 0f
+                binding.layoutDevicesFound.visibility = android.view.View.VISIBLE
+                binding.layoutDevicesFound.animate().alpha(1f).setDuration(400).start()
+            }
+            binding.deviceCount.text = "$count device${if (count == 1) "" else "s"} found"
+            bleAdapter.submitList(deviceList.toList())
+            // Show "still scanning" indicator while scan is active
+            try {
+                binding.tvScanningIndicator.visibility =
+                    if (isScanning) android.view.View.VISIBLE else android.view.View.GONE
+            } catch (e: Exception) {}
+            binding.startScan.visibility = if (isScanning) android.view.View.GONE else android.view.View.VISIBLE
+        } else {
+            // No devices yet — show scanning layout
+            if (binding.layoutScanning.visibility != android.view.View.VISIBLE) {
+                binding.layoutDevicesFound.visibility = android.view.View.GONE
+                binding.layoutScanning.alpha = 1f
+                binding.layoutScanning.visibility = android.view.View.VISIBLE
+            }
+            // Update the found-count chip in scanning view
+            try {
+                if (isScanning) {
+                    binding.tvFoundCount.visibility = android.view.View.GONE
+                }
+            } catch (e: Exception) {}
+            binding.startScan.visibility = android.view.View.VISIBLE
+        }
+
+        // Radar drive (it sits inside scanning layout)
+        binding.radarView.setScanning(isScanning)
+        binding.radarView.updateDevices(deviceList)
     }
     
     private fun isBluetoothEnabled(): Boolean = BluetoothAdapter.getDefaultAdapter()?.isEnabled ?: false
+
+    private fun showConnectingDialog(deviceName: String) {
+        if (isFinishing || isDestroyed) return
+
+        dismissConnectingDialog()
+
+        val content = LayoutInflater.from(this).inflate(R.layout.dialog_connecting_glasses, null)
+        val titleText = content.findViewById<TextView>(R.id.tvConnectingTitle)
+        val subtitleText = content.findViewById<TextView>(R.id.tvConnectingSubtitle)
+        val pulseRingOne = content.findViewById<View>(R.id.pulseRingOne)
+        val pulseRingTwo = content.findViewById<View>(R.id.pulseRingTwo)
+        val iconHolder = content.findViewById<View>(R.id.connectingIconHolder)
+        val spinner = content.findViewById<ProgressBar>(R.id.progressConnecting)
+
+        titleText.text = "Connecting to $deviceName"
+        subtitleText.text = "Pairing BLE and audio profile"
+
+        connectingStatusText = content.findViewById(R.id.tvConnectingState)
+        connectingStatusText?.text = "Establishing secure link"
+
+        val dialog = Dialog(this, R.style.ConnectingDialogStyle)
+        dialog.setContentView(content)
+        dialog.setCancelable(false)
+        dialog.setCanceledOnTouchOutside(false)
+
+        dialog.window?.apply {
+            setBackgroundDrawable(ColorDrawable(android.graphics.Color.TRANSPARENT))
+            val maxWidth = (resources.displayMetrics.density * 360f).toInt()
+            val preferredWidth = (resources.displayMetrics.widthPixels * 0.84f).toInt()
+            setLayout(preferredWidth.coerceAtMost(maxWidth), WindowManager.LayoutParams.WRAP_CONTENT)
+            attributes = attributes.apply { dimAmount = 0.62f }
+        }
+
+        dialog.show()
+        connectingDialog = dialog
+
+        startConnectingAnimations(pulseRingOne, pulseRingTwo, iconHolder, spinner)
+        mainHandler.removeCallbacks(connectingDotAnimRunnable)
+        connectingDotCount = 0
+        mainHandler.post(connectingDotAnimRunnable)
+    }
+
+    private fun startConnectingAnimations(
+        pulseRingOne: View,
+        pulseRingTwo: View,
+        iconHolder: View,
+        spinner: ProgressBar
+    ) {
+        val pulseOneScaleX = ObjectAnimator.ofFloat(pulseRingOne, View.SCALE_X, 0.72f, 1.28f).apply {
+            duration = 1650L
+            repeatCount = ValueAnimator.INFINITE
+            repeatMode = ValueAnimator.RESTART
+            interpolator = DecelerateInterpolator()
+        }
+        val pulseOneScaleY = ObjectAnimator.ofFloat(pulseRingOne, View.SCALE_Y, 0.72f, 1.28f).apply {
+            duration = 1650L
+            repeatCount = ValueAnimator.INFINITE
+            repeatMode = ValueAnimator.RESTART
+            interpolator = DecelerateInterpolator()
+        }
+        val pulseOneAlpha = ObjectAnimator.ofFloat(pulseRingOne, View.ALPHA, 0.58f, 0f).apply {
+            duration = 1650L
+            repeatCount = ValueAnimator.INFINITE
+            repeatMode = ValueAnimator.RESTART
+            interpolator = DecelerateInterpolator()
+        }
+
+        val pulseTwoScaleX = ObjectAnimator.ofFloat(pulseRingTwo, View.SCALE_X, 0.72f, 1.28f).apply {
+            duration = 1650L
+            startDelay = 760L
+            repeatCount = ValueAnimator.INFINITE
+            repeatMode = ValueAnimator.RESTART
+            interpolator = DecelerateInterpolator()
+        }
+        val pulseTwoScaleY = ObjectAnimator.ofFloat(pulseRingTwo, View.SCALE_Y, 0.72f, 1.28f).apply {
+            duration = 1650L
+            startDelay = 760L
+            repeatCount = ValueAnimator.INFINITE
+            repeatMode = ValueAnimator.RESTART
+            interpolator = DecelerateInterpolator()
+        }
+        val pulseTwoAlpha = ObjectAnimator.ofFloat(pulseRingTwo, View.ALPHA, 0.52f, 0f).apply {
+            duration = 1650L
+            startDelay = 760L
+            repeatCount = ValueAnimator.INFINITE
+            repeatMode = ValueAnimator.RESTART
+            interpolator = DecelerateInterpolator()
+        }
+
+        val iconFloat = ObjectAnimator.ofFloat(iconHolder, View.TRANSLATION_Y, 0f, -10f, 0f).apply {
+            duration = 1700L
+            repeatCount = ValueAnimator.INFINITE
+            repeatMode = ValueAnimator.RESTART
+            interpolator = AccelerateDecelerateInterpolator()
+        }
+        val iconScaleX = ObjectAnimator.ofFloat(iconHolder, View.SCALE_X, 1f, 1.06f, 1f).apply {
+            duration = 1700L
+            repeatCount = ValueAnimator.INFINITE
+            repeatMode = ValueAnimator.RESTART
+            interpolator = AccelerateDecelerateInterpolator()
+        }
+        val iconScaleY = ObjectAnimator.ofFloat(iconHolder, View.SCALE_Y, 1f, 1.06f, 1f).apply {
+            duration = 1700L
+            repeatCount = ValueAnimator.INFINITE
+            repeatMode = ValueAnimator.RESTART
+            interpolator = AccelerateDecelerateInterpolator()
+        }
+
+        val spinnerBreath = ObjectAnimator.ofFloat(spinner, View.ALPHA, 0.66f, 1f, 0.66f).apply {
+            duration = 1200L
+            repeatCount = ValueAnimator.INFINITE
+            repeatMode = ValueAnimator.RESTART
+            interpolator = AccelerateDecelerateInterpolator()
+        }
+
+        connectingAnimators.clear()
+        connectingAnimators.addAll(
+            listOf(
+                pulseOneScaleX,
+                pulseOneScaleY,
+                pulseOneAlpha,
+                pulseTwoScaleX,
+                pulseTwoScaleY,
+                pulseTwoAlpha,
+                iconFloat,
+                iconScaleX,
+                iconScaleY,
+                spinnerBreath
+            )
+        )
+
+        connectingAnimators.forEach { it.start() }
+    }
+
+    private fun dismissConnectingDialog() {
+        mainHandler.removeCallbacks(connectingDotAnimRunnable)
+
+        connectingAnimators.forEach {
+            try {
+                it.cancel()
+            } catch (e: Exception) {
+                Log.w("DeviceBindActivity", "Failed to cancel connecting animation", e)
+            }
+        }
+        connectingAnimators.clear()
+
+        try {
+            if (connectingDialog?.isShowing == true) {
+                connectingDialog?.dismiss()
+            }
+        } catch (e: Exception) {
+            Log.w("DeviceBindActivity", "Failed to dismiss connecting dialog", e)
+        }
+
+        connectingDialog = null
+        connectingStatusText = null
+    }
     
     /**
      * 🆕 Show dialog when Bluetooth is OFF
@@ -481,11 +764,20 @@ class DeviceBindActivity : BaseActivity() {
             if (deviceList.any { it.deviceAddress == newDevice.deviceAddress }) return
             deviceList.add(newDevice)
             deviceList.sortByDescending { it.rssi }
-            adapter.notifyDataSetChanged()
+            updateScanUi()
             if (++scanSize > 30) BleScannerHelper.getInstance().stopScan(this@DeviceBindActivity)
         }
-        override fun onStart() {}
-        override fun onStop() {}
+        override fun onStart() {
+            isScanning = true
+            dotCount = 0
+            mainHandler.post(dotAnimRunnable)
+            updateScanUi()
+        }
+        override fun onStop() {
+            isScanning = false
+            mainHandler.removeCallbacks(dotAnimRunnable)
+            updateScanUi()
+        }
         override fun onScanFailed(errorCode: Int) {}
         override fun onParsedData(device: BluetoothDevice?, scanRecord: ScanRecord?) {}
         override fun onBatchScanResults(results: MutableList<ScanResult>?) {}
@@ -493,14 +785,16 @@ class DeviceBindActivity : BaseActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        // Dismiss loading dialog to prevent window leak
-        loadingDialog?.close()
-        loadingDialog = null
+        // Dismiss connection dialog to prevent window leak
+        dismissConnectingDialog()
         if (autoConnectDialog?.isShowing == true) {
             autoConnectDialog?.dismiss()
         }
         autoConnectDialog = null
+        autoConnectBottomSheet?.dismiss()
+        autoConnectBottomSheet = null
 
+        stopScanning()
         cleanUpReceivers()
         EventBus.getDefault().unregister(this)
         headsetProxy?.let { BluetoothAdapter.getDefaultAdapter().closeProfileProxy(BluetoothProfile.HEADSET, it) }

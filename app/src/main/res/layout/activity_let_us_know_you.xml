@@ -1,0 +1,139 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#0F1319"
+    android:orientation="vertical"
+    android:padding="16dp">
+
+    <TextView
+        android:id="@+id/tvQuestionProgress"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Question 1 of 7"
+        android:textColor="#D9E6F5"
+        android:textSize="13sp"
+        android:textStyle="bold" />
+
+    <ProgressBar
+        android:id="@+id/progressQuestions"
+        style="?android:attr/progressBarStyleHorizontal"
+        android:layout_width="match_parent"
+        android:layout_height="8dp"
+        android:layout_marginTop="8dp"
+        android:layout_marginBottom="14dp"
+        android:max="7"
+        android:progress="1"
+        android:progressTint="#2FB8FF" />
+
+    <TextView
+        android:id="@+id/tvVoiceState"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="#1A222C"
+        android:padding="14dp"
+        android:text="AI voice interview is ready."
+        android:textColor="#F3F8FF"
+        android:textSize="16sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:id="@+id/tvLastAnswer"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_marginTop="12dp"
+        android:layout_weight="1"
+        android:background="#151C24"
+        android:gravity="top|start"
+        android:padding="14dp"
+        android:text="Your answer: waiting for voice input"
+        android:textColor="#D9E6F5"
+        android:textSize="14sp" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/btnQuestionBack"
+            android:layout_width="0dp"
+            android:layout_height="48dp"
+            android:layout_marginEnd="6dp"
+            android:layout_weight="1"
+            android:background="#2A3441"
+            android:text="Back"
+            android:textAllCaps="false"
+            android:textColor="#E6EEF7" />
+
+        <Button
+            android:id="@+id/btnQuestionSkip"
+            android:layout_width="0dp"
+            android:layout_height="48dp"
+            android:layout_marginStart="6dp"
+            android:layout_marginEnd="6dp"
+            android:layout_weight="1"
+            android:background="#2A3441"
+            android:text="Skip"
+            android:textAllCaps="false"
+            android:textColor="#E6EEF7" />
+
+        <Button
+            android:id="@+id/btnRepeatQuestion"
+            android:layout_width="0dp"
+            android:layout_height="48dp"
+            android:layout_marginStart="6dp"
+            android:layout_weight="1"
+            android:background="#2FB8FF"
+            android:text="Repeat"
+            android:textAllCaps="false"
+            android:textColor="#0D1722"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/btnStartVoiceMode"
+            android:layout_width="0dp"
+            android:layout_height="48dp"
+            android:layout_marginEnd="6dp"
+            android:layout_weight="1"
+            android:background="#2FB8FF"
+            android:text="Start Voice Mode"
+            android:textAllCaps="false"
+            android:textColor="#0D1722"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/btnSpeakAnswer"
+            android:layout_width="0dp"
+            android:layout_height="48dp"
+            android:layout_marginStart="6dp"
+            android:layout_marginEnd="6dp"
+            android:layout_weight="1"
+            android:background="#2A3441"
+            android:text="Speak Answer"
+            android:textAllCaps="false"
+            android:textColor="#E6EEF7" />
+
+        <Button
+            android:id="@+id/btnFinishProfile"
+            android:layout_width="0dp"
+            android:layout_height="48dp"
+            android:layout_marginStart="6dp"
+            android:layout_weight="1"
+            android:background="#2A3441"
+            android:text="Finish"
+            android:textAllCaps="false"
+            android:textColor="#E6EEF7" />
+    </LinearLayout>
+
+</LinearLayout>

@@ -3,6 +3,8 @@ package com.sdk.glassessdksample.ui.wifi
 import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -35,6 +37,7 @@ class AlbumDownloader(private val ctx: Context) {
         // Ordered by likelihood for faster discovery
         val POSSIBLE_IPS = listOf(
             // Priority: Most common Glass IPs (tested first)
+            "192.168.6.1",    // ✅ Confirmed Glass IP (from logs)
             "192.168.49.1",   // WiFi Direct Group Owner (most common)
             "192.168.49.99",  // WiFi Direct typical client
             "192.168.49.101", // WiFi Direct alternate
@@ -55,10 +58,17 @@ class AlbumDownloader(private val ctx: Context) {
         )
     }
     
+    // ⚡ Fast scan client - short timeout for IP discovery
+    private val scanClient = OkHttpClient.Builder()
+        .connectTimeout(1500, TimeUnit.MILLISECONDS)  // ⚡ 1.5s per IP (was 10s)
+        .readTimeout(3, TimeUnit.SECONDS)
+        .build()
+
+    // ⚡ Download client - longer timeout for actual file transfers
     private val okClient = OkHttpClient.Builder()
-        .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)
-        .writeTimeout(30, TimeUnit.SECONDS)
+        .connectTimeout(5, TimeUnit.SECONDS)   // ⚡ 5s (was 10s)
+        .readTimeout(30, TimeUnit.SECONDS)     // ⚡ 30s (was 60s)
+        .writeTimeout(15, TimeUnit.SECONDS)    // ⚡ 15s (was 30s)
         .build()
     
     /**
@@ -88,54 +98,59 @@ class AlbumDownloader(private val ctx: Context) {
     }
     
     /**
-     * Discover glasses IP by testing common hotspot addresses
+     * ⚡ Discover glasses IP - scans ALL IPs in PARALLEL instead of sequential
+     * Much faster: tests all IPs simultaneously, returns on first success
      */
     suspend fun discoverGlassesIP(): String? = withContext(Dispatchers.IO) {
-        Log.i(TAG, "🔍 Discovering glasses IP...")
-        
-        // First try the gateway IP from current WiFi connection
+        Log.i(TAG, "🔍 Discovering glasses IP (PARALLEL scan)...")
+
+        // Priority 1: Try gateway from current WiFi (fastest path)
         val gatewayIP = getGatewayIP()
-        if (gatewayIP != null && !POSSIBLE_IPS.contains(gatewayIP)) {
+        if (gatewayIP != null) {
             Log.i(TAG, "🔍 Testing gateway IP first: $gatewayIP")
-            if (testGlassesIP(gatewayIP)) {
+            if (testGlassesIPFast(gatewayIP)) {
+                Log.i(TAG, "⚡ Found via gateway: $gatewayIP")
                 return@withContext gatewayIP
             }
         }
-        
-        for (ip in POSSIBLE_IPS) {
-            if (testGlassesIP(ip)) {
-                return@withContext ip
-            }
+
+        // Priority 2: Scan ALL possible IPs in parallel at once
+        val allIps = if (gatewayIP != null) POSSIBLE_IPS.filter { it != gatewayIP } else POSSIBLE_IPS
+        val results = allIps.map { ip ->
+            async { if (testGlassesIPFast(ip)) ip else null }
+        }.awaitAll()
+
+        val found = results.firstOrNull { it != null }
+        if (found != null) {
+            Log.i(TAG, "⚡ Parallel scan found glasses at: $found")
+        } else {
+            Log.w(TAG, "❌ Could not find glasses on any known IP")
         }
-        
-        Log.w(TAG, "❌ Could not find glasses on any known IP")
-        null
+        found
     }
     
     /**
-     * Test if glasses server is available at given IP
+     * ⚡ Fast IP test using short-timeout scanClient
      */
-    private fun testGlassesIP(ip: String): Boolean {
-        try {
-            val testUrl = "http://$ip/files/media.config"
-            Log.d(TAG, "Testing: $testUrl")
-            
+    private fun testGlassesIPFast(ip: String): Boolean {
+        return try {
             val request = Request.Builder()
-                .url(testUrl)
+                .url("http://$ip/files/media.config")
                 .build()
-            
-            val response = okClient.newCall(request).execute()
-            if (response.isSuccessful) {
-                Log.i(TAG, "✅ Found glasses at: $ip")
-                response.close()
-                return true
-            }
+            val response = scanClient.newCall(request).execute()
+            val ok = response.isSuccessful
             response.close()
+            if (ok) Log.i(TAG, "✅ Found glasses at: $ip")
+            ok
         } catch (e: Exception) {
-            // IP not available
+            false
         }
-        return false
     }
+
+    /**
+     * Test if glasses server is available at given IP (legacy, uses download client)
+     */
+    private fun testGlassesIP(ip: String): Boolean = testGlassesIPFast(ip)
     
     /**
      * Fetch media config from glasses

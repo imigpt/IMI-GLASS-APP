@@ -45,4 +45,19 @@
     <!-- Extra Features -->
     <string name="text_register_listener">Register and report monitoring</string>
 
+    <!-- User Memory Settings -->
+    <string-array name="response_styles">
+        <item>Brief (Short answers)</item>
+        <item>Balanced (Normal)</item>
+        <item>Detailed (Thorough explanations)</item>
+    </string-array>
+
+    <string-array name="languages">
+        <item>English</item>
+        <item>Hindi</item>
+    </string-array>
+
+    <!-- Accessibility Service -->
+    <string name="accessibility_service_description">WhatsApp Auto-Send Service - Automatically sends WhatsApp messages when you use the voice command feature</string>
+
 </resources>

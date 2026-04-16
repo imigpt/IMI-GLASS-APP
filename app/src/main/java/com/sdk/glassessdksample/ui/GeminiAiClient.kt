@@ -1,5 +1,7 @@
 package com.sdk.glassessdksample.ui
 
+import com.sdk.glassessdksample.RemoteConfigManager
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.AudioAttributes
@@ -12,81 +14,204 @@ import com.sdk.glassessdksample.BuildConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-class GeminiAIClient {
+class GeminiAIClient(
+    private val context: Context? = null,
+    private val chatModelName: String = DEFAULT_CHAT_MODEL,
+    private val fallbackChatModelName: String? = null
+) {
 
-    // System prompt that defines Imi Glass personality and capabilities
-    private val systemPrompt = """
-        You are Imi Glass, an intelligent AI assistant integrated into smart glasses.
-        You were built and developed by Ajay Mehta.
-        
-        IMPORTANT BEHAVIOR:
-        - Only introduce yourself when user specifically asks "who are you", "introduce yourself", "tell me about yourself" or similar
-        - For all other questions, give direct answers without introducing yourself
-        - Be concise and helpful
-        
-        Your capabilities include:
-        - Making phone calls to contacts
-        - Playing music on Spotify and other music apps
-        - Playing videos on YouTube
-        - Taking photos and recording videos
-        - Providing GPS location and navigation
-        - Tracking user location and giving directions
-        - Searching the web for information
-        - Getting latest news in Hindi and English
-        - Answering questions with factual information
-        - Having natural conversations in both Hindi and English
-        
-        Personality:
-        - Friendly, helpful, and concise in responses
-        - You understand and respond fluently in both Hindi and English
-        - Keep responses brief and conversational (2-3 sentences max for most queries)
-        - When introducing yourself, say: "I am Imi Glass, your intelligent AI assistant built by Ajay Mehta. I can help you make calls, play music on Spotify, play videos, take photos and videos, track your location, and answer any questions you have."
-        
-        Important:
-        - Respond in the same language the user speaks (Hindi or English)
-        - For action requests (calls, music, photos), acknowledge briefly then the system will perform the action
-        - Provide factual, accurate information
-        - If you don't know something, admit it honestly
-        - Always mention that you were created by IMI Wearables when asked about who built you or who is your developer
+    companion object {
+        private const val TAG = "GeminiAIClient"
+        const val CHAT_MODEL_FLASH_LITE = "gemini-2.0-flash-lite"
+        private const val DEFAULT_CHAT_MODEL = "gemini-2.5-flash"
+        private const val MAX_GALLERY_CONTEXT_CHARS = 900
+        private const val MAX_MEMORY_CONTEXT_CHARS = 900
+        private const val MAX_CHAT_PROMPT_CHARS = 1800
+        private const val MAX_HISTORY_ENTRIES = 6
+    }
+
+    // User memory manager for personalization
+    private val memoryManager: UserMemoryManager? by lazy {
+        context?.let { UserMemoryManager(it) }
+    }
+
+    // Compact system prompt for lower token usage in chat.
+    private val baseSystemPrompt = """
+        You are Imi Glass, an AI assistant for smart glasses by IMI Wearables.
+        Reply in the same language as the user (Hindi or English).
+        Keep answers short and practical (usually 1-2 sentences).
+        Give direct answers first; no long introductions.
+        If asked who made you, say you were built by Ajay Mehta at IMI Wearables.
+        If uncertain, say so clearly instead of guessing.
     """.trimIndent()
 
-    // Using Gemini 2.5 Flash for fast, reliable TEXT responses
-    // Enhanced Local Android TTS provides high-quality audio
-    private val generativeModel = GenerativeModel(
-        modelName = "gemini-2.5-flash",
-        apiKey = BuildConfig.GEMINI_API_KEY,
-        systemInstruction = com.google.ai.client.generativeai.type.content { text(systemPrompt) }
-    )
+    private fun trimForPrompt(text: String, maxChars: Int): String {
+        val normalized = text
+            .replace("\\r", "")
+            .trim()
+        if (normalized.length <= maxChars) return normalized
+        return normalized.take(maxChars)
+    }
+    
+    /**
+     * Get the complete system prompt with user memory context.
+     *
+     * Memory is built automatically from past conversations – the user never
+     * needs to enter anything manually.  Every piece of information is learned
+     * from what the user says in chat.
+     */
+    /**
+     * Reads all AI-generated image notes and returns them as context text.
+     *
+     * Primary source : ImageDescriptionStore vault JSON (always up-to-date)
+     * Fallback source: legacy .desc.txt sidecar files in the live_gallery dir
+     *
+     * This gives the chat AI full knowledge of every captured photo, including
+     * which one was captured LAST (used when the user asks "describe my last photo").
+     */
+    private fun buildGalleryContext(): String {
+        val ctx = context ?: return ""
 
-    suspend fun chat(prompt: String): String {
-        return try {
-            val response = withContext(Dispatchers.IO) {
-                generativeModel.generateContent(prompt)
+        val vaultContext = com.sdk.glassessdksample.ui.gallery.ImageDescriptionStore
+            .buildAIContext(ctx)
+        if (vaultContext.isNotBlank()) {
+            Log.d(TAG, "Injecting compact vault image context")
+            return trimForPrompt(vaultContext, MAX_GALLERY_CONTEXT_CHARS)
+        }
+
+        val galleryDir = ctx.filesDir?.let { java.io.File(it, "live_gallery") } ?: return ""
+        if (!galleryDir.exists()) {
+            Log.d(TAG, "Gallery dir does not exist yet")
+            return ""
+        }
+        val descFiles = galleryDir.listFiles { f -> f.name.endsWith(".desc.txt") }
+            ?.sortedByDescending { it.lastModified() }
+            ?.take(5)
+            ?: return ""
+        if (descFiles.isEmpty()) {
+            Log.d(TAG, "No .desc.txt files found in gallery")
+            return ""
+        }
+        Log.d(TAG, "Injecting ${descFiles.size} compact gallery image notes")
+        val fmt = java.text.SimpleDateFormat("MMM dd HH:mm", java.util.Locale.getDefault())
+        val entries = descFiles.mapIndexed { idx, f ->
+            val time = fmt.format(java.util.Date(f.lastModified()))
+            val description = trimForPrompt(f.readText().trim(), 120)
+            "Image ${idx + 1} ($time): $description"
+        }
+        return trimForPrompt(
+            """
+            Photo notes (newest first):
+            ${entries.joinToString("\n")}
+            Use these notes when the user asks about previous images.
+            """.trimIndent(),
+            MAX_GALLERY_CONTEXT_CHARS
+        )
+    }
+
+    private fun getSystemPromptWithMemory(): String {
+        val userMemory = memoryManager?.getUserMemory()
+        val galleryContext = buildGalleryContext()
+        
+        return if (userMemory != null && !userMemory.isEmpty()) {
+            val memoryContext = trimForPrompt(userMemory.toPromptContext(), MAX_MEMORY_CONTEXT_CHARS)
+            val relationshipNote = when {
+                userMemory.totalMessages > 100 ->
+                    "Long-term user relationship."
+                userMemory.totalMessages > 20  ->
+                    "Returning user. Use known preferences briefly."
+                userMemory.totalMessages > 0   ->
+                    "Early user profile available."
+                else -> ""
             }
+            trimForPrompt("""
+            $baseSystemPrompt
+            ${if (galleryContext.isNotBlank()) "\n$galleryContext" else ""}
+            
+            $memoryContext
+            ${if (relationshipNote.isNotEmpty()) "\n$relationshipNote" else ""}
+            
+            Personalization:
+            - Use known preferences naturally.
+            - If name is known (${userMemory.userName.ifBlank { "user" }}), use it occasionally.
+            """.trimIndent(), MAX_MEMORY_CONTEXT_CHARS + MAX_GALLERY_CONTEXT_CHARS + 700)
+        } else {
+            trimForPrompt("""
+            $baseSystemPrompt
+            ${if (galleryContext.isNotBlank()) "\n$galleryContext" else ""}
+            
+            Keep replies concise and helpful.
+            """.trimIndent(), MAX_MEMORY_CONTEXT_CHARS + MAX_GALLERY_CONTEXT_CHARS + 500)
+        }
+    }
+
+    // Recreate model per request so latest memory can be applied.
+    private fun createGenerativeModel(modelName: String): GenerativeModel {
+        return GenerativeModel(
+            modelName = modelName,
+            apiKey = RemoteConfigManager.geminiApiKey,
+            systemInstruction = com.google.ai.client.generativeai.type.content { 
+                text(getSystemPromptWithMemory()) 
+            }
+        )
+    }
+
+    private fun isModelNotFoundError(error: Exception): Boolean {
+        val message = error.message ?: ""
+        val stack = error.stackTraceToString()
+        return message.contains("404") || message.contains("Not Found", ignoreCase = true) || stack.contains("404")
+    }
+
+    suspend fun chat(
+        prompt: String,
+        mode: TokenUsageTracker.Mode = TokenUsageTracker.Mode.AI_CHAT
+    ): String {
+        if (!UsageLimitManager.tryConsume(context, mode)) {
+            UsageLimitManager.promptUpgradeIfPossible(context, mode)
+            return UsageLimitManager.limitReachedMessage(mode)
+        }
+
+        return try {
+            val compactPrompt = trimForPrompt(prompt, MAX_CHAT_PROMPT_CHARS)
+            val response = withContext(Dispatchers.IO) {
+                try {
+                    createGenerativeModel(chatModelName).generateContent(compactPrompt)
+                } catch (primaryError: Exception) {
+                    val fallback = fallbackChatModelName
+                    if (isModelNotFoundError(primaryError) && !fallback.isNullOrBlank() && fallback != chatModelName) {
+                        Log.w(TAG, "Primary model unavailable, falling back to $fallback")
+                        createGenerativeModel(fallback).generateContent(compactPrompt)
+                    } else {
+                        throw primaryError
+                    }
+                }
+            }
+            TokenUsageTracker.track(context, mode, response.usageMetadata)
+
             val text = response.text
             if (text.isNullOrBlank()) {
-                Log.w("GeminiAIClient", "Empty response.text from Gemini for prompt='$prompt'")
+                Log.w(TAG, "Empty response.text from Gemini")
                 "No response from Gemini."
             } else {
                 text
             }
         } catch (e: Exception) {
             // Log full stacktrace for debugging
-            Log.e("GeminiAIClient", "Error calling Gemini API", e)
+            Log.e(TAG, "Error calling Gemini API", e)
             val msg = e.message ?: "An error occurred calling Gemini."
             val stackTrace = e.stackTraceToString()
             
             // Handle specific error codes
             return when {
                 msg.contains("429") || msg.contains("RESOURCE_EXHAUSTED") || stackTrace.contains("RESOURCE_EXHAUSTED") -> {
-                    Log.e("GeminiAIClient", "Quota exhausted - rate limit hit")
+                    Log.e(TAG, "Quota exhausted - rate limit hit")
                     "API quota exceeded. Please wait a moment and try again."
                 }
                 msg.contains("404") || msg.contains("Not Found", true) -> {
                     "Model not available for your key."
                 }
                 msg.contains("MissingFieldException") || stackTrace.contains("MissingFieldException") -> {
-                    Log.e("GeminiAIClient", "JSON parsing error - likely an API error response")
+                    Log.e(TAG, "JSON parsing error - likely an API error response")
                     "Service temporarily unavailable. Please try again."
                 }
                 msg.contains("401") || msg.contains("Unauthorized") -> {
@@ -103,9 +228,20 @@ class GeminiAIClient {
     }
 
     // Overloaded chat function to handle history (optional)
-    suspend fun chat(prompt: String, history: List<Pair<String, String>>): String {
-        val fullPrompt = history.joinToString("\n") { "${it.first}: ${it.second}" } + "\nuser: $prompt"
-        return chat(fullPrompt)
+    suspend fun chat(
+        prompt: String,
+        history: List<Pair<String, String>>,
+        mode: TokenUsageTracker.Mode = TokenUsageTracker.Mode.AI_CHAT
+    ): String {
+        val compactHistory = history
+            .takeLast(MAX_HISTORY_ENTRIES)
+            .joinToString("\n") { "${it.first}: ${trimForPrompt(it.second, 180)}" }
+        val fullPrompt = if (compactHistory.isBlank()) {
+            trimForPrompt(prompt, MAX_CHAT_PROMPT_CHARS)
+        } else {
+            trimForPrompt("$compactHistory\nuser: ${trimForPrompt(prompt, 400)}", MAX_CHAT_PROMPT_CHARS)
+        }
+        return chat(fullPrompt, mode)
     }
     
     // Vision API - Analyze image and detect objects
@@ -113,6 +249,11 @@ class GeminiAIClient {
         |Be specific - mention brands, colors, text visible, object models/types. 
         |Don't give vague or generic answers. 
         |Describe as if explaining to someone who cannot see the image.""".trimMargin()): String {
+        if (!UsageLimitManager.tryConsume(context, TokenUsageTracker.Mode.SEEING)) {
+            UsageLimitManager.promptUpgradeIfPossible(context, TokenUsageTracker.Mode.SEEING)
+            return UsageLimitManager.limitReachedMessage(TokenUsageTracker.Mode.SEEING)
+        }
+
         return try {
             val response = withContext(Dispatchers.IO) {
                 // Convert ByteArray to Bitmap for Gemini Vision API
@@ -129,12 +270,16 @@ class GeminiAIClient {
                 // Use vision model for image analysis
                 val visionModel = GenerativeModel(
                     modelName = "gemini-2.5-flash",
-                    apiKey = BuildConfig.GEMINI_API_KEY
+                    apiKey = RemoteConfigManager.geminiApiKey
                 )
                 
                 visionModel.generateContent(imagePart, promptPart)
             }
             
+            response?.usageMetadata?.let {
+                TokenUsageTracker.track(context, TokenUsageTracker.Mode.SEEING, it)
+            }
+
             val text = response?.text
             if (text.isNullOrBlank()) {
                 Log.w("GeminiAIClient", "Empty vision response from Gemini")

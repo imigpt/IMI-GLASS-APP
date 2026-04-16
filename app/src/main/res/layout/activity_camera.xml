@@ -1,0 +1,254 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.coordinatorlayout.widget.CoordinatorLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/bg_camera_page_background">
+
+    <androidx.core.widget.NestedScrollView
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_marginBottom="96dp"
+        android:fillViewport="true">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:paddingStart="18dp"
+            android:paddingTop="20dp"
+            android:paddingEnd="18dp"
+            android:paddingBottom="12dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Camera"
+                    android:fontFamily="sans-serif-medium"
+                    android:textColor="@color/text_primary"
+                    android:textSize="26sp" />
+
+                <ImageView
+                    android:layout_width="46dp"
+                    android:layout_height="46dp"
+                    android:background="@drawable/bg_camera_search_chip"
+                    android:padding="11dp"
+                    android:src="@android:drawable/ic_menu_search"
+                    app:tint="@color/text_secondary" />
+            </LinearLayout>
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:layout_marginBottom="14dp"
+                android:text="Control all glasses camera actions from one place."
+                android:textColor="@color/text_tertiary"
+                android:textSize="13sp" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="16dp"
+                android:background="@drawable/bg_camera_status_card"
+                android:orientation="vertical"
+                android:padding="18dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="CURRENTLY ACTIVE"
+                    android:textColor="@color/text_tertiary"
+                    android:textSize="12sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.05" />
+
+                <TextView
+                    android:id="@+id/tvCameraStatus"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:text="Ready To Capture"
+                    android:textColor="@color/text_primary"
+                    android:textSize="20sp"
+                    android:fontFamily="sans-serif-medium" />
+
+                <Button
+                    android:id="@+id/btnConnectGlasses"
+                    android:layout_width="match_parent"
+                    android:layout_height="56dp"
+                    android:layout_marginTop="14dp"
+                    android:background="@drawable/bg_camera_connect_button"
+                    android:backgroundTint="@null"
+                    android:text="Connect Glasses"
+                    android:textAllCaps="false"
+                    android:textColor="@color/text_primary"
+                    android:textSize="14sp"
+                    android:textStyle="bold"
+                    android:fontFamily="sans-serif-medium"
+                    app:backgroundTint="@null" />
+            </LinearLayout>
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="10dp"
+                android:text="Actions"
+                android:textColor="@color/text_primary"
+                android:textSize="17sp"
+                android:fontFamily="sans-serif-medium" />
+
+            <GridLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:alignmentMode="alignMargins"
+                android:columnCount="2"
+                android:rowCount="3"
+                android:useDefaultMargins="false">
+
+                <Button
+                    android:id="@+id/btnCapturePhoto"
+                    android:layout_width="0dp"
+                    android:layout_height="132dp"
+                    android:layout_columnWeight="1"
+                    android:layout_margin="7dp"
+                    android:background="@drawable/bg_camera_action_tile"
+                    android:backgroundTint="@null"
+                    android:drawableTop="@android:drawable/ic_menu_camera"
+                    android:drawablePadding="10dp"
+                    android:gravity="center"
+                    android:paddingTop="12dp"
+                    android:text="Capture\nPhoto"
+                    android:textAllCaps="false"
+                    android:textColor="@color/text_primary"
+                    android:textSize="14sp"
+                    android:fontFamily="sans-serif-medium"
+                    app:backgroundTint="@null"
+                    app:drawableTint="@color/text_secondary" />
+
+                <Button
+                    android:id="@+id/btnStartVideo"
+                    android:layout_width="0dp"
+                    android:layout_height="132dp"
+                    android:layout_columnWeight="1"
+                    android:layout_margin="7dp"
+                    android:background="@drawable/bg_camera_action_tile"
+                    android:backgroundTint="@null"
+                    android:drawableTop="@android:drawable/ic_btn_speak_now"
+                    android:drawablePadding="10dp"
+                    android:gravity="center"
+                    android:paddingTop="12dp"
+                    android:text="Start\nVideo"
+                    android:textAllCaps="false"
+                    android:textColor="@color/text_primary"
+                    android:textSize="14sp"
+                    android:fontFamily="sans-serif-medium"
+                    app:backgroundTint="@null"
+                    app:drawableTint="@color/text_secondary" />
+
+                <Button
+                    android:id="@+id/btnStopVideo"
+                    android:layout_width="0dp"
+                    android:layout_height="132dp"
+                    android:layout_columnWeight="1"
+                    android:layout_margin="7dp"
+                    android:background="@drawable/bg_camera_action_tile"
+                    android:backgroundTint="@null"
+                    android:drawableTop="@android:drawable/ic_media_pause"
+                    android:drawablePadding="10dp"
+                    android:gravity="center"
+                    android:paddingTop="12dp"
+                    android:text="Stop\nVideo"
+                    android:textAllCaps="false"
+                    android:textColor="@color/text_primary"
+                    android:textSize="14sp"
+                    android:fontFamily="sans-serif-medium"
+                    app:backgroundTint="@null"
+                    app:drawableTint="@color/text_secondary" />
+
+                <Button
+                    android:id="@+id/btnOpenGallery"
+                    android:layout_width="0dp"
+                    android:layout_height="132dp"
+                    android:layout_columnWeight="1"
+                    android:layout_margin="7dp"
+                    android:background="@drawable/bg_camera_action_tile"
+                    android:backgroundTint="@null"
+                    android:drawableTop="@android:drawable/ic_menu_gallery"
+                    android:drawablePadding="10dp"
+                    android:gravity="center"
+                    android:paddingTop="12dp"
+                    android:text="Glass\nGallery"
+                    android:textAllCaps="false"
+                    android:textColor="@color/text_primary"
+                    android:textSize="14sp"
+                    android:fontFamily="sans-serif-medium"
+                    app:backgroundTint="@null"
+                    app:drawableTint="@color/text_secondary" />
+
+                <Button
+                    android:id="@+id/btnOpenVisionChat"
+                    android:layout_width="0dp"
+                    android:layout_height="132dp"
+                    android:layout_columnWeight="1"
+                    android:layout_margin="7dp"
+                    android:background="@drawable/bg_camera_action_tile"
+                    android:backgroundTint="@null"
+                    android:drawableTop="@android:drawable/ic_dialog_email"
+                    android:drawablePadding="10dp"
+                    android:gravity="center"
+                    android:paddingTop="12dp"
+                    android:text="Vision\nChat"
+                    android:textAllCaps="false"
+                    android:textColor="@color/text_primary"
+                    android:textSize="14sp"
+                    android:fontFamily="sans-serif-medium"
+                    app:backgroundTint="@null"
+                    app:drawableTint="@color/text_secondary" />
+
+                <Button
+                    android:id="@+id/btnAppPermissions"
+                    android:layout_width="0dp"
+                    android:layout_height="132dp"
+                    android:layout_columnWeight="1"
+                    android:layout_margin="7dp"
+                    android:background="@drawable/bg_camera_action_tile"
+                    android:backgroundTint="@null"
+                    android:drawableTop="@android:drawable/ic_menu_manage"
+                    android:drawablePadding="10dp"
+                    android:gravity="center"
+                    android:paddingTop="12dp"
+                    android:text="App\nPermissions"
+                    android:textAllCaps="false"
+                    android:textColor="@color/text_primary"
+                    android:textSize="14sp"
+                    android:fontFamily="sans-serif-medium"
+                    app:backgroundTint="@null"
+                    app:drawableTint="@color/text_secondary" />
+            </GridLayout>
+        </LinearLayout>
+    </androidx.core.widget.NestedScrollView>
+
+    <com.google.android.material.bottomnavigation.BottomNavigationView
+        android:id="@+id/bottomNavigation"
+        android:layout_width="match_parent"
+        android:layout_height="68dp"
+        android:layout_gravity="bottom"
+        android:layout_marginStart="12dp"
+        android:layout_marginEnd="12dp"
+        android:layout_marginBottom="8dp"
+        android:background="@drawable/bg_bottom_nav_glass"
+        app:itemBackground="@drawable/bg_bottom_nav_item"
+        app:itemIconTint="@color/bottom_nav_item_color"
+        app:itemTextColor="@color/bottom_nav_item_color"
+        app:labelVisibilityMode="labeled"
+        app:menu="@menu/menu_bottom_nav" />
+
+</androidx.coordinatorlayout.widget.CoordinatorLayout>

@@ -1,0 +1,37 @@
+{
+  "model_parameters": 64769,
+  "parameter_breakdown": {
+    "classifier": 64769
+  },
+  "input_shape": [
+    1,
+    9,
+    1,
+    40,
+    16
+  ],
+  "output_shape": [
+    1
+  ],
+  "fp32_onnx": {
+    "path": "/Users/tanayshrivastava/Desktop/imi modeal/imi wakeword model/exports/imi_wakeword.onnx",
+    "size_mb": 0.031,
+    "verified": true,
+    "latency": {
+      "mean_ms": 0.028,
+      "p50_ms": 0.021,
+      "p99_ms": 0.059,
+      "min_ms": 0.02
+    }
+  },
+  "int8_onnx": {
+    "path": "/Users/tanayshrivastava/Desktop/imi modeal/imi wakeword model/exports/imi_wakeword_int8.onnx",
+    "size_mb": 0.103,
+    "latency": {
+      "mean_ms": 0.03,
+      "p50_ms": 0.024,
+      "p99_ms": 0.035,
+      "min_ms": 0.023
+    }
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "model": "IMICNNModel",
+  "n_mels": 40,
+  "n_time": 150,
+  "val_f1": 0.9740676758168914,
+  "threshold": 0.5,
+  "input_name": "mel_spectrogram",
+  "input_shape": [
+    1,
+    1,
+    40,
+    150
+  ]
+}

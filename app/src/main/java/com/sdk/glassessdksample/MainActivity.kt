@@ -1,5 +1,6 @@
 package com.sdk.glassessdksample
 
+import com.sdk.glassessdksample.RemoteConfigManager
 import android.Manifest
 import android.content.BroadcastReceiver
 import android.content.ContentValues
@@ -24,6 +25,9 @@ import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.util.Log
 import android.widget.Toast
+import android.view.accessibility.AccessibilityManager
+import android.accessibilityservice.AccessibilityServiceInfo
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -41,10 +45,13 @@ import com.oudmon.wifi.GlassesControl
 import com.oudmon.wifi.bean.GlassAlbumEntity
 import com.sdk.glassessdksample.databinding.ActivityMainBinding
 import com.sdk.glassessdksample.ui.*
+import com.sdk.glassessdksample.ui.ModelProvider
 import com.sdk.glassessdksample.ui.wifi.WifiTransferManager
 import com.sdk.glassessdksample.ui.wifi.WifiP2PLiveCamera
 import com.sdk.glassessdksample.ui.wifi.GlassMediaTransfer
 import com.sdk.glassessdksample.ui.gallery.GlassMediaGalleryActivity
+import com.sdk.glassessdksample.ui.gallery.LiveGalleryActivity
+import com.sdk.glassessdksample.ui.gallery.LiveGalleryManager
 import com.sdk.glassessdksample.utils.SafeBleCommandHelper
 import kotlinx.coroutines.*
 import org.greenrobot.eventbus.EventBus
@@ -66,6 +73,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private var customVoiceDetector: CustomVoiceDetector? = null
     private var geminiClient: GeminiLiveApiClient? = null
     private var visionClient: GeminiAIClient? = null // For image analysis
+    private lateinit var userMemoryManager: com.sdk.glassessdksample.ui.UserMemoryManager  // Auto-learning AI memory
     private var geminiLiveService: GeminiLiveService? = null // Gemini Live API for bidirectional audio
 
     private var isListening = false
@@ -73,7 +81,10 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private var isGeminiLiveMode = false // Track if using Gemini Live bidirectional audio
     private var aiIsPlaying = false // true when AI audio playback is active; used to prevent interrupts
     private var isInterruptEnabled = false // Interrupt mode: when enabled, user voice stops AI immediately
+    private var isAiMuted = false // Mute mode: when enabled, AI won't listen to any commands
     private var lastCapturedPhoto: ByteArray? = null // Store last photo for object detection
+    private var isCameraCaptureInProgress = false
+    private var cameraCaptureTimeoutRunnable: Runnable? = null
     private var lastSavedPhotoFile: File? = null
     private var glassBatteryLevel: Int? = null // Store glass battery percentage
     private var isWaitingForVisionPhoto = false // Flag to auto-analyze next photo
@@ -82,6 +93,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private var isInteractiveVisionMode = false // Control step-by-step mode
     private var isProcessingVisionRequest = false // Prevent double clicks
     private var currentTtsJob: Job? = null
+    private var profileSummaryRefreshJob: Job? = null
     private var noMatchRetryCount = 0
     // Speech recognizer error/backoff tracking
     private var lastSpeechErrorTime: Long = 0L
@@ -124,6 +136,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private var pendingAction: ((String) -> Unit)? = null
     private var pendingDistanceOrigin: String? = null
     private var pendingDistanceDestination: String? = null
+    private var latestLocationLabel: String = "Location unavailable"
     
     // WiFi Transfer Manager for downloading media from glasses
     private var wifiTransferManager: WifiTransferManager? = null
@@ -146,6 +159,19 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     // News API Service for news fetching
     private var newsApiService: NewsApiService? = null
     
+    // Gmail Service for email operations
+    private var gmailService: GmailService? = null
+    
+    // Quick Notes Manager for storing notes and AI reminders
+    private var notesManager: QuickNotesManager? = null
+    
+    // Pending photo note - when user asks to take pic and add to notes, 
+    // the note is created first and next photo received gets attached
+    private var pendingPhotoNoteId: String? = null
+    
+    // Meeting Minutes Manager for recording and summarizing meetings
+    private var meetingManager: MeetingMinutesManager? = null
+    
     private val mainScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val REQUEST_RECORD_AUDIO_CODE = 201
     private val REQUEST_READ_CONTACTS = 302
@@ -153,6 +179,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private val REQUEST_BLUETOOTH_CONNECT = 401
     private val REQUEST_POST_NOTIFICATIONS = 501
     private val REQUEST_BACKGROUND_LISTENING = 502
+    private val REQUEST_NOTIFICATION_LISTENER = 503
     private var voiceCommandEnabled = false
     private var backgroundListeningEnabled = true // Allow background listening by default
     
@@ -181,21 +208,26 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         // Initialize SharedPreferences first (required by other services)
         prefs = getSharedPreferences("imi_prefs", MODE_PRIVATE)
         useGeminiAck = prefs.getBoolean("useGeminiAck", true)
-        // If there is no News API key set, write the provided key into prefs
+        
+        // Fetch API keys securely from Firebase Remote Config
+        RemoteConfigManager.fetchAndActivate { success ->
+            Log.d(TAG, if (success) "✅ Remote config loaded" else "⚠️ Using cached remote config")
+        }
+        // News API key is fetched from Firebase Remote Config at runtime
         try {
-            val currentNewsKey = prefs.getString("news_api_key", "YOUR_API_KEY_HERE")
-            if (currentNewsKey == null || currentNewsKey == "YOUR_API_KEY_HERE" || currentNewsKey.isBlank()) {
-                // Provided key requested to be stored by user
-                prefs.edit().putString("news_api_key", "bc0f2136-d476-49b7-afc0-3814a9b0d362").apply()
-                Log.d(TAG, "🔐 News API key written to prefs")
+            val currentNewsKey = prefs.getString("news_api_key", "")
+            if (currentNewsKey == null || currentNewsKey.isBlank()) {
+                // No key configured - app will use Gemini AI fallback for news
+                Log.d(TAG, "News API key not set, will use Gemini fallback")
             }
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to write News API key to prefs: ${e.message}")
+            Log.w(TAG, "Failed to read News API key from prefs: ${e.message}")
         }
         
         customVoiceDetector = CustomVoiceDetector(this)
         geminiClient = GeminiLiveApiClient()
-        visionClient = GeminiAIClient() // Initialize vision client
+        visionClient = GeminiAIClient(this) // Initialize vision client with context for user memory
+        userMemoryManager = com.sdk.glassessdksample.ui.UserMemoryManager(this)  // Auto-learning memory
         wifiTransferManager = WifiTransferManager(this) // Initialize WiFi transfer
         
         // Initialize WiFi P2P Live Camera for fast image streaming
@@ -206,12 +238,28 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         imageUploadService = null
         
         // Initialize News API Service (get free key from newsapi.org)
-        val newsApiKey = prefs.getString("news_api_key", "YOUR_API_KEY_HERE") ?: "YOUR_API_KEY_HERE"
+        val newsApiKey = prefs.getString("news_api_key", "") ?: ""
         newsApiService = NewsApiService(newsApiKey)
 
         // Initialize Weather Service (OpenWeatherMap). Get free key from openweathermap.org
-        val weatherApiKey = prefs.getString("weather_api_key", "YOUR_API_KEY_HERE") ?: "YOUR_API_KEY_HERE"
+        val weatherApiKey = prefs.getString("weather_api_key", "") ?: ""
         weatherService = WeatherService(weatherApiKey)
+        
+        // Initialize Gmail Service for email operations
+        gmailService = GmailService(this)
+        gmailService?.initializeGmail { success ->
+            if (success) {
+                Log.d(TAG, "✅ Gmail service initialized successfully")
+            } else {
+                Log.w(TAG, "⚠️ Gmail initialization failed - ensure Google account is configured")
+            }
+        }
+        
+        // Initialize Quick Notes Manager for storing user notes and AI reminders
+        notesManager = QuickNotesManager(this)
+        
+        // Initialize Meeting Minutes Manager for meeting transcription
+        meetingManager = MeetingMinutesManager(this)
         
         // Initialize Gemini Live Service for bidirectional audio streaming
         initializeGeminiLive()
@@ -315,17 +363,107 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             }
         } else {
             Log.d(TAG, "✅ All permissions already granted")
-            // Start HotHelper if permissions available
-            try {
-                Log.d(TAG, "🎙️ Starting HotHelper for wake word detection")
-                HotHelper.getInstance(this).start()
-            } catch (e: Exception) {
-                Log.e(TAG, "❌ Failed to start HotHelper: ${e.message}", e)
-            }
+            startWakeWordDetectorIfReady("all-permissions-already-granted")
         }
         
         // Register broadcast receiver to resume Gemini Live after VisionChat TTS finishes
         registerGeminiLiveResumeReceiver()
+        
+        // Check notification listener access after a short delay
+        Handler(Looper.getMainLooper()).postDelayed({
+            checkNotificationListenerPermission()
+        }, 2000)
+    }
+
+    private fun hasRecordAudioPermission(): Boolean {
+        return ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun startWakeWordDetectorIfReady(trigger: String) {
+        if (!backgroundListeningEnabled) {
+            Log.d(TAG, "🎙️ Wake model not started ($trigger): background listening disabled")
+            return
+        }
+
+        if (isAiMuted) {
+            Log.d(TAG, "🔇 Wake model not started ($trigger): AI is muted")
+            return
+        }
+
+        if (!hasRecordAudioPermission()) {
+            Log.w(TAG, "🎤 Wake model not started ($trigger): RECORD_AUDIO not granted")
+            return
+        }
+
+        if (!checkBLEConnection()) {
+            Log.d(TAG, "📡 Wake model waiting for glass connection ($trigger)")
+            return
+        }
+
+        if (isInConversationMode || isGeminiLiveMode) {
+            Log.d(TAG, "🗣️ Wake model not started ($trigger): conversation already active")
+            return
+        }
+
+        try {
+            val helper = HotHelper.getInstance(this)
+            helper.setPreferGlassBleAudio(true)
+            helper.start()
+            Log.d(TAG, "🎙️ Wake model started ($trigger)")
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Failed to start wake model ($trigger): ${e.message}", e)
+        }
+    }
+
+    private fun stopWakeWordDetector(reason: String) {
+        try {
+            HotHelper.getInstance(this).stop()
+            Log.d(TAG, "🛑 Wake model stopped ($reason)")
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to stop wake model ($reason): ${e.message}")
+        }
+    }
+    
+    /**
+     * Check if Notification Listener permission is granted
+     */
+    private fun isNotificationListenerEnabled(): Boolean {
+        val cn = android.content.ComponentName(this, NotificationListener::class.java)
+        val flat = android.provider.Settings.Secure.getString(contentResolver, "enabled_notification_listeners")
+        return flat != null && flat.contains(cn.flattenToString())
+    }
+    
+    /**
+     * Check and request Notification Listener permission if not granted
+     */
+    private fun checkNotificationListenerPermission() {
+        if (!isNotificationListenerEnabled()) {
+            val hasAskedBefore = prefs.getBoolean("notification_listener_asked", false)
+            if (!hasAskedBefore) {
+                android.app.AlertDialog.Builder(this)
+                    .setTitle("Notification Access")
+                    .setMessage("This app can read your notifications to answer questions like 'What notifications do I have?'\n\nWould you like to enable this feature?")
+                    .setPositiveButton("Enable") { _, _ ->
+                        prefs.edit().putBoolean("notification_listener_asked", true).apply()
+                        try {
+                            val intent = Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS")
+                            startActivityForResult(intent, REQUEST_NOTIFICATION_LISTENER)
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Failed to open notification listener settings: ${e.message}")
+                            Toast.makeText(this, "Please enable notification access in Settings", Toast.LENGTH_LONG).show()
+                        }
+                    }
+                    .setNegativeButton("Not Now") { dialog, _ ->
+                        prefs.edit().putBoolean("notification_listener_asked", true).apply()
+                        dialog.dismiss()
+                    }
+                    .show()
+            } else {
+                Log.d(TAG, "📬 Notification listener not enabled (user previously declined)")
+            }
+        } else {
+            Log.d(TAG, "✅ Notification listener already enabled")
+        }
     }
     
     /**
@@ -396,45 +534,38 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             EventBus.getDefault().unregister(this)
         }
         
-        // Start background listening service when app goes to background
-        if (backgroundListeningEnabled && (isInConversationMode || isGeminiLiveMode)) {
-            try {
-                Log.d(TAG, "📱 App backgrounded - starting ListeningService")
-                val svc = Intent(this, ListeningService::class.java)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    startForegroundService(svc)
-                } else {
-                    startService(svc)
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "❌ Failed to start ListeningService: ${e.message}", e)
-            }
-        }
+        // Disabled for Play policy compliance: avoid background foreground-service usage.
     }
     
     override fun onResume() {
         super.onResume()
-        // Resume listening if conversation mode was active
-        // BUT: Don't resume if Gemini Live mode is active (it handles its own audio)
-        if (isInConversationMode && !isListening && !isGeminiLiveMode) {
-            Handler(Looper.getMainLooper()).postDelayed({
-                if (isInConversationMode && !isListening && !isGeminiLiveMode) {
-                    Log.d(TAG, "🔄 Resuming listening after app resume (Traditional mode)")
-                    try {
-                        startListening()
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Error resuming listening: ${e.message}")
-                        // Retry once more
-                        Handler(Looper.getMainLooper()).postDelayed({
-                            if (isInConversationMode && !isListening && !isGeminiLiveMode) {
-                                try { startListening() } catch (ex: Exception) {}
-                            }
-                        }, 500)
-                    }
-                }
-            }, 300)
-        } else if (isGeminiLiveMode) {
+
+        // Update Live Gallery photo count badge
+        try {
+            val count = LiveGalleryManager.photoCount(this)
+            val label = if (count == 0) "All captured photos from glasses"
+                        else "$count ${if (count == 1) "photo" else "photos"} captured"
+            binding.tvLiveGalleryCount.text = label
+        } catch (e: Exception) { /* view may not exist yet */ }
+
+        // Refresh Vision Descriptions card with latest entry
+        refreshVisionDescriptionsCard()
+
+        // Don't auto-resume traditional speech recognition to avoid error loops
+        // Only resume Gemini Live mode after meetings
+        
+        if (isGeminiLiveMode) {
             Log.d(TAG, "🎙️ App resumed - Gemini Live already active, no action needed")
+        } else {
+            // Resume Gemini Live if it was stopped for meeting minutes
+            if (meetingManager?.getActiveMeeting() == null) {
+                Handler(Looper.getMainLooper()).postDelayed({
+                    if (!isGeminiLiveMode && geminiLiveService == null) {
+                        Log.d(TAG, "🔄 Resuming Gemini Live after meeting ended")
+                        initializeGeminiLive()
+                    }
+                }, 500)
+            }
         }
     }
 
@@ -490,12 +621,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         when (requestCode) {
             REQUEST_RECORD_AUDIO_CODE -> {
                 if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                    try {
-                        customVoiceDetector?.startDetection()
-                        Toast.makeText(this, "Hey Imi is ready!", Toast.LENGTH_SHORT).show()
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Error starting detector: ${e.message}")
-                    }
+                    Toast.makeText(this, "Hey Imi wake model is ready!", Toast.LENGTH_SHORT).show()
+                    startWakeWordDetectorIfReady("record-audio-granted")
                 } else {
                     Toast.makeText(this, "Microphone denied. Wake word won't work.", Toast.LENGTH_LONG).show()
                 }
@@ -528,13 +655,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 if (allGranted) {
                     Log.d(TAG, "✅ Background listening permissions granted")
                     Toast.makeText(this, "Background listening enabled", Toast.LENGTH_SHORT).show()
-                    // Start HotHelper now that we have permissions
-                    try {
-                        Log.d(TAG, "🎙️ Starting HotHelper after permission grant")
-                        HotHelper.getInstance(this).start()
-                    } catch (e: Exception) {
-                        Log.e(TAG, "❌ Failed to start HotHelper: ${e.message}", e)
-                    }
+                    startWakeWordDetectorIfReady("background-permissions-granted")
                 } else {
                     Log.w(TAG, "⚠️ Background listening permissions denied")
                     Toast.makeText(this, "Microphone/notification permission denied. Background listening won't work.", Toast.LENGTH_LONG).show()
@@ -590,11 +711,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                     } else if (utteranceId?.contains("GOODBYE") != true) {
                         // Restart wake word detection if not in conversation
                         Handler(Looper.getMainLooper()).postDelayed({
-                            try {
-                                HotHelper.getInstance(this@MainActivity).start()
-                            } catch (e: Exception) {
-                                Log.e(TAG, "Error restarting Porcupine: ${e.message}")
-                            }
+                            startWakeWordDetectorIfReady("tts-finished")
                         }, 500)
                     }
                 }
@@ -1114,12 +1231,51 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         // Enable glass headset mode (prefer the full SCO-enabled helper)
         enableGlassHeadsetForGeminiLive()
 
+        // Get notes context for AI
+        val notesContext = notesManager?.getNotesContextForAI() ?: ""
+        
+        // Get meeting minutes context for AI
+        val meetingsContext = meetingManager?.getMeetingsContextForAI() ?: ""
+        
+        // Get recent notifications context for AI
+        val notifications = NotificationListener.getRecentNotifications(this)
+        val notificationsContext = if (notifications.isNotEmpty()) {
+            val recentNotifs = notifications.take(5).joinToString("\n") { 
+                "- ${it.appName}: ${it.title ?: ""} ${it.text ?: ""}"
+            }
+            "Recent Notifications (last 5):\n$recentNotifs\n"
+        } else {
+            ""
+        }
+
+        val userProfileSummaryContext = prefs.getString("user_profile_summary_for_ai", "")
+            ?.takeIf { it.isNotBlank() }
+            ?.let { "User Profile Summary (generated):\n$it\n" }
+            ?: ""
+
+        val runtimeContext = buildRuntimeTimeLocationContext()
+
         val systemInstruction = """
             You are Imi Glass, an intelligent AI assistant integrated into smart glasses.
             Keep your responses very concise (1-2 sentences maximum).
             Be helpful, friendly, and conversational.
             Respond in the same language the user speaks.
             You can help with questions, provide information, and assist with tasks.
+            
+            IMPORTANT CAPABILITIES:
+            - You CAN access phone notifications. When asked about notifications, tell the user about their recent phone notifications.
+            - You CAN access meeting transcripts and summaries. When asked about past meetings, provide specific details from transcripts.
+            - You CAN answer questions like "What was discussed in my last meeting?" with actual content from the transcript.
+            
+            $notesContext
+            
+            $meetingsContext
+            
+            $notificationsContext
+
+            $userProfileSummaryContext
+
+            $runtimeContext
         """.trimIndent()
 
         // Wait for SCO to be active and stable before starting the live conversation.
@@ -1401,7 +1557,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         isInConversationMode = true
         try {
             val svc = Intent(this, ListeningService::class.java)
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) startForegroundService(svc) else startService(svc)
+            startService(svc)
         } catch (e: Exception) {
             Log.w(TAG, "Failed to start ListeningService: ${e.message}")
         }
@@ -1500,19 +1656,20 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             override fun onResults(results: Bundle?) {
                 val text = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
                 if (!text.isNullOrBlank()) {
-                    binding.etCommand.setText(text)
                     noMatchRetryCount = 0
                     updateConversation("You", text)
                     
-                    if (text.lowercase().matches(Regex(".*(stop|exit|bye|band karo).*"))) {
+                    // Check for goodbye commands to exit conversation
+                    if (text.lowercase().matches(Regex(".*(goodbye|good bye|bye bye|stop|exit|bye imi|band karo|alvida).*"))) {
+                        Log.d(TAG, "👋 Goodbye command detected in old mode: '$text'")
                         isInConversationMode = false
                         val goodbye = "Goodbye! Say hey imi to continue our chat."
                         updateConversation("Imi", goodbye)
                         speakOut(goodbye, "GOODBYE")
                         isListening = false
                         voiceCommandEnabled = false
-                        binding.btnVoice.isEnabled = false
                         pendingAction = null // Clear any pending action
+                        Toast.makeText(this@MainActivity, "Conversation ended. Say 'Hey Imi' to restart.", Toast.LENGTH_SHORT).show()
                         // Keep conversation history - don't clear aiHistory
                         return
                     }
@@ -1540,13 +1697,9 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                             noMatchRetryCount = 0
                             try { speechRecognizer?.cancel() } catch (_: Exception) {}
                             // Restart wake word detection
-                            try {
-                                Handler(Looper.getMainLooper()).postDelayed({
-                                    HotHelper.getInstance(this@MainActivity).start()
-                                }, 500)
-                            } catch (e: Exception) {
-                                Log.e(TAG, "Failed to restart wake word: ${e.message}")
-                            }
+                            Handler(Looper.getMainLooper()).postDelayed({
+                                startWakeWordDetectorIfReady("no-match-exit-conversation")
+                            }, 500)
                             return
                         }
                         
@@ -1695,6 +1848,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         when (event.type) {
             BluetoothEvent.EventType.CONNECTED -> {
                 Toast.makeText(this, "Glass Connected", Toast.LENGTH_SHORT).show()
+                startWakeWordDetectorIfReady("bluetooth-event-connected")
                 // Warm SCO on glass connect so mic is ready for wake detection
                 try {
                     mainScope.launch {
@@ -1710,6 +1864,13 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             }
             BluetoothEvent.EventType.DISCONNECTED -> {
                 Toast.makeText(this, "Glass Disconnected", Toast.LENGTH_SHORT).show()
+                stopWakeWordDetector("bluetooth-event-disconnected")
+
+                if (isGeminiLiveMode || isInConversationMode) {
+                    Log.d(TAG, "🛑 Glass disconnected during active AI session - stopping Gemini Live")
+                    stopGeminiLiveConversation(keepHeadsetConnected = true, restartWakeWord = false)
+                }
+
                 try {
                     scoHelper?.cleanup()
                 } catch (e: Exception) {
@@ -1718,8 +1879,21 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             }
             BluetoothEvent.EventType.VOICE_TEXT -> {
                 val text = event.data as? String ?: return
-                if (text == "wake up") {
-                    try { HotHelper.getInstance(this).stop() } catch (e: Exception) {}
+                if (text.trim().lowercase() == "wake up") {
+                    if (!checkBLEConnection()) {
+                        Log.w(TAG, "Wake word event ignored: Glass is not connected")
+                        Toast.makeText(this, "Connect glasses first, then say Hey Imi", Toast.LENGTH_SHORT).show()
+                        return
+                    }
+
+                    // Check if AI is muted
+                    if (isAiMuted) {
+                        Log.d(TAG, "🔇 AI is muted - ignoring wake word")
+                        speakOut("I am currently muted. Please unmute me first.", "MUTED")
+                        return
+                    }
+                    
+                    stopWakeWordDetector("wake-word-triggered")
                     
                     // 🎤 ALWAYS use Gemini Live API (REST API disabled)
                     Log.d(TAG, "🎙️ Starting Gemini Live mode after Hey Imi")
@@ -1793,7 +1967,15 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                     }
                     
                     voiceCommandEnabled = true
-                    binding.btnVoice.isEnabled = true
+                }
+            }
+            BluetoothEvent.EventType.REQUEST_MIC_PERMISSION -> {
+                if (!hasRecordAudioPermission()) {
+                    ActivityCompat.requestPermissions(
+                        this,
+                        arrayOf(Manifest.permission.RECORD_AUDIO),
+                        REQUEST_RECORD_AUDIO_CODE
+                    )
                 }
             }
             BluetoothEvent.EventType.PHOTO_CAPTURED -> {
@@ -1801,8 +1983,11 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 (event.data as? ByteArray)?.let { photoBytes ->
                     Log.d(TAG, "📸 PHOTO_CAPTURED event - ${photoBytes.size} bytes received")
                     
-                    lastCapturedPhoto = photoBytes 
-                    savePhoto(photoBytes) // Gallery mein save
+                    lastCapturedPhoto = photoBytes
+                    isCameraCaptureInProgress = false
+                    cameraCaptureTimeoutRunnable?.let { Handler(Looper.getMainLooper()).removeCallbacks(it) }
+                    cameraCaptureTimeoutRunnable = null
+                    // savePhoto already called in deviceNotifyListener before EventBus post
 
                     // UI Update
                     try {
@@ -1895,7 +2080,11 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             file.writeBytes(bytes)
             lastSavedPhotoFile = file
             Log.d(TAG, "✅ Photo written to temp: ${file.absolutePath}")
-            
+
+            // ── Live Gallery: persist a copy for the in-app gallery ────────
+            LiveGalleryManager.savePhoto(this, bytes, "BLE")
+            Log.d(TAG, "📸 Saved to Live Gallery")
+
             // Upload to server if enabled
             if (prefs.getBoolean("auto_upload_enabled", false)) {
                 uploadPhotoToServer(file)
@@ -2073,7 +2262,58 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             binding.tvConversation.post {
                 (binding.tvConversation.parent as? android.widget.ScrollView)?.fullScroll(android.view.View.FOCUS_DOWN)
             }
+
+            // Persist immediately after a real AI reply is committed to history.
+            val normalizedSpeaker = speaker.trim().lowercase()
+            if (normalizedSpeaker in setOf("imi", "ai", "assistant", "model")) {
+                val last = aiHistory.lastOrNull()
+                val modelRoles = setOf("model", "assistant", "ai", "imi")
+                if (last != null && last.first.lowercase() in modelRoles && last.second.trim() == message.trim()) {
+                    saveConversationHistory()
+                }
+            }
         }
+    }
+
+    /**
+     * Toggle AI Mute - When muted, AI won't listen to any commands
+     */
+    private fun toggleAiMute() {
+        isAiMuted = !isAiMuted
+        
+        // Update HotHelper mute state
+        HotHelper.getInstance(this).setMuted(isAiMuted)
+        
+        runOnUiThread {
+            if (isAiMuted) {
+                // AI is now muted
+                binding.tvMuteStatus.text = "AI Muted 🔇"
+                binding.ivMuteIcon.setImageResource(android.R.drawable.ic_lock_silent_mode)
+                Toast.makeText(this, "🔇 AI Muted - Not listening", Toast.LENGTH_SHORT).show()
+                
+                // Stop any active listening
+                try {
+                    HotHelper.getInstance(this).stop()
+                    speechRecognizer?.stopListening()
+                    geminiLiveService?.stopLiveConversation()
+                    isInConversationMode = false
+                    isGeminiLiveMode = false
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error stopping AI: ${e.message}")
+                }
+            } else {
+                // AI is now unmuted - automatically wake up AI
+                binding.tvMuteStatus.text = "AI Listening 🎤"
+                binding.ivMuteIcon.setImageResource(android.R.drawable.ic_lock_silent_mode_off)
+                Toast.makeText(this, "🎤 AI Unmuted - Waking up...", Toast.LENGTH_SHORT).show()
+                
+                // Automatically trigger wake up event (start conversation)
+                Log.d(TAG, "🎙️ Auto-waking AI after unmute")
+                EventBus.getDefault().post(BluetoothEvent(BluetoothEvent.EventType.VOICE_TEXT, "wake up"))
+            }
+        }
+        
+        Log.d(TAG, "🔇 AI Mute toggled: ${if (isAiMuted) "MUTED" else "UNMUTED"}")
     }
 
     private fun handleSpokenCommand(command: String) {
@@ -2087,11 +2327,41 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         
         val lowerCmd = command.lowercase()
         
+        // PRIORITY -1: MUTE/UNMUTE COMMAND (Always check this first!)
+        // ══════════════════════════════════════════════════════════════════════════
+        if (lowerCmd.contains("imi mute") || lowerCmd.contains("hey mute") || lowerCmd.contains("mute ai") || lowerCmd == "mute") {
+            Log.d(TAG, "🔇 Mute command detected: '$command'")
+            toggleAiMute()
+            return
+        }
+
+        if (lowerCmd.contains("conversation history") ||
+            lowerCmd.contains("chat history") ||
+            lowerCmd.contains("open history")) {
+            openConversationHistory()
+            speakOut("Opening conversation history", "HISTORY")
+            return
+        }
+        
         // PRIORITY 0: PHOTO/VIDEO CAPTURE COMMANDS (SIRF click, no vision analysis!)
         // ══════════════════════════════════════════════════════════════════════════
         // ✅ These commands ONLY capture photo/video - NO vision analysis!
         // Check these BEFORE any vision-related commands
         // ══════════════════════════════════════════════════════════════════════════
+        
+        // PHOTO + NOTE commands - Take photo AND save to notes
+        // Check this BEFORE regular photo commands so it doesn't get caught by plain photo detection
+        val isPhotoNoteCommand = (lowerCmd.contains("photo") || lowerCmd.contains("pic") || 
+            lowerCmd.contains("picture") || lowerCmd.contains("capture") || lowerCmd.contains("foto") ||
+            lowerCmd.contains("click") || lowerCmd.contains("snap")) &&
+            (lowerCmd.contains("note") || lowerCmd.contains("save") || lowerCmd.contains("add") || 
+            lowerCmd.contains("attach") || lowerCmd.contains("record"))
+        
+        if (isPhotoNoteCommand) {
+            Log.d(TAG, "📸📝 PHOTO + NOTE command: '$command'")
+            capturePhotoForNote("Photo Note", "Captured via voice command: $command")
+            return
+        }
         
         // Photo click commands - ONLY take photo, NO vision analysis
         val isPhotoClickCommand = lowerCmd.contains("photo click") || 
@@ -2219,6 +2489,25 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             return
         }
         
+        // Notification commands - read/check phone notifications
+        if (lowerCmd.contains("notification") || lowerCmd.contains("read notification") ||
+            lowerCmd.contains("what notification") || lowerCmd.contains("any notification") ||
+            lowerCmd.contains("check notification") || lowerCmd.contains("show notification") ||
+            lowerCmd.contains("my notification") || lowerCmd.contains("recent notification") ||
+            // Hindi patterns
+            lowerCmd.contains("सूचना") || lowerCmd.contains("notification kya") ||
+            lowerCmd.contains("notification batao") || lowerCmd.contains("koi notification")) {
+            readNotifications(command)
+            return
+        }
+        
+        // Clear notifications command
+        if ((lowerCmd.contains("clear") || lowerCmd.contains("delete") || lowerCmd.contains("remove")) &&
+            lowerCmd.contains("notification")) {
+            clearNotifications()
+            return
+        }
+        
         // Object detection commands - analyze what's in front using camera
         // Simpler detection: if command asks about seeing/viewing/identifying something, use camera
         val isVisionRequest = 
@@ -2331,6 +2620,43 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             Handler(Looper.getMainLooper()).postDelayed({
                 if (isInConversationMode) startListening()
             }, 800)
+            return
+        }
+        
+        // ════════════════════════════════════════════════════════════════
+        // GMAIL EMAIL COMMANDS
+        // ════════════════════════════════════════════════════════════════
+        
+        // Check unread emails
+        if (lowerCmd.contains("check") && (lowerCmd.contains("email") || lowerCmd.contains("mail")) ||
+            lowerCmd.contains("unread email") || lowerCmd.contains("new email") ||
+            lowerCmd.contains("email check") || lowerCmd.contains("mails check") ||
+            lowerCmd.contains("मेल चेक") || lowerCmd.contains("ईमेल देखो")) {
+            checkUnreadEmails()
+            return
+        }
+
+        // Read emails
+        if ((lowerCmd.contains("read") || lowerCmd.contains("show")) && (lowerCmd.contains("email") || lowerCmd.contains("mail") || lowerCmd.contains("inbox")) ||
+            lowerCmd.contains("my emails") || lowerCmd.contains("show emails") ||
+            lowerCmd.contains("ईमेल पढ़ो") || lowerCmd.contains("मेल दिखाओ")) {
+            readRecentEmails()
+            return
+        }
+
+        // Send email command
+        if ((lowerCmd.contains("send") || lowerCmd.contains("compose")) && (lowerCmd.contains("email") || lowerCmd.contains("mail")) ||
+            lowerCmd.contains("send an email") || lowerCmd.contains("email bhejo") ||
+            lowerCmd.contains("mail भेजो")) {
+            // Start email composition process
+            initiateEmailComposition(command)
+            return
+        }
+
+        // Search emails
+        if (lowerCmd.contains("search") && (lowerCmd.contains("email") || lowerCmd.contains("mail")) ||
+            lowerCmd.contains("find email") || lowerCmd.contains("find my email")) {
+            searchEmailsVoice(command)
             return
         }
         
@@ -2670,8 +2996,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private suspend fun searchYouTubeFirstVideo(query: String): String? = withContext(Dispatchers.IO) {
         try {
             // YouTube Data API v3 endpoint
-            // Get free API key from: https://console.cloud.google.com/apis/credentials
-            val apiKey = "AIzaSyDpvor4Te-1r38i6sOVUrWbXwsxEchcZX8" // Replace with your API key
+            // Key fetched securely from Firebase Remote Config
+            val apiKey = RemoteConfigManager.youtubeApiKey
             val url = "https://www.googleapis.com/youtube/v3/search?" +
                     "part=snippet&" +
                     "q=${Uri.encode(query)}&" +
@@ -3315,6 +3641,82 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     }
     
     /**
+     * Read recent phone notifications to the user
+     */
+    private fun readNotifications(query: String) {
+        try {
+            Log.d(TAG, "📬 Reading notifications")
+            
+            val notifications = NotificationListener.getRecentNotifications(this)
+            
+            if (notifications.isEmpty()) {
+                speakOut("You have no recent notifications", "INFO")
+                return
+            }
+            
+            // Check how many notifications to read
+            val lowerQuery = query.lowercase()
+            val count = when {
+                lowerQuery.contains("all") -> notifications.size
+                lowerQuery.contains("last") || lowerQuery.contains("recent") -> minOf(5, notifications.size)
+                else -> minOf(5, notifications.size) // Default to 5
+            }
+            
+            // Build spoken message
+            val message = if (count == 1) {
+                val notif = notifications.first()
+                "You have one notification from ${notif.appName}. ${notif.title ?: ""} ${notif.text ?: ""}"
+            } else {
+                val total = notifications.size
+                val summary = StringBuilder()
+                summary.append("You have $total notification${if (total > 1) "s" else ""}. ")
+                
+                notifications.take(count).forEachIndexed { index, notif ->
+                    summary.append("${index + 1}. ${notif.appName}: ")
+                    if (!notif.title.isNullOrBlank()) {
+                        summary.append("${notif.title}. ")
+                    }
+                    if (!notif.text.isNullOrBlank() && index < 3) { // Only read text for first 3
+                        summary.append("${notif.text}. ")
+                    }
+                }
+                
+                summary.toString()
+            }
+            
+            // Add to AI history for context
+            aiHistory.add("user" to query)
+            aiHistory.add("model" to message)
+            updateConversation("Imi", message)
+            
+            speakOut(message, "INFO")
+            
+            // Resume listening after speaking
+            Handler(Looper.getMainLooper()).postDelayed({
+                if (isInConversationMode) startListening()
+            }, 800)
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "Error reading notifications: ${e.message}", e)
+            speakOut("Sorry, I couldn't access your notifications. Please check notification permissions.", "ERROR")
+        }
+    }
+    
+    /**
+     * Clear stored notifications
+     */
+    private fun clearNotifications() {
+        try {
+            NotificationListener.clearNotifications(this)
+            Log.d(TAG, "🗑️ Notifications cleared")
+            speakOut("Notifications cleared", "INFO")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error clearing notifications: ${e.message}", e)
+            speakOut("Failed to clear notifications", "ERROR")
+        }
+    }
+    
+    /**
      * Open Vision Chat activity for enhanced image analysis with Gemini Vision
      */
     private fun openVisionChat(autoCapture: Boolean = false, forceNew: Boolean = false, query: String? = null) {
@@ -3805,7 +4207,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         } else {
             // Fallback to Gemini to extract and calculate
             speakOut("Let me calculate the distance for you.", "INFO")
-            chatWithGemini("Calculate distance: $query and provide travel options")
+            chatWithGemini("Calculate distance: $query and provide travel options", requiresWakeWord = false)
         }
     }
     
@@ -3872,15 +4274,37 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         }
     }
 
-    private fun chatWithGemini(command: String) {
+    private fun chatWithGemini(command: String, requiresWakeWord: Boolean = true) {
         geminiClient ?: return
         if (tts?.isSpeaking == true) {
             tts?.stop()
             currentTtsJob?.cancel()
         }
+
+        val promptForAi = if (requiresWakeWord) {
+            val parsedWakeInput = WakeWordGate.parse(command)
+            if (!parsedWakeInput.hasWakePhrase) {
+                Log.d(TAG, "Ignoring AI response because wake phrase is missing: '$command'")
+                return
+            }
+
+            if (parsedWakeInput.cleanedInput.isBlank()) {
+                Log.d(TAG, "Wake phrase received without a follow-up AI query")
+                return
+            }
+
+            parsedWakeInput.cleanedInput
+        } else {
+            command.trim()
+        }
+
+        if (promptForAi.isBlank()) {
+            Log.d(TAG, "Ignoring empty AI prompt after processing")
+            return
+        }
         
         // Check if user is asking about previous conversation
-        val lowerCmd = command.lowercase()
+        val lowerCmd = promptForAi.lowercase()
         if (lowerCmd.contains("what did we talk") || lowerCmd.contains("previous conversation") || 
             lowerCmd.contains("what was our chat") || lowerCmd.contains("conversation history")) {
             
@@ -3890,7 +4314,13 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             }
             
             // Summarize conversation using Gemini
-            val summaryPrompt = "Summarize our conversation history briefly in 2-3 sentences."
+            val historyContext = buildConversationContextForQuery("conversation history summary", includeRecent = true)
+            val summaryPrompt = """
+                Summarize our full conversation history briefly in 2-3 sentences.
+                Focus on important user preferences, tasks discussed, and unresolved requests.
+
+                $historyContext
+            """.trimIndent()
             aiHistory.add("user" to summaryPrompt)
             
             currentTtsJob = mainScope.launch {
@@ -3907,24 +4337,108 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         }
         
         // Add current command to conversation history without clearing previous context
-        aiHistory.add("user" to command)
-        
-        // Limit history to prevent excessive memory usage (keep last 30 exchanges)
-        if (aiHistory.size > 60) { // 60 = 30 user + 30 AI responses
-            aiHistory.subList(0, aiHistory.size - 60).clear()
+        aiHistory.add("user" to promptForAi)
+
+        val recalledContext = buildConversationContextForQuery(promptForAi, includeRecent = true)
+        val runtimeContext = buildRuntimeTimeLocationContext()
+        val enrichedPrompt = if (recalledContext.isBlank()) {
+            """
+            $runtimeContext
+
+            Current user request: $promptForAi
+            """.trimIndent()
+        } else {
+            """
+            $runtimeContext
+
+            Use this relevant previous conversation context while answering.
+            If the user is referring to something discussed earlier, continue from that context.
+
+            $recalledContext
+
+            Current user request: $promptForAi
+            """.trimIndent()
         }
         
         currentTtsJob = mainScope.launch {
             try {
-                val reply = visionClient?.chat(command) ?: "Error connecting to AI"
+                val reply = visionClient?.chat(enrichedPrompt) ?: "Error connecting to AI"
                 aiHistory.add("model" to reply)
                 updateConversation("Imi", reply)
-                
+
+                // ✨ Auto-learn from voice input – no manual memory input needed
+                userMemoryManager.learnFromUserMessage(promptForAi)
+                userMemoryManager.incrementMessageStats(isNewConversation = false)
+
                 speakOnGlass(reply, "AI_RESPONSE")
             } catch (e: Exception) {
                 speakOnGlass("Error connecting to AI", "AI_RESPONSE")
             }
         }
+    }
+
+    private fun buildConversationContextForQuery(query: String, includeRecent: Boolean): String {
+        if (aiHistory.isEmpty()) return ""
+
+        val queryTokens = tokenizeForRecall(query)
+        val scored = mutableListOf<Triple<Int, Pair<String, String>, Int>>()
+
+        aiHistory.forEachIndexed { index, pair ->
+            val text = pair.second.trim()
+            if (text.isBlank()) return@forEachIndexed
+            val entryTokens = tokenizeForRecall(text)
+            val overlap = queryTokens.intersect(entryTokens).size
+            if (overlap > 0) {
+                scored.add(Triple(index, pair, overlap))
+            }
+        }
+
+        val ordered = linkedSetOf<Int>()
+        scored.sortedByDescending { it.third }.take(14).forEach { ordered.add(it.first) }
+        if (includeRecent) {
+            val start = (aiHistory.size - 10).coerceAtLeast(0)
+            for (i in start until aiHistory.size) {
+                ordered.add(i)
+            }
+        }
+
+        if (ordered.isEmpty()) return ""
+
+        val lines = ordered
+            .sorted()
+            .mapNotNull { idx -> aiHistory.getOrNull(idx) }
+            .mapNotNull { pair ->
+                val role = when (pair.first.lowercase()) {
+                    "user", "you" -> "User"
+                    "model", "assistant", "ai", "imi" -> "AI"
+                    else -> pair.first.ifBlank { "Context" }
+                }
+                val msg = pair.second.trim()
+                if (msg.isBlank()) null else "$role: $msg"
+            }
+
+        if (lines.isEmpty()) return ""
+        return "Relevant past conversation:\n" + lines.joinToString("\n")
+    }
+
+    private fun buildRuntimeTimeLocationContext(): String {
+        val nowDate = java.text.SimpleDateFormat("EEE, MMM dd yyyy", Locale.getDefault()).format(java.util.Date())
+        val nowTime = java.text.SimpleDateFormat("hh:mm a", Locale.getDefault()).format(java.util.Date())
+        val location = latestLocationLabel.takeIf { it.isNotBlank() } ?: "Location unavailable"
+        return "Current runtime context:\n- Local date: $nowDate\n- Local time: $nowTime\n- Current location: $location"
+    }
+
+    private fun tokenizeForRecall(text: String): Set<String> {
+        val stop = setOf(
+            "the", "and", "for", "with", "that", "this", "from", "what", "when", "where", "your", "have", "please",
+            "about", "want", "need", "help", "tell", "give", "show", "make", "open", "start", "stop", "latest", "today",
+            "this", "that", "were", "have", "been", "into", "just"
+        )
+        return Regex("[A-Za-z]{3,}")
+            .findAll(text.lowercase())
+            .map { it.value }
+            .filter { it !in stop }
+            .toSet()
     }
     
     private fun initGlassWifiListener() {
@@ -3950,13 +4464,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     }
 
     private fun initView() {
-        // Initialize chat RecyclerView
-        chatAdapter = ChatAdapter(chatMessages)
-        binding.rvChatMessages.apply {
-            layoutManager = androidx.recyclerview.widget.LinearLayoutManager(this@MainActivity)
-            adapter = chatAdapter
-        }
-        
         // Update location and time
         updateLocationAndTime()
         
@@ -3968,29 +4475,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             inputStream.close()
         } catch (e: Exception) {
             Log.e(TAG, "Error loading glass1.png: ${e.message}")
-        }
-        
-        // Handle send button
-        binding.btnSendMessage.setOnClickListener {
-            val message = binding.etChatInput.text.toString().trim()
-            if (message.isNotEmpty()) {
-                // Add user message
-                chatAdapter.addMessage(ChatMessage(text = message, isFromUser = true))
-                binding.rvChatMessages.scrollToPosition(chatMessages.size - 1)
-                binding.etChatInput.setText("")
-                
-                // Process with Gemini
-                processUserMessage(message)
-            }
-        }
-        
-        binding.btnVoice.isEnabled = voiceCommandEnabled
-        // Setup switch if it exists in layout, else ignore
-        // Glass microphone UI removed — do not auto-enable glass mic on wake.
-        // Any manual glass mic enablement must be done from Device Bind flow.
-        
-        binding.btnVoice.setOnClickListener {
-             if (voiceCommandEnabled) EventBus.getDefault().post(BluetoothEvent(BluetoothEvent.EventType.VOICE_TEXT, "wake up"))
         }
         
         // Quick wake button - bypass voice detection, directly trigger wake
@@ -4007,12 +4491,23 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             Log.d(TAG, "🎙️ Interrupt Mode: ${if (isChecked) "ENABLED" else "DISABLED"}")
         }
         
+        // Mute AI Button - Toggle AI listening
+        binding.btnMuteAi.setOnClickListener {
+            toggleAiMute()
+        }
+        
         // Vision Chat removed per user request
         
         binding.btnBt.setOnClickListener { startKtxActivity<DeviceBindActivity>() }
         
         // Setup other buttons - use SafeBleCommandHelper to avoid SDK bug crash
-        binding.btnCamera.setOnClickListener { SafeBleCommandHelper.takePhoto() }
+        binding.btnCamera.setOnClickListener {
+            if (!checkBLEConnection()) {
+                Toast.makeText(this, "Glasses not connected. Please pair first.", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            triggerGlassCameraCapture()
+        }
         binding.btnVideo.setOnClickListener { SafeBleCommandHelper.startRecording() }
         
         // Glass Gallery button
@@ -4021,7 +4516,121 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         // Vision Chat button - AI-powered image analysis via Bluetooth
         binding.btnVisionChat.setOnClickListener { openVisionChat() }
         
+        // Chat button - Open separate chat activity with conversation management
+        binding.btnChat.setOnClickListener { openChatActivity() }
+        binding.btnChat.setOnLongClickListener {
+            openConversationHistory()
+            true
+        }
+        
+        // Quick Notes button - Open notes and AI reminders
+        binding.btnQuickNotes.setOnClickListener { openQuickNotes() }
+        
+        // Meeting Minutes button - Open meeting recording and summaries
+        binding.btnMeetingMinutes.setOnClickListener { openMeetingMinutes() }
+        
+        // User Memory button - Configure AI personalization
+        binding.btnUserMemory.setOnClickListener { openUserMemory() }
+
+        // Let Us Know You button - 15-question profile builder for AI personalization
+        binding.btnLetUsKnowYou.setOnClickListener { openLetUsKnowYou() }
+        binding.cardLetUsKnowYou.setOnClickListener { openLetUsKnowYou() }
+
+        // Live Gallery button - view all captured photos
+        binding.btnLiveGallery.setOnClickListener { openLiveGallery() }
+
+        // Quick-access row cards
+        try { binding.cardLiveGallery.setOnClickListener { openLiveGallery() } } catch (e: Exception) {}
+        try { binding.cardChat.setOnClickListener { openChatActivity() } } catch (e: Exception) {}
+        try {
+            binding.cardChat.setOnLongClickListener {
+                openConversationHistory()
+                true
+            }
+        } catch (e: Exception) {}
+        try { binding.cardMeetingMinutes.setOnClickListener { openMeetingMinutes() } } catch (e: Exception) {}
+        try { binding.cardQuickNotes.setOnClickListener { openQuickNotes() } } catch (e: Exception) {}
+        try { binding.cardConversationHistory.setOnClickListener { openConversationHistory() } } catch (e: Exception) {}
+
+        // Vision Descriptions button - view all AI image descriptions
+        try {
+            binding.btnVisionDescriptions.setOnClickListener { openVisionDescriptions() }
+        } catch (e: Exception) { Log.w(TAG, "btnVisionDescriptions not bound") }
+
+        // Profile Icon button - Open profile screen
+        binding.profileIcon.setOnClickListener {
+            startActivity(Intent(this, ProfileActivity::class.java))
+        }
+
+        // Settings card - Open dedicated settings tab screen
+        binding.cardSettings.setOnClickListener {
+            startActivity(Intent(this, SettingsActivity::class.java))
+        }
+        
         // Upload settings removed per user request
+        
+        // ===== AI Model Switch Buttons =====
+        setupModelSwitchUI()
+
+        // Bottom navigation for top-level app structure
+        BottomNavManager.setup(binding.bottomNavigation, R.id.nav_home, this)
+    }
+    
+    /**
+     * Setup AI model switch UI (GPT Realtime vs Gemini Live)
+     */
+    private fun setupModelSwitchUI() {
+        val currentModel = GeminiLiveService.getSavedModelProvider(this)
+        updateModelSwitchUI(currentModel)
+        
+        binding.btnModelGpt.setOnClickListener {
+            selectModel(ModelProvider.GPT_REALTIME)
+        }
+        binding.btnModelGemini.setOnClickListener {
+            selectModel(ModelProvider.GEMINI_LIVE)
+        }
+    }
+    
+    private fun selectModel(provider: ModelProvider) {
+        val current = GeminiLiveService.getSavedModelProvider(this)
+        if (current == provider) return // already selected
+        
+        GeminiLiveService.saveModelProvider(this, provider)
+        updateModelSwitchUI(provider)
+        
+        val name = if (provider == ModelProvider.GPT_REALTIME) "GPT Realtime" else "Gemini Live"
+        Toast.makeText(this, "Switched to $name — will apply on next connection", Toast.LENGTH_SHORT).show()
+        Log.d(TAG, "🔄 Model switched to $name")
+        
+        // If Gemini Live is currently connected, disconnect so next connection uses new model
+        if (isGeminiLiveMode && geminiLiveService != null) {
+            geminiLiveService?.stopLiveConversation()
+            isGeminiLiveMode = false
+            Log.d(TAG, "🔄 Disconnected current session — reconnect will use $name")
+        }
+    }
+    
+    private fun updateModelSwitchUI(provider: ModelProvider) {
+        val accentColor = android.graphics.Color.parseColor("#00D9FF")
+        val defaultBg = android.graphics.Color.parseColor("#3A3A3A")
+        val selectedBg = android.graphics.Color.parseColor("#00D9FF")
+        val defaultText = android.graphics.Color.parseColor("#CCCCCC")
+        val selectedText = android.graphics.Color.parseColor("#1A1A1A")
+        
+        if (provider == ModelProvider.GPT_REALTIME) {
+            binding.btnModelGpt.setBackgroundColor(selectedBg)
+            binding.btnModelGpt.setTextColor(selectedText)
+            binding.btnModelGemini.setBackgroundColor(defaultBg)
+            binding.btnModelGemini.setTextColor(defaultText)
+            binding.tvCurrentModel.text = "Current: GPT Realtime Mini"
+        } else {
+            binding.btnModelGemini.setBackgroundColor(selectedBg)
+            binding.btnModelGemini.setTextColor(selectedText)
+            binding.btnModelGpt.setBackgroundColor(defaultBg)
+            binding.btnModelGpt.setTextColor(defaultText)
+            binding.tvCurrentModel.text = "Current: Gemini Live"
+        }
+        binding.tvCurrentModel.setTextColor(accentColor)
     }
     
     /**
@@ -4038,14 +4647,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 // Add to history
                 aiHistory.add(Pair("user", message))
                 aiHistory.add(Pair("model", response))
-                
-                // Update UI
-                chatAdapter.addMessage(ChatMessage(text = response, isFromUser = false))
-                binding.rvChatMessages.scrollToPosition(chatMessages.size - 1)
             } catch (e: Exception) {
                 Log.e(TAG, "Error processing message: ${e.message}", e)
-                chatAdapter.addMessage(ChatMessage(text = "Sorry, I encountered an error.", isFromUser = false))
-                binding.rvChatMessages.scrollToPosition(chatMessages.size - 1)
             }
         }
     }
@@ -4085,7 +4688,9 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                                         address.countryName?.let { append(it) }
                                     }
                                     lifecycleScope.launch(Dispatchers.Main) {
-                                        binding.tvLocationName.text = locationText.ifEmpty { "Location unavailable" }
+                                        val resolved = locationText.ifEmpty { "Location unavailable" }
+                                        latestLocationLabel = resolved
+                                        binding.tvLocationName.text = resolved
                                     }
                                 }
                             } catch (e: Exception) {
@@ -4120,42 +4725,128 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 .putString("conversation_history", historyJson)
                 .putLong("conversation_timestamp", System.currentTimeMillis())
                 .apply()
+            scheduleUserProfileSummaryRefresh()
             Log.d(TAG, "Conversation history saved (${aiHistory.size} entries)")
         } catch (e: Exception) {
             Log.e(TAG, "Error saving conversation history: ${e.message}")
         }
     }
+
+    private fun scheduleUserProfileSummaryRefresh() {
+        profileSummaryRefreshJob?.cancel()
+        profileSummaryRefreshJob = mainScope.launch(Dispatchers.Default) {
+            delay(250)
+            refreshUserProfileSummaryFromHistory()
+        }
+    }
+
+    private fun refreshUserProfileSummaryFromHistory() {
+        try {
+            val userMemory = userMemoryManager.getUserMemory()
+            val userRoles = setOf("user", "you")
+            val aiRoles = setOf("model", "assistant", "ai", "imi")
+
+            val userMessages = aiHistory.filter { it.first.lowercase() in userRoles }.map { it.second }
+            val aiMessages = aiHistory.filter { it.first.lowercase() in aiRoles }.map { it.second }
+            val topTopics = extractTopTopicsForProfile(userMessages)
+            val tone = estimateToneForProfile(userMessages)
+
+            val snapshot = buildString {
+                appendLine("Name: ${userMemory.userName.ifBlank { "Not set" }}")
+                appendLine("Occupation: ${userMemory.occupation.ifBlank { "Not set" }}")
+                appendLine("Location: ${userMemory.location.ifBlank { "Not set" }}")
+                appendLine("Preferred Language: ${userMemory.preferredLanguage}")
+                appendLine("Response Style: ${userMemory.preferredResponseStyle.name}")
+                appendLine("Total User Messages: ${userMessages.size}")
+                appendLine("Total AI Messages: ${aiMessages.size}")
+                appendLine("Interests: ${if (userMemory.interests.isEmpty()) "Not set" else userMemory.interests.joinToString(", ")}")
+                appendLine("Top Topics From Chat: ${if (topTopics.isEmpty()) "Not enough chat data" else topTopics.joinToString(", ")}")
+            }.trim()
+
+            val aiSummary = buildString {
+                append("This user")
+                if (userMemory.userName.isNotBlank()) {
+                    append(" (${userMemory.userName})")
+                }
+                append(" usually interacts in ${userMemory.preferredLanguage} and prefers ${userMemory.preferredResponseStyle.name.lowercase()} responses. ")
+                if (userMemory.interests.isNotEmpty()) {
+                    append("Main interests include ${userMemory.interests.take(4).joinToString(", ")}. ")
+                }
+                if (topTopics.isNotEmpty()) {
+                    append("Frequent conversation topics are ${topTopics.take(5).joinToString(", ")}. ")
+                }
+                append("Conversation tone appears ${tone}. Use this profile to personalize glasses responses.")
+            }
+
+            val now = System.currentTimeMillis()
+            prefs.edit()
+                .putString("user_profile_summary_snapshot", snapshot)
+                .putString("user_profile_summary_for_ai", aiSummary)
+                .putLong("user_profile_summary_timestamp", now)
+                .apply()
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to refresh user profile summary: ${e.message}")
+        }
+    }
+
+    private fun extractTopTopicsForProfile(userMessages: List<String>): List<String> {
+        if (userMessages.isEmpty()) return emptyList()
+
+        val stopWords = setOf(
+            "the", "and", "for", "with", "that", "this", "from", "what", "when", "where", "your", "have", "please",
+            "about", "want", "need", "help", "tell", "give", "show", "make", "open", "start", "stop", "latest", "today"
+        )
+
+        val counts = linkedMapOf<String, Int>()
+        userMessages.forEach { message ->
+            Regex("[A-Za-z]{4,}").findAll(message.lowercase()).forEach { match ->
+                val token = match.value
+                if (token !in stopWords) {
+                    counts[token] = (counts[token] ?: 0) + 1
+                }
+            }
+        }
+
+        return counts.entries
+            .sortedByDescending { it.value }
+            .take(8)
+            .map { it.key.replaceFirstChar { ch -> ch.uppercase() } }
+    }
+
+    private fun estimateToneForProfile(userMessages: List<String>): String {
+        if (userMessages.isEmpty()) return "neutral"
+
+        val positive = listOf("thanks", "thank", "great", "good", "awesome", "love", "nice", "cool")
+        val urgent = listOf("urgent", "quick", "fast", "now", "asap", "immediately")
+
+        val allText = userMessages.joinToString(" ").lowercase()
+        val positiveScore = positive.count { allText.contains(it) }
+        val urgentScore = urgent.count { allText.contains(it) }
+
+        return when {
+            urgentScore > positiveScore -> "task-focused and urgent"
+            positiveScore > 0 -> "friendly and collaborative"
+            else -> "neutral and practical"
+        }
+    }
     
     /**
-     * Load conversation history from SharedPreferences
-     * Only load if it's from the same session (within last hour)
+     * Load conversation history from SharedPreferences.
+     * Keep persistent history so AI can recall older conversations.
      */
     private fun loadConversationHistory() {
         try {
             val historyJson = prefs.getString("conversation_history", null)
-            val timestamp = prefs.getLong("conversation_timestamp", 0)
-            val currentTime = System.currentTimeMillis()
-            
-            // Only load history if it's recent (within last hour)
-            if (historyJson != null && (currentTime - timestamp) < 3600000) {
+            if (historyJson != null) {
                 val gson = Gson()
                 val type = object : TypeToken<MutableList<Pair<String, String>>>() {}.type
                 val loadedHistory: MutableList<Pair<String, String>>? = gson.fromJson(historyJson, type)
-                
 
-    
                 loadedHistory?.let {
                     aiHistory.clear()
                     aiHistory.addAll(it)
                     Log.d(TAG, "Conversation history loaded (${aiHistory.size} entries)")
                 }
-            } else if (historyJson != null) {
-                // Clear old history
-                prefs.edit()
-                    .remove("conversation_history")
-                    .remove("conversation_timestamp")
-                    .apply()
-                Log.d(TAG, "Old conversation history cleared")
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error loading conversation history: ${e.message}")
@@ -4240,6 +4931,32 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             Log.e(TAG, "disableGlassMic error: ${ex.message}")
         }
     }
+
+    private fun triggerWakeFromPhysicalButton(source: String) {
+        Log.d(TAG, "🔘 $source - WAKE TRIGGERED")
+        Toast.makeText(this@MainActivity, "🎙️ Hey IMI listening...", Toast.LENGTH_SHORT).show()
+
+        // Immediate tactile feedback
+        try {
+            val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as? android.os.Vibrator
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                vibrator?.vibrate(android.os.VibrationEffect.createOneShot(100, android.os.VibrationEffect.DEFAULT_AMPLITUDE))
+            } else {
+                @Suppress("DEPRECATION")
+                vibrator?.vibrate(100)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Vibration failed: ${e.message}")
+        }
+
+        try { HotHelper.getInstance(this@MainActivity).stop() } catch (e: Exception) {
+            Log.e(TAG, "Failed to stop HotHelper: ${e.message}")
+        }
+
+        // Reuse the existing wake pipeline (chime + Gemini Live start)
+        EventBus.getDefault().post(BluetoothEvent(BluetoothEvent.EventType.VOICE_TEXT, "wake up"))
+        Log.d(TAG, "✅ Wake event posted successfully from $source")
+    }
     
     inner class MyDeviceNotifyListener : GlassesDeviceNotifyListener() {
         override fun parseData(cmdType: Int, rsp: GlassesDeviceNotifyRsp?) {
@@ -4316,7 +5033,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                                 
                                 // Process the voice command
                                 runOnUiThread {
-                                    binding.etCommand.setText(voiceText)
                                     updateConversation("You (Glass)", voiceText)
                                     
                                     // Check if it's a wake word
@@ -4337,7 +5053,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                                         
                                         // 3. Enable buttons
                                         voiceCommandEnabled = true
-                                        binding.btnVoice.isEnabled = true
                                         
                                         // 4. Fast path: initialize and start Gemini Live for low-latency conversational streaming
                                         try {
@@ -4389,64 +5104,40 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                                                 speakOut("Taking photo", "ACTION")
                                             }
                                             2 -> {
-                                                // Button 2: Check for double-click if pressType byte is present
-                                                // Common values: 0x01 = single, 0x02 = double, 0x03 = long
+                                                // Button 2 mapping:
+                                                // pressType 0x01 (or missing/0x00) = wake
+                                                // pressType 0x02 = toggle mute
+                                                // pressType 0x03 = reserved (no wake)
                                                 if (pressType == 2 || pressType == 0x02) {
-                                                    // Double-click detected from hardware
-                                                    Log.d(TAG, "🔘🔘 Button 2 DOUBLE-CLICK detected via hardware")
-                                                    Toast.makeText(this@MainActivity, "🎙️🎙️ Double-click wake!", Toast.LENGTH_SHORT).show()
-                                                } else {
-                                                    // Single-click or no press type - treat as wake
-                                                    Log.d(TAG, "🔘 Button 2 pressed - WAKE TRIGGERED")
-                                                    Toast.makeText(this@MainActivity, "🎙️ Hey IMI listening...", Toast.LENGTH_SHORT).show()
-                                                }
-                                                
-                                                // Immediate feedback: vibration + sound
-                                                try {
-                                                    val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as? android.os.Vibrator
-                                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                                                        vibrator?.vibrate(android.os.VibrationEffect.createOneShot(100, android.os.VibrationEffect.DEFAULT_AMPLITUDE))
-                                                    } else {
-                                                        @Suppress("DEPRECATION")
-                                                        vibrator?.vibrate(100)
-                                                    }
-                                                } catch (e: Exception) {
-                                                    Log.w(TAG, "Vibration failed: ${e.message}")
-                                                }
-                                                
-                                                // Play wake chime for audio feedback (if available)
-                                                try {
-                                                    val chimeResId = resources.getIdentifier("chime", "raw", packageName)
-                                                    if (chimeResId != 0) {
-                                                        val mediaPlayer = MediaPlayer()
-                                                        mediaPlayer.setAudioStreamType(AudioManager.STREAM_MUSIC)
-                                                        val afd = resources.openRawResourceFd(chimeResId)
-                                                        if (afd != null) {
-                                                            mediaPlayer.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
-                                                            afd.close()
-                                                            mediaPlayer.prepare()
-                                                            mediaPlayer.setVolume(1.0f, 1.0f)
-                                                            mediaPlayer.start()
-                                                            mediaPlayer.setOnCompletionListener { it.release() }
+                                                    // Double-click detected from hardware - TOGGLE AI MUTE
+                                                    Log.d(TAG, "🔘🔘 Button 2 DOUBLE-CLICK detected - Toggling AI Mute")
+                                                    Toast.makeText(this@MainActivity, "🔇 Toggling AI Mute", Toast.LENGTH_SHORT).show()
+                                                    
+                                                    // Vibration feedback
+                                                    try {
+                                                        val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as? android.os.Vibrator
+                                                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                                            vibrator?.vibrate(android.os.VibrationEffect.createOneShot(150, android.os.VibrationEffect.DEFAULT_AMPLITUDE))
+                                                        } else {
+                                                            @Suppress("DEPRECATION")
+                                                            vibrator?.vibrate(150)
                                                         }
+                                                    } catch (e: Exception) {
+                                                        Log.w(TAG, "Vibration failed: ${e.message}")
                                                     }
-                                                } catch (e: Exception) {
-                                                    Log.w(TAG, "Wake chime not available: ${e.message}")
+                                                    
+                                                    // Toggle mute
+                                                    toggleAiMute()
+                                                } else if (pressType == 3 || pressType == 0x03) {
+                                                    Log.d(TAG, "🔘 Button 2 LONG-PRESS detected - no wake action")
+                                                } else {
+                                                    // Single-click (or unknown/no press type): wake + start AI flow
+                                                    triggerWakeFromPhysicalButton("Button 2 single-press")
                                                 }
-                                                
-                                                // Stop HotHelper and trigger wake
-                                                try { HotHelper.getInstance(this@MainActivity).stop() } catch (e: Exception) {
-                                                    Log.e(TAG, "Failed to stop HotHelper: ${e.message}")
-                                                }
-                                                EventBus.getDefault().post(BluetoothEvent(BluetoothEvent.EventType.VOICE_TEXT, "wake up"))
-                                                Log.d(TAG, "✅ Wake event posted successfully")
                                             }
                                             3 -> {
-                                                // Treat button 3 as a quick wake: trigger same wake flow
-                                                Log.d(TAG, "🔘 Glass button 3 pressed - triggering wake event")
-                                                Toast.makeText(this@MainActivity, "🎙️ Hey IMI listening...", Toast.LENGTH_SHORT).show()
-                                                try { HotHelper.getInstance(this@MainActivity).stop() } catch (e: Exception) {}
-                                                EventBus.getDefault().post(BluetoothEvent(BluetoothEvent.EventType.VOICE_TEXT, "wake up"))
+                                                // Keep button 3 as alternate wake trigger
+                                                triggerWakeFromPhysicalButton("Button 3")
                                             }
                                             else -> {
                                                 Log.d(TAG, "❓ Unknown button code: $buttonCode")
@@ -4504,7 +5195,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                                 Log.d(TAG, "💬 Text command from glasses: '$textMessage'")
                                 
                                 runOnUiThread {
-                                    binding.etCommand.setText(textMessage)
                                     updateConversation("You (Glass)", textMessage)
                                     handleSpokenCommand(textMessage)
                                 }
@@ -4517,8 +5207,15 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                     // Photo captured notification (cmdType 0x73 = 115)
                     0x73 -> {
                         Log.d(TAG, "📸 PHOTO_CAPTURED notification from glasses")
-                        // Photo data will arrive separately via EventBus PHOTO_CAPTURED event
-                        // Just log that we got the notification
+                        // Some firmware sends notify first and payload later (or via WiFi endpoint).
+                        if (isCameraCaptureInProgress && lastCapturedPhoto == null) {
+                            Handler(Looper.getMainLooper()).postDelayed({
+                                if (isCameraCaptureInProgress && lastCapturedPhoto == null) {
+                                    Log.w(TAG, "PHOTO_CAPTURED notify received but no image payload yet - running fallback")
+                                    tryCameraFallback()
+                                }
+                            }, 1800)
+                        }
                     }
                     
                     else -> {
@@ -4849,6 +5546,36 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                     "Setting reminder: $reminderText"
                 }
                 
+                "create_note" -> {
+                    val title = args["title"] as? String ?: return "Error: No note title provided"
+                    val content = args["content"] as? String ?: return "Error: No note content provided"
+                    runOnUiThread {
+                        notesManager?.createNote(title, content, QuickNote.CreatedBy.AI)
+                        Toast.makeText(this, "📝 Note created: $title", Toast.LENGTH_SHORT).show()
+                    }
+                    "Note created: $title"
+                }
+                
+                "capture_photo_note" -> {
+                    val title = args["title"] as? String ?: "Photo Note"
+                    val content = args["content"] as? String ?: "Photo captured via voice command"
+                    Log.d(TAG, "📸📝 Capture photo note: $title")
+                    runOnUiThread {
+                        capturePhotoForNote(title, content)
+                    }
+                    "Taking photo and creating note: $title. The photo will be attached to your note."
+                }
+                
+                "start_meeting" -> {
+                    val title = args["title"] as? String
+                    runOnUiThread {
+                        startMeetingMinutes(title)
+                        val displayTitle = if (title.isNullOrBlank()) "meeting" else "'$title'"
+                        Toast.makeText(this, "🎤 Starting $displayTitle recording...", Toast.LENGTH_SHORT).show()
+                    }
+                    "Meeting recording started"
+                }
+                
                 "get_weather" -> {
                     val location = (args["location"] as? String)?.trim()
                     try {
@@ -4960,6 +5687,146 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     }
     
     /**
+     * Robust camera capture triggered from the camera button.
+     * Sends BLE take-photo command, waits for the photo to arrive,
+     * and tries SDK reflection fallback if BLE transfer times out.
+     */
+    private fun triggerGlassCameraCapture() {
+        Toast.makeText(this, "Taking photo...", Toast.LENGTH_SHORT).show()
+        Log.d(TAG, "📷 Camera button pressed - triggering glass camera capture")
+
+        if (isCameraCaptureInProgress) {
+            Log.w(TAG, "Camera capture already in progress - ignoring duplicate trigger")
+            return
+        }
+
+        isCameraCaptureInProgress = true
+
+        // Clear previous photo so timeout check works correctly
+        lastCapturedPhoto = null
+
+        // Cancel old timeout if any
+        cameraCaptureTimeoutRunnable?.let { Handler(Looper.getMainLooper()).removeCallbacks(it) }
+
+        // SafeBleCommandHelper already handles CoV enable/capture/disable.
+        SafeBleCommandHelper.takePhoto(
+            onSuccess = { code ->
+                Log.d(TAG, "✅ Camera command acknowledged by glasses (code=$code)")
+                // Photo data should arrive via device notify -> EventBus PHOTO_CAPTURED.
+            },
+            onError = { error ->
+                Log.e(TAG, "❌ Camera BLE command failed: $error")
+                runOnUiThread {
+                    Toast.makeText(this@MainActivity, "Retrying camera...", Toast.LENGTH_SHORT).show()
+                }
+                tryCameraFallback()
+            }
+        )
+
+        // Safety timeout: if no photo arrives, fallback.
+        val timeoutRunnable = Runnable {
+            if (lastCapturedPhoto == null) {
+                Log.w(TAG, "⚠️ No photo received after 10s timeout - trying fallback methods")
+                tryCameraFallback()
+            } else {
+                isCameraCaptureInProgress = false
+            }
+        }
+        cameraCaptureTimeoutRunnable = timeoutRunnable
+        Handler(Looper.getMainLooper()).postDelayed(timeoutRunnable, 10000)
+    }
+
+    /**
+     * Fallback camera capture: tries SDK reflection capturePhoto(),
+     * then direct BLE retry as last resort.
+     */
+    private fun tryCameraFallback() {
+        mainScope.launch {
+            try {
+                // Attempt 0: Pull from WiFi endpoint if already connected.
+                val wifiBytes = withContext(Dispatchers.IO) {
+                    try {
+                        if (wifiP2PLiveCamera?.isConnectedToGlasses() == true) {
+                            wifiP2PLiveCamera?.capturePhoto()
+                        } else {
+                            null
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "WiFi fallback capture failed: ${e.message}")
+                        null
+                    }
+                }
+
+                if (wifiBytes != null && wifiBytes.isNotEmpty()) {
+                    Log.d(TAG, "✅ WiFi fallback capture returned ${wifiBytes.size} bytes")
+                    lastCapturedPhoto = wifiBytes
+                    savePhoto(wifiBytes)
+                    EventBus.getDefault().post(BluetoothEvent(BluetoothEvent.EventType.PHOTO_CAPTURED, wifiBytes))
+                    isCameraCaptureInProgress = false
+                    runOnUiThread {
+                        Toast.makeText(this@MainActivity, "Photo saved", Toast.LENGTH_SHORT).show()
+                    }
+                    return@launch
+                }
+
+                // Attempt 1: SDK reflection - some firmware versions expose capturePhoto()
+                val maybeBytes = withContext(Dispatchers.IO) {
+                    try {
+                        val captureMethod = LargeDataHandler::class.java.getMethod("capturePhoto")
+                        captureMethod.invoke(LargeDataHandler.getInstance()) as? ByteArray
+                    } catch (e: Exception) {
+                        Log.w(TAG, "SDK capturePhoto() not available: ${e.message}")
+                        null
+                    }
+                }
+
+                if (maybeBytes != null && maybeBytes.isNotEmpty()) {
+                    Log.d(TAG, "✅ Fallback capturePhoto() returned ${maybeBytes.size} bytes")
+                    lastCapturedPhoto = maybeBytes
+                    savePhoto(maybeBytes)
+                    EventBus.getDefault().post(BluetoothEvent(BluetoothEvent.EventType.PHOTO_CAPTURED, maybeBytes))
+                    isCameraCaptureInProgress = false
+                    runOnUiThread {
+                        Toast.makeText(this@MainActivity, "Photo saved", Toast.LENGTH_SHORT).show()
+                        try {
+                            binding.llPhotoPreview.visibility = android.view.View.VISIBLE
+                            val bmp = android.graphics.BitmapFactory.decodeByteArray(maybeBytes, 0, maybeBytes.size)
+                            binding.ivConversationImage.setImageBitmap(bmp)
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Preview update failed: ${e.message}")
+                        }
+                    }
+                    return@launch
+                }
+
+                // Attempt 2: Retry the BLE command one more time
+                Log.d(TAG, "🔁 Retrying BLE takePhoto command...")
+                SafeBleCommandHelper.takePhoto(
+                    onSuccess = { code ->
+                        Log.d(TAG, "✅ Retry camera command sent (code=$code)")
+                        runOnUiThread {
+                            Toast.makeText(this@MainActivity, "Photo command sent. Check gallery.", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    onError = { error ->
+                        Log.e(TAG, "❌ Retry also failed: $error")
+                        isCameraCaptureInProgress = false
+                        runOnUiThread {
+                            Toast.makeText(this@MainActivity, "Camera failed. Make sure glasses are in range.", Toast.LENGTH_LONG).show()
+                        }
+                    }
+                )
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ Camera fallback error: ${e.message}", e)
+                isCameraCaptureInProgress = false
+                runOnUiThread {
+                    Toast.makeText(this@MainActivity, "Camera unavailable", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
+    /**
      * Open camera in view mode (Glass camera)
      */
     private fun openCamera() {
@@ -5008,6 +5875,132 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             speakOut("Taking photo", "ACTION")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to take photo with glass: ${e.message}")
+        }
+    }
+    
+    /**
+     * Capture a photo and attach it to a new Quick Note.
+     * Uses the same WiFi P2P photo download as VisionChat.
+     */
+    private fun capturePhotoForNote(title: String, content: String) {
+        try {
+            Log.d(TAG, "📸📝 Capturing photo for note: $title")
+            
+            speakOut("Photo le raha hu aur note mein save karunga", "ACTION")
+            Toast.makeText(this, "📸📝 Taking photo for note: $title", Toast.LENGTH_SHORT).show()
+            
+            // Trigger glasses camera capture via BLE
+            SafeBleCommandHelper.takePhoto(
+                onSuccess = { code ->
+                    Log.d(TAG, "✅ Photo command sent (code: $code), downloading via WiFi...")
+                    
+                    // Download photo via WiFi P2P (same as VisionChat)
+                    mainScope.launch {
+                        try {
+                            // Discover glasses IP if not already found
+                            if (wifiP2PLiveCamera?.isConnectedToGlasses() != true) {
+                                wifiP2PLiveCamera?.discoverGlasses()
+                            }
+                            
+                            // Wait a bit for photo to be ready on glasses
+                            delay(800)
+                            
+                            // Download the photo
+                            val imageBytes = wifiP2PLiveCamera?.capturePhoto()
+                            
+                            if (imageBytes != null && imageBytes.size > 1000) {
+                                Log.d(TAG, "📸✅ Photo downloaded: ${imageBytes.size} bytes")
+                                
+                                // Create note with the photo
+                                val bitmap = android.graphics.BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
+                                if (bitmap != null) {
+                                    // Create a temporary note ID first
+                                    val note = notesManager?.createNoteWithImage(
+                                        title = title,
+                                        content = content,
+                                        imagePath = null,
+                                        createdBy = QuickNote.CreatedBy.AI
+                                    )
+                                    
+                                    if (note != null) {
+                                        // Save the photo and update the note
+                                        val imagePath = notesManager?.saveNoteImage(bitmap, note.id)
+                                        if (imagePath != null) {
+                                            notesManager?.updateNoteWithImage(note.id, title, content, imagePath)
+                                            Log.d(TAG, "📝✅ Note created with photo: ${note.id}")
+                                            runOnUiThread {
+                                                Toast.makeText(this@MainActivity, "📸 Photo note saved!", Toast.LENGTH_SHORT).show()
+                                                speakOut("Photo note save ho gaya", "SUCCESS")
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    Log.e(TAG, "Failed to decode photo bitmap")
+                                    runOnUiThread {
+                                        speakOut("Photo decode nahi hua", "ERROR")
+                                    }
+                                }
+                            } else {
+                                Log.e(TAG, "Photo download failed or too small")
+                                runOnUiThread {
+                                    speakOut("Photo download nahi hua. WiFi check karein.", "ERROR")
+                                    Toast.makeText(this@MainActivity, "Photo download failed. Check WiFi connection to glasses.", Toast.LENGTH_LONG).show()
+                                }
+                            }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Photo download error: ${e.message}", e)
+                            runOnUiThread {
+                                speakOut("Photo download mein error", "ERROR")
+                                Toast.makeText(this@MainActivity, "Photo download error: ${e.message}", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }
+                },
+                onError = { error ->
+                    Log.e(TAG, "❌ Photo capture command failed: $error")
+                    runOnUiThread {
+                        speakOut("Camera command fail ho gaya", "ERROR")
+                        Toast.makeText(this@MainActivity, "Camera error: $error", Toast.LENGTH_SHORT).show()
+                    }
+                },
+                timeoutMs = 15000
+            )
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to capture photo for note: ${e.message}", e)
+            speakOut("Photo note mein error aaya", "ERROR")
+        }
+    }
+    
+    /**
+     * Attach a received photo (as bytes) to the pending photo note.
+     * Called from onPhotoReceived when a pendingPhotoNoteId is set.
+     */
+    private fun attachPhotoToPendingNote(imageBytes: ByteArray) {
+        val noteId = pendingPhotoNoteId ?: return
+        pendingPhotoNoteId = null  // Clear pending
+        
+        try {
+            val bitmap = android.graphics.BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
+            if (bitmap != null) {
+                val imagePath = notesManager?.saveNoteImage(bitmap, noteId)
+                if (imagePath != null) {
+                    // Update the note with the image path
+                    val notes = notesManager?.getAllNotes() ?: return
+                    val note = notes.find { it.id == noteId }
+                    if (note != null) {
+                        notesManager?.updateNoteWithImage(noteId, note.title, note.content, imagePath)
+                        Log.d(TAG, "📸✅ Photo attached to note: $noteId")
+                        runOnUiThread {
+                            Toast.makeText(this, "📸 Photo attached to note!", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }
+            } else {
+                Log.e(TAG, "Failed to decode photo bytes for note")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to attach photo to note: ${e.message}", e)
         }
     }
     
@@ -5080,18 +6073,151 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 val intent = Intent(Intent.ACTION_VIEW, uri)
                 intent.setPackage("com.whatsapp")
                 
-                if (intent.resolveActivity(packageManager) != null) {
-                    startActivity(intent)
+                // Check if accessibility service is enabled
+                val isAccessibilityEnabled = isAccessibilityServiceEnabled()
+                
+                if (isAccessibilityEnabled) {
+                    // Service is enabled, proceed with auto-send
+                    Log.d(TAG, "Accessibility service enabled - will auto-send message")
+                    enableWhatsAppAutoSend()
+                    Handler(Looper.getMainLooper()).postDelayed({
+                        if (intent.resolveActivity(packageManager) != null) {
+                            startActivity(intent)
+                        } else {
+                            startActivity(Intent(Intent.ACTION_VIEW, uri))
+                        }
+                    }, 100)
                 } else {
-                    // Fallback without package restriction
-                    val fallbackIntent = Intent(Intent.ACTION_VIEW, uri)
-                    startActivity(fallbackIntent)
+                    // Service is NOT enabled - show dialog asking user to enable it
+                    showAccessibilityDialog(contactName, message, uri)
                 }
             } else {
                 speakOut("Could not find contact $contactName", "MSG_ERROR")
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to send WhatsApp message: ${e.message}")
+            speakOut("Failed to send message to $contactName", "MSG_ERROR")
+        }
+    }
+    
+    /**
+     * Show dialog to enable accessibility service
+     */
+    private fun showAccessibilityDialog(contactName: String, message: String, uri: Uri) {
+        AlertDialog.Builder(this)
+            .setTitle("Enable Auto-Send?")
+            .setMessage("To automatically send WhatsApp messages, you need to enable 'WhatsApp Auto-Send' in Accessibility Settings.\n\nWould you like to enable it now?")
+            .setPositiveButton("Enable Accessibility") { _, _ ->
+                // Open accessibility settings
+                openAccessibilitySettings()
+                // Still open WhatsApp for manual send as fallback
+                Handler(Looper.getMainLooper()).postDelayed({
+                    try {
+                        val intent = Intent(Intent.ACTION_VIEW, uri)
+                        intent.setPackage("com.whatsapp")
+                        if (intent.resolveActivity(packageManager) != null) {
+                            startActivity(intent)
+                        } else {
+                            startActivity(Intent(Intent.ACTION_VIEW, uri))
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error opening WhatsApp: ${e.message}")
+                    }
+                }, 500)
+            }
+            .setNegativeButton("Send Without Auto-Send") { _, _ ->
+                // Open WhatsApp for manual send
+                try {
+                    val intent = Intent(Intent.ACTION_VIEW, uri)
+                    intent.setPackage("com.whatsapp")
+                    if (intent.resolveActivity(packageManager) != null) {
+                        startActivity(intent)
+                    } else {
+                        startActivity(Intent(Intent.ACTION_VIEW, uri))
+                    }
+                    speakOut("Message opened in WhatsApp - tap Send manually", "MSG_INFO")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error opening WhatsApp: ${e.message}")
+                }
+            }
+            .setNeutralButton("Cancel") { dialog, _ ->
+                dialog.dismiss()
+                speakOut("Message sending cancelled", "MSG_INFO")
+            }
+            .show()
+    }
+    
+    /**
+     * Open accessibility settings for user to enable the service
+     */
+    private fun openAccessibilitySettings() {
+        try {
+            val intent = Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)
+            startActivity(intent)
+            Log.d(TAG, "Opened Accessibility Settings")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error opening accessibility settings: ${e.message}")
+            Toast.makeText(this, "Please manually enable accessibility at Settings > Accessibility", Toast.LENGTH_LONG).show()
+        }
+    }
+    
+    /**
+     * Check if WhatsAppAutoSendService accessibility service is enabled
+     */
+    private fun isAccessibilityServiceEnabled(): Boolean {
+        val am = getSystemService(Context.ACCESSIBILITY_SERVICE) as AccessibilityManager
+        // Get all enabled accessibility services
+        val allFeedbackTypes = AccessibilityServiceInfo.FEEDBACK_SPOKEN or
+                              AccessibilityServiceInfo.FEEDBACK_HAPTIC or
+                              AccessibilityServiceInfo.FEEDBACK_AUDIBLE or
+                              AccessibilityServiceInfo.FEEDBACK_VISUAL or
+                              AccessibilityServiceInfo.FEEDBACK_GENERIC
+        val enabledServices = am.getEnabledAccessibilityServiceList(allFeedbackTypes)
+        
+        for (service in enabledServices) {
+            if (service.id.contains("WhatsAppAutoSendService")) {
+                Log.d(TAG, "WhatsAppAutoSendService is enabled")
+                return true
+            }
+        }
+        
+        Log.d(TAG, "WhatsAppAutoSendService is NOT enabled")
+        return false
+    }
+    
+    /**
+     * Enable auto-send in the accessibility service
+     */
+    private fun enableWhatsAppAutoSend() {
+        try {
+            // Get the service instance via broadcast or direct call
+            val am = getSystemService(Context.ACCESSIBILITY_SERVICE) as AccessibilityManager
+            // Get all enabled accessibility services
+            val allFeedbackTypes = AccessibilityServiceInfo.FEEDBACK_SPOKEN or
+                                  AccessibilityServiceInfo.FEEDBACK_HAPTIC or
+                                  AccessibilityServiceInfo.FEEDBACK_AUDIBLE or
+                                  AccessibilityServiceInfo.FEEDBACK_VISUAL or
+                                  AccessibilityServiceInfo.FEEDBACK_GENERIC
+            val enabledServices = am.getEnabledAccessibilityServiceList(allFeedbackTypes)
+            
+            for (service in enabledServices) {
+                if (service.id.contains("WhatsAppAutoSendService")) {
+                    Log.d(TAG, "Found WhatsAppAutoSendService, enabling auto-send")
+                    // The service will activate based on window state changes
+                    // We'll set a shared preference flag that the service can check
+                    val prefs = getSharedPreferences("whatsapp_auto_send", Context.MODE_PRIVATE)
+                    prefs.edit().putBoolean("should_auto_send", true).apply()
+                    
+                    // Reset the flag after 5 seconds to avoid unintended auto-sending
+                    Handler(Looper.getMainLooper()).postDelayed({
+                        prefs.edit().putBoolean("should_auto_send", false).apply()
+                    }, 5000)
+                    
+                    return
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error enabling WhatsApp auto-send: ${e.message}")
         }
     }
     
@@ -5172,7 +6298,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                         // Only update the glasses display when the AI output is final to
                         // avoid spamming the glasses with many interim updates (which
                         // cause frequent BLE ACKs and can create "ok ok" echoes).
-                        if (isFinal) {
+                        if (isFinal && !isCameraCaptureInProgress) {
                             try {
                                 val utf8 = output.toByteArray(Charsets.UTF_8)
                                 val safeLen = minOf(utf8.size, 250)
@@ -5186,6 +6312,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                             } catch (e: Exception) {
                                 Log.w(TAG, "Glass display error: ${e.message}")
                             }
+                        } else if (isFinal) {
+                            Log.d(TAG, "Skipping glass display write while camera capture is in progress")
                         }
                     }
                     
@@ -5197,14 +6325,51 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 runOnUiThread {
                     Log.d(TAG, "✅ Turn complete - Input: '$fullInput', Output: '$fullOutput'")
                     
-                    // Save to conversation history
-                    if (fullInput.isNotEmpty() && fullOutput.isNotEmpty()) {
-                        aiHistory.add(Pair(fullInput, fullOutput))
+                    // Save to conversation history (supports partial turns too)
+                    val trimmedInput = fullInput.trim()
+                    val trimmedOutput = fullOutput.trim()
+                    var historyUpdated = false
+                    if (trimmedInput.isNotEmpty()) {
+                        aiHistory.add("user" to trimmedInput)
+                        historyUpdated = true
+                    }
+                    if (trimmedOutput.isNotEmpty()) {
+                        aiHistory.add("model" to trimmedOutput)
+                        historyUpdated = true
+                    }
+                    if (historyUpdated) {
                         saveConversationHistory()
                     }
                     
-                    // ❌ REMOVED: Vision Chat triggers from Gemini Live - Vision Chat sirf manual open hoga
                     val lowerInput = fullInput.lowercase()
+                    
+                    // 👋 Check for goodbye command to stop AI until wake word triggers again
+                    if (lowerInput.contains("goodbye imi") || 
+                        lowerInput.contains("good bye imi") ||
+                        lowerInput.contains("bye imi") ||
+                        lowerInput.contains("imi bye") ||
+                        lowerInput.contains("goodbye") ||
+                        lowerInput.contains("bye bye") ||
+                        lowerInput.contains("see you imi") ||
+                        lowerInput.contains("talk later imi") ||
+                        lowerInput.contains("alvida") ||
+                        lowerInput.contains("band karo")) {
+                        Log.d(TAG, "👋 Goodbye command detected: '$fullInput' - Stopping AI until wake word")
+                        
+                        // Acknowledge and stop
+                        geminiLiveService?.speakText("Goodbye! Say Hey Imi when you need me again.", speakDirectly = true)
+                        
+                        // Stop conversation after brief delay to let goodbye message play
+                        Handler(Looper.getMainLooper()).postDelayed({
+                            Log.d(TAG, "🛑 Executing goodbye - stopping Gemini Live now")
+                            stopGeminiLiveConversation(keepHeadsetConnected = true)
+                            Toast.makeText(this@MainActivity, "AI stopped. Say 'Hey Imi' to start again.", Toast.LENGTH_SHORT).show()
+                        }, 2500)
+                        
+                        return@runOnUiThread
+                    }
+                    
+                    // ❌ REMOVED: Vision Chat triggers from Gemini Live - Vision Chat sirf manual open hoga
                     
                     // 🛑 Check for stop vision streaming commands
                     if (isStopVisionCommand(lowerInput)) {
@@ -5323,13 +6488,9 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                         // Connection lost, restart wake word detection
                         isGeminiLiveMode = false
                         isInConversationMode = false
-                        try {
-                            Handler(Looper.getMainLooper()).postDelayed({
-                                HotHelper.getInstance(this@MainActivity).start()
-                            }, 1000)
-                        } catch (e: Exception) {
-                            Log.e(TAG, "Failed to restart wake word: ${e.message}")
-                        }
+                        Handler(Looper.getMainLooper()).postDelayed({
+                            startWakeWordDetectorIfReady("gemini-connection-lost")
+                        }, 1000)
                     }
                 }
             }
@@ -5443,7 +6604,10 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     /**
      * Stop Gemini Live conversation session
      */
-    private fun stopGeminiLiveConversation(keepHeadsetConnected: Boolean = false) {
+    private fun stopGeminiLiveConversation(
+        keepHeadsetConnected: Boolean = false,
+        restartWakeWord: Boolean = true
+    ) {
         try {
             Log.d(TAG, "🛑 Stopping Gemini Live conversation... (keepHeadset=$keepHeadsetConnected)")
             geminiLiveService?.stopLiveConversation()
@@ -5463,15 +6627,11 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             
             updateConversation("System", "Gemini Live conversation ended")
             
-            // Restart wake word detection
-            Handler(Looper.getMainLooper()).postDelayed({
-                try {
-                    HotHelper.getInstance(this).start()
-                    Log.d(TAG, "✅ Wake word detection restarted")
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed to restart wake word: ${e.message}")
-                }
-            }, 500)
+            if (restartWakeWord) {
+                Handler(Looper.getMainLooper()).postDelayed({
+                    startWakeWordDetectorIfReady("gemini-live-stopped")
+                }, 500)
+            }
             
         } catch (e: Exception) {
             Log.e(TAG, "Error stopping Gemini Live: ${e.message}", e)
@@ -5526,7 +6686,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         
         // Initialize vision client
         if (visionClient == null) {
-            visionClient = GeminiAIClient()
+            visionClient = GeminiAIClient(this)
         }
         
         isLiveCameraActive = true
@@ -5792,6 +6952,14 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         wifiP2PLiveCamera?.setListener(object : WifiP2PLiveCamera.LiveCameraListener {
             override fun onPhotoReceived(imageBytes: ByteArray) {
                 Log.d(TAG, "📷 [WiFi P2P] Photo received: ${imageBytes.size} bytes")
+                
+                // Check if there's a pending photo note to attach this image to
+                if (pendingPhotoNoteId != null) {
+                    Log.d(TAG, "📸📝 Attaching photo to pending note: $pendingPhotoNoteId")
+                    attachPhotoToPendingNote(imageBytes)
+                    return  // Don't analyze - this photo is for the note
+                }
+                
                 // Analyze using the same function as Bluetooth mode
                 analyzeWifiP2PPhoto(imageBytes)
             }
@@ -5837,7 +7005,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         
         // Initialize vision client if needed
         if (visionClient == null) {
-            visionClient = GeminiAIClient()
+            visionClient = GeminiAIClient(this)
         }
         
         isWifiP2PLiveMode = true
@@ -5964,6 +7132,42 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
      * Open Glass Media Gallery
      * Shows photos/videos from glass with WiFi hotspot transfer
      */
+    /**
+     * Open Live Gallery – shows all locally captured photos from the glasses.
+     */
+    private fun openLiveGallery() {
+        Log.d(TAG, "🖼️ Opening Live Gallery...")
+        try {
+            LiveGalleryActivity.launch(this)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error opening Live Gallery: ${e.message}")
+        }
+    }
+
+    private fun openVisionDescriptions() {
+        Log.d(TAG, "🔍 Opening Vision Descriptions Vault...")
+        try {
+            com.sdk.glassessdksample.ui.gallery.ImageDescriptionVaultActivity.launch(this)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error opening Vision Descriptions: ${e.message}")
+        }
+    }
+
+    private fun refreshVisionDescriptionsCard() {
+        try {
+            val store = com.sdk.glassessdksample.ui.gallery.ImageDescriptionStore
+            val all   = store.getAll(this)
+            val count = all.size
+            binding.tvVisionDescCount.text =
+                "$count description${if (count == 1) "" else "s"} stored"
+            val last = all.firstOrNull()
+            binding.tvVisionDescPreview.text = if (last != null)
+                "📷 ${last.fileName}: ${last.description.take(80)}${if (last.description.length > 80) "…" else ""}"
+            else
+                "No descriptions yet — analyze photos in Live Gallery first"
+        } catch (e: Exception) { Log.w(TAG, "refreshVisionDescriptionsCard: ${e.message}") }
+    }
+
     private fun openGlassMediaGallery() {
         Log.d(TAG, "📷 Opening Glass Media Gallery...")
         speakOut("Glass gallery khol raha hoon", "GALLERY")
@@ -5981,6 +7185,106 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         } catch (e: Exception) {
             Log.e(TAG, "Error opening gallery: ${e.message}")
             speakOut("Gallery nahi khul saki", "ERROR")
+        }
+    }
+
+    /**
+     * Open Chat Activity
+     * Dedicated chat screen with conversation management and side drawer
+     */
+    private fun openChatActivity() {
+        try {
+            val intent = Intent(this, ChatActivity::class.java)
+            startActivity(intent)
+            Log.d(TAG, "💬 Chat Activity launched")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error launching Chat Activity", e)
+            Toast.makeText(this, "Failed to open chat", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun openConversationHistory() {
+        try {
+            // Persist current in-memory history so the screen always shows latest turns.
+            saveConversationHistory()
+            val intent = Intent(this, ConversationHistoryActivity::class.java)
+            startActivity(intent)
+            Log.d(TAG, "📜 Conversation History Activity launched")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error launching Conversation History Activity", e)
+            Toast.makeText(this, "Failed to open conversation history", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun openQuickNotes() {
+        try {
+            val intent = Intent(this, QuickNotesActivity::class.java)
+            startActivity(intent)
+            Log.d(TAG, "📝 Quick Notes Activity launched")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error launching Quick Notes Activity", e)
+            Toast.makeText(this, "Failed to open quick notes", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun openMeetingMinutes() {
+        try {
+            val intent = Intent(this, MeetingMinutesActivity::class.java)
+            startActivity(intent)
+            Log.d(TAG, "🎤 Meeting Minutes Activity launched")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error launching Meeting Minutes Activity", e)
+            Toast.makeText(this, "Failed to open meeting minutes", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun openUserMemory() {
+        try {
+            val intent = Intent(this, UserMemoryActivity::class.java)
+            startActivity(intent)
+            Log.d(TAG, "🧠 User Memory Activity launched")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error launching User Memory Activity", e)
+            Toast.makeText(this, "Failed to open user memory settings", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun openLetUsKnowYou() {
+        try {
+            val intent = Intent(this, LetUsKnowYouActivity::class.java)
+            startActivity(intent)
+            Log.d(TAG, "🧾 Let Us Know You Activity launched")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error launching Let Us Know You Activity", e)
+            Toast.makeText(this, "Failed to open Let Us Know You", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun startMeetingMinutes(title: String? = null) {
+        try {
+            // Stop Gemini Live to avoid microphone conflict
+            geminiLiveService?.stopLiveConversation()
+            isGeminiLiveMode = false
+            
+            // Stop traditional speech recognition if active
+            if (isListening) {
+                try {
+                    speechRecognizer?.stopListening()
+                    isListening = false
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error stopping speech recognizer: ${e.message}")
+                }
+            }
+            
+            val intent = Intent(this, ActiveMeetingActivity::class.java)
+            if (!title.isNullOrBlank()) {
+                intent.putExtra(ActiveMeetingActivity.EXTRA_MEETING_TITLE, title)
+            }
+            startActivity(intent)
+            Log.d(TAG, "🎤 Active Meeting started - AI paused (Title: ${title ?: "auto-generated"})")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error starting meeting", e)
+            Toast.makeText(this, "Failed to start meeting", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -6151,6 +7455,99 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     @Volatile
     private var isVisionChatOpen = false
     
+    /**
+     * Check unread emails count
+     */
+    private fun checkUnreadEmails() {
+        if (gmailService == null || !gmailService!!.isGmailReady()) {
+            speakOut("Gmail service is not initialized. Please check your internet and Google account.", "ERROR")
+            return
+        }
+        
+        speakOut("Checking your unread emails", "ACTION")
+        
+        gmailService?.getUnreadEmailCount { emailInfo ->
+            runOnUiThread {
+                aiHistory.add("model" to emailInfo)
+                updateConversation("IMI", emailInfo)
+                speakOnGlass(emailInfo, "EMAIL_INFO")
+                
+                // Auto-resume listening
+                Handler(Looper.getMainLooper()).postDelayed({
+                    if (isInConversationMode) startListening()
+                }, 800)
+            }
+        }
+    }
+    
+    /**
+     * Read recent emails from inbox
+     */
+    private fun readRecentEmails() {
+        if (gmailService == null || !gmailService!!.isGmailReady()) {
+            speakOut("Gmail service is not initialized. Please authenticate your Google account.", "ERROR")
+            return
+        }
+        
+        speakOut("Fetching your recent emails", "ACTION")
+        
+        gmailService?.getRecentEmails(maxResults = 5) { emailList ->
+            runOnUiThread {
+                aiHistory.add("model" to emailList)
+                updateConversation("IMI", emailList)
+                speakOnGlass(emailList, "EMAIL_LIST")
+                
+                // Auto-resume listening
+                Handler(Looper.getMainLooper()).postDelayed({
+                    if (isInConversationMode) startListening()
+                }, 2000)
+            }
+        }
+    }
+    
+    /**
+     * Search emails with voice query
+     */
+    private fun searchEmailsVoice(query: String) {
+        if (gmailService == null || !gmailService!!.isGmailReady()) {
+            speakOut("Gmail service is not initialized.", "ERROR")
+            return
+        }
+        
+        // Extract search keywords from query
+        val searchKeywords = query.replace(Regex("search|email|mail|find|my", RegexOption.IGNORE_CASE), "").trim()
+        
+        if (searchKeywords.isEmpty()) {
+            speakOut("Please specify what to search for in your emails", "INFO")
+            return
+        }
+        
+        speakOut("Searching emails for: $searchKeywords", "ACTION")
+        
+        gmailService?.searchEmails(searchKeywords) { results ->
+            runOnUiThread {
+                aiHistory.add("model" to results)
+                updateConversation("IMI", results)
+                speakOnGlass(results, "EMAIL_SEARCH")
+                
+                // Auto-resume listening
+                Handler(Looper.getMainLooper()).postDelayed({
+                    if (isInConversationMode) startListening()
+                }, 1500)
+            }
+        }
+    }
+    
+    /**
+     * Initiate email composition via voice
+     */
+    private fun initiateEmailComposition(command: String) {
+        speakOut("Email composition feature coming soon. For now, please compose emails from your Gmail app.", "INFO")
+        Log.d(TAG, "📧 Email composition requested: $command")
+        
+        // TODO: Implement voice-based email composition with recipient and subject extraction
+    }
+
     /**
      * 🆕 Called when VisionChatActivity closes - reset the flag
      * This is a companion function that VisionChatActivity can call

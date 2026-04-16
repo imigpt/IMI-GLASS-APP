@@ -230,11 +230,13 @@ class GeminiLiveActivity : AppCompatActivity(), GeminiLiveService.GeminiLiveCall
         this.isConnected = isConnected
         
         runOnUiThread {
+            val modelName = if (GeminiLiveService.getSavedModelProvider(this) == ModelProvider.GPT_REALTIME)
+                "GPT Realtime" else "Gemini Live"
             tvConnectionStatus.text = if (isConnected) "🟢 Connected" else "🔴 Disconnected"
             btnStopConversation.isEnabled = isConnected
             btnStartConversation.isEnabled = !isConnected
             
-            val status = if (isConnected) "Connected to Gemini Live" else "Disconnected"
+            val status = if (isConnected) "Connected to $modelName" else "Disconnected"
             Toast.makeText(this, status, Toast.LENGTH_SHORT).show()
             Log.d(TAG, "Connection status: $status")
         }

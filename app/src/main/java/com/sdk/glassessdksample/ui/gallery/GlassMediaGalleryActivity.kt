@@ -5,6 +5,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
+import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.location.LocationManager
 import android.net.ConnectivityManager
 import android.net.Network
@@ -27,6 +29,8 @@ import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import com.google.android.material.card.MaterialCardView
+import com.sdk.glassessdksample.R
 import com.sdk.glassessdksample.ui.wifi.GlassMediaTransfer
 import com.sdk.glassessdksample.ui.wifi.WifiP2pHelper
 import com.oudmon.ble.base.communication.LargeDataHandler
@@ -58,6 +62,8 @@ class GlassMediaGalleryActivity : AppCompatActivity(),
         private const val TAG = "GlassMediaGallery"
         private const val LOCATION_PERMISSION_REQUEST = 1001
         private const val NEARBY_PERMISSION_REQUEST = 1002
+        private const val MENU_SELECT = 2001
+        private const val MENU_DELETE = 2002
         
         fun launch(context: Context) {
             context.startActivity(Intent(context, GlassMediaGalleryActivity::class.java))
@@ -70,6 +76,8 @@ class GlassMediaGalleryActivity : AppCompatActivity(),
     private val albumDownloader by lazy { com.sdk.glassessdksample.ui.wifi.AlbumDownloader(this) }
     private val mediaFiles = mutableListOf<GlassMediaTransfer.MediaFileInfo>()
     private var adapter: MediaAdapter? = null
+    private val selectedFileNames = mutableSetOf<String>()
+    private var isSelectionMode = false
     
     private var recyclerView: RecyclerView? = null
     private var progressBar: ProgressBar? = null
@@ -84,6 +92,17 @@ class GlassMediaGalleryActivity : AppCompatActivity(),
     private var wentToWifiSettings = false
     private var isConnectedToGlass = false
     private var discoveredDevices = mutableListOf<WifiP2pDevice>()
+    private var discoveryRetryJob: Job? = null
+    private var connectionProgressDialog: android.app.AlertDialog? = null
+    private var connectionProgressTextView: TextView? = null
+    private var connectionProgressBar: ProgressBar? = null
+    private var connectionProgressPercentTextView: TextView? = null
+    private var connectionProgressValue: Int = 0
+    private var lastProgressLine: String = ""
+    private val connectionStepCircles = mutableListOf<TextView>()
+    private val connectionStepTitles = mutableListOf<TextView>()
+    private val connectionStepConnectors = mutableListOf<View>()
+    private val stepTitles = listOf("Start", "Discover", "Connect", "Download")
     
     private val mainScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     
@@ -161,8 +180,36 @@ class GlassMediaGalleryActivity : AppCompatActivity(),
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        // Simple layout - we'll create it programmatically
-        createLayout()
+        // Use XML layout instead of programmatic creation
+        setContentView(R.layout.activity_glass_media_gallery)
+        
+        // Initialize views from layout
+        recyclerView = findViewById(R.id.recyclerView)
+        progressBar = findViewById(R.id.progressBar)
+        tvStatus = findViewById(R.id.tvStatus)
+        tvProgress = findViewById(R.id.tvProgress)
+        btnConnect = findViewById(R.id.btnConnect)
+        btnRefresh = findViewById(R.id.btnRefresh)
+        btnDiscover = findViewById(R.id.btnDiscover)
+        layoutProgress = findViewById(R.id.layoutProgress)
+        
+        // Setup back button
+        findViewById<ImageView>(R.id.btnBack).setOnClickListener {
+            finish()
+        }
+        
+        // Setup menu button
+        findViewById<ImageView>(R.id.btnMenu).setOnClickListener {
+            showOverflowMenu(it)
+        }
+        
+        // Setup button click listeners
+        btnConnect?.setOnClickListener { startConnection() }
+        btnRefresh?.setOnClickListener { refreshMediaList() }
+        btnDiscover?.setOnClickListener { 
+            updateStatus("🔍 Searching for Glass devices...")
+            wifiP2pHelper.startDiscovery()
+        }
         
         // Check and request location permission for WiFi SSID
         checkLocationPermission()
@@ -182,10 +229,27 @@ class GlassMediaGalleryActivity : AppCompatActivity(),
         LargeDataHandler.getInstance().addOutDeviceListener(2, bleDeviceNotifyListener)
         Log.d(TAG, "📡 BLE notification listener registered for Glass IP")
         
-        // Setup adapter
-        adapter = MediaAdapter(this, mediaFiles) { fileInfo ->
-            openMedia(fileInfo)
-        }
+        // Setup adapter with new grid layout
+        adapter = MediaAdapter(
+            context = this,
+            items = mediaFiles,
+            onTap = { fileInfo ->
+                if (isSelectionMode) {
+                    toggleSelection(fileInfo)
+                } else {
+                    openMedia(fileInfo)
+                }
+            },
+            onLongPress = { fileInfo ->
+                if (!isSelectionMode) {
+                    enterSelectionMode()
+                }
+                toggleSelection(fileInfo)
+            },
+            isSelectionMode = { isSelectionMode },
+            isSelected = { fileInfo -> selectedFileNames.contains(fileInfo.fileName) }
+        )
+        recyclerView?.layoutManager = GridLayoutManager(this, 3)  // 3-column grid
         recyclerView?.adapter = adapter
         
         // Load any existing downloaded files
@@ -270,7 +334,7 @@ class GlassMediaGalleryActivity : AppCompatActivity(),
                 showRetryDialog()
             } else {
                 updateStatus("❌ Cannot connect - please check WiFi")
-                showConnectionOptionsDialog()
+                startAutoDiscovery()
             }
         }
     }
@@ -521,155 +585,36 @@ class GlassMediaGalleryActivity : AppCompatActivity(),
         }
     }
     
-    private fun createLayout() {
-        val rootLayout = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(16, 16, 16, 16)
-        }
-        
-        // Title
-        val tvTitle = TextView(this).apply {
-            text = "📷 Glass Media Gallery"
-            textSize = 24f
-            setPadding(0, 0, 0, 16)
-        }
-        rootLayout.addView(tvTitle)
-        
-        // Status
-        tvStatus = TextView(this).apply {
-            text = "Status: Not connected"
-            textSize = 14f
-            setPadding(0, 0, 0, 8)
-        }
-        rootLayout.addView(tvStatus)
-        
-        // Progress layout
-        layoutProgress = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            visibility = View.GONE
-        }
-        
-        progressBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-            max = 100
-        }
-        (layoutProgress as LinearLayout).addView(progressBar)
-        
-        tvProgress = TextView(this).apply {
-            text = "0%"
-            setPadding(8, 0, 0, 0)
-        }
-        (layoutProgress as LinearLayout).addView(tvProgress)
-        
-        rootLayout.addView(layoutProgress)
-        
-        // Buttons layout with spacing
-        val buttonLayout = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(0, 12, 0, 20)
-        }
-        
-        btnConnect = Button(this).apply {
-            text = "🔗 Connect"
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
-                marginEnd = 8
-            }
-            setBackgroundColor(0xFF2A2A2A.toInt())
-            setTextColor(0xFFFFFFFF.toInt())
-            setOnClickListener { startConnection() }
-        }
-        buttonLayout.addView(btnConnect)
-        
-        btnDiscover = Button(this).apply {
-            text = "🔍 Discover"
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
-                marginEnd = 8
-            }
-            setBackgroundColor(0xFF2A2A2A.toInt())
-            setTextColor(0xFFFFFFFF.toInt())
-            setOnClickListener { 
-                updateStatus("🔍 Searching for Glass devices...")
-                wifiP2pHelper.startDiscovery()
-            }
-        }
-        buttonLayout.addView(btnDiscover)
-        
-        btnRefresh = Button(this).apply {
-            text = "🔄 Refresh"
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-            setBackgroundColor(0xFF2A2A2A.toInt())
-            setTextColor(0xFFFFFFFF.toInt())
-            setOnClickListener { refreshMediaList() }
-        }
-        buttonLayout.addView(btnRefresh)
-        
-        rootLayout.addView(buttonLayout)
-        
-        // Download All button with modern styling
-        val btnDownloadAll = Button(this).apply {
-            text = "⬇️ Download All Media"
-            setBackgroundColor(0xFF4CAF50.toInt()) // Green accent
-            setTextColor(0xFFFFFFFF.toInt())
-            setPadding(24, 16, 24, 16)
-            setOnClickListener { downloadAllMedia() }
-        }
-        rootLayout.addView(btnDownloadAll)
-        
-        // RecyclerView for media grid
-        recyclerView = RecyclerView(this).apply {
-            layoutManager = GridLayoutManager(this@GlassMediaGalleryActivity, 3)
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.MATCH_PARENT
-            )
-        }
-        rootLayout.addView(recyclerView)
-        
-        setContentView(rootLayout)
-    }
     
     /**
      * Start connection process
      */
     private fun startConnection() {
+        showConnectionProgressDialog()
+        appendConnectionStep("Connect request started")
+        updateConnectionProgress(5)
         updateStatus("📡 Sending BLE command to Glass...")
         btnConnect?.isEnabled = false
         
         // Step 1: Trigger Glass hotspot/P2P mode
         glassMediaTransfer.triggerGlassHotspot()
         
-        // Show options dialog
+        // Always use auto discovery (no method selection popup)
         mainScope.launch {
             delay(2000) // Wait for Glass P2P to start
-            showConnectionOptionsDialog()
+            startAutoDiscovery()
         }
     }
     
     /**
-     * Show connection options - Auto P2P Discovery or Manual WiFi
+     * Start Auto Discovery directly (default flow)
      */
-    private fun showConnectionOptionsDialog() {
+    private fun startAutoDiscovery() {
         btnConnect?.isEnabled = true
-        
-        android.app.AlertDialog.Builder(this)
-            .setTitle("📶 Connect to Glass")
-            .setMessage(
-                "Glass ka P2P mode triggered ho gaya hai!\n\n" +
-                "Connection method choose karo:"
-            )
-            .setPositiveButton("🔍 Auto Discovery") { _, _ ->
-                updateStatus("🔍 Searching for Glass devices...")
-                wifiP2pHelper.startDiscovery()
-            }
-            .setNeutralButton("📶 Manual WiFi") { _, _ ->
-                wentToWifiSettings = true
-                showWifiConnectionDialog()
-            }
-            .setNegativeButton("Try Current") { _, _ ->
-                // Try to detect Glass IP from current P2P connection
-                tryCurrentConnection()
-            }
-            .show()
+        appendConnectionStep("Searching for Glass device")
+        updateConnectionProgress(25)
+        updateStatus("🔍 Searching for Glass devices...")
+        wifiP2pHelper.startDiscovery()
     }
     
     /**
@@ -691,7 +636,7 @@ class GlassMediaGalleryActivity : AppCompatActivity(),
                 updateStatus("🔍 Scanning for Glass server...")
                 val connected = glassMediaTransfer.connectToGlass()
                 if (!connected) {
-                    showConnectionOptionsDialog()
+                    startAutoDiscovery()
                 }
             }
         }
@@ -771,12 +716,136 @@ class GlassMediaGalleryActivity : AppCompatActivity(),
             glassMediaTransfer.getMediaList()
         }
     }
+
+    private fun showOverflowMenu(anchor: View) {
+        val popupMenu = PopupMenu(this, anchor)
+        popupMenu.menu.add(
+            0,
+            MENU_SELECT,
+            0,
+            if (isSelectionMode) "Cancel selection" else "Select"
+        )
+        popupMenu.menu.add(
+            0,
+            MENU_DELETE,
+            1,
+            if (selectedFileNames.isEmpty()) "Delete selected" else "Delete selected (${selectedFileNames.size})"
+        )
+        popupMenu.menu.findItem(MENU_DELETE)?.isEnabled = selectedFileNames.isNotEmpty()
+
+        popupMenu.setOnMenuItemClickListener { item ->
+            when (item.itemId) {
+                MENU_SELECT -> {
+                    if (isSelectionMode) {
+                        exitSelectionMode(showMessage = true)
+                    } else {
+                        enterSelectionMode()
+                    }
+                    true
+                }
+
+                MENU_DELETE -> {
+                    deleteSelectedImages()
+                    true
+                }
+
+                else -> false
+            }
+        }
+
+        popupMenu.show()
+    }
+
+    private fun enterSelectionMode() {
+        if (isSelectionMode) return
+        isSelectionMode = true
+        selectedFileNames.clear()
+        adapter?.notifyDataSetChanged()
+        updateStatus("Selection mode enabled")
+        Toast.makeText(this, "Tap images to select", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun exitSelectionMode(showMessage: Boolean) {
+        if (!isSelectionMode) return
+        isSelectionMode = false
+        selectedFileNames.clear()
+        adapter?.notifyDataSetChanged()
+        if (showMessage) {
+            Toast.makeText(this, "Selection canceled", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun toggleSelection(item: GlassMediaTransfer.MediaFileInfo) {
+        if (!isSelectionMode) return
+
+        if (selectedFileNames.contains(item.fileName)) {
+            selectedFileNames.remove(item.fileName)
+        } else {
+            selectedFileNames.add(item.fileName)
+        }
+
+        if (selectedFileNames.isEmpty()) {
+            updateStatus("Selection mode enabled")
+        } else {
+            updateStatus("${selectedFileNames.size} selected")
+        }
+        adapter?.notifyDataSetChanged()
+    }
+    
+    /**
+     * Delete selected images from gallery
+     */
+    private fun deleteSelectedImages() {
+        if (selectedFileNames.isEmpty()) {
+            Toast.makeText(this, "Select items first", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val selectedCount = selectedFileNames.size
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Delete selected")
+            .setMessage("Delete $selectedCount selected item${if (selectedCount == 1) "" else "s"}?")
+            .setPositiveButton("Delete") { _, _ ->
+                var deletedCount = 0
+                val iterator = mediaFiles.iterator()
+
+                while (iterator.hasNext()) {
+                    val item = iterator.next()
+                    if (!selectedFileNames.contains(item.fileName)) continue
+
+                    val deleted = if (!item.localPath.isNullOrBlank()) {
+                        val file = File(item.localPath!!)
+                        !file.exists() || file.delete()
+                    } else {
+                        true
+                    }
+
+                    if (deleted) {
+                        iterator.remove()
+                        deletedCount++
+                    }
+                }
+
+                isSelectionMode = false
+                selectedFileNames.clear()
+                adapter?.notifyDataSetChanged()
+                updateStatus("Deleted $deletedCount item${if (deletedCount == 1) "" else "s"}")
+                Toast.makeText(
+                    this,
+                    "Deleted $deletedCount item${if (deletedCount == 1) "" else "s"}",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
     
     /**
      * Fetch file list from Glass and start download
      * Called when BLE returns Glass IP (notification type 8)
      */
     private fun fetchAndDownloadFromGlass() {
+        appendConnectionStep("Fetching media list from device")
         updateStatus("📋 Fetching file list from Glass...")
         layoutProgress?.visibility = View.VISIBLE
         
@@ -791,17 +860,22 @@ class GlassMediaGalleryActivity : AppCompatActivity(),
                     adapter?.notifyDataSetChanged()
                     
                     updateStatus("📥 Found ${files.size} files. Starting download...")
+                    appendConnectionStep("Downloading data from Glass")
                     
                     // Start downloading all files
                     val toDownload = files.filter { !it.isDownloaded }
                     if (toDownload.isNotEmpty()) {
                         glassMediaTransfer.downloadAllFiles(toDownload)
                     } else {
+                        appendConnectionStep("Download completed")
+                        closeConnectionProgressDialog("Connected. All files already downloaded")
                         updateStatus("✅ All ${files.size} files already downloaded")
                         layoutProgress?.visibility = View.GONE
                     }
                 } else {
                     // No files from socket - Glass may need different protocol
+                    appendConnectionStep("Device connected")
+                    closeConnectionProgressDialog("Connected to Glass")
                     updateStatus("📷 Connected! Press 'Download All' to fetch files")
                     layoutProgress?.visibility = View.GONE
                     Toast.makeText(this@GlassMediaGalleryActivity, 
@@ -810,6 +884,8 @@ class GlassMediaGalleryActivity : AppCompatActivity(),
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Error fetching files: ${e.message}")
+                appendConnectionStep("Failed: ${e.message}")
+                closeConnectionProgressDialog("Connection failed")
                 updateStatus("⚠️ Error: ${e.message}")
                 layoutProgress?.visibility = View.GONE
             }
@@ -958,6 +1034,238 @@ class GlassMediaGalleryActivity : AppCompatActivity(),
         Log.d(TAG, status)
     }
 
+    private fun showConnectionProgressDialog() {
+        if (connectionProgressDialog?.isShowing == true) return
+
+        lastProgressLine = ""
+        connectionProgressValue = 0
+        connectionStepCircles.clear()
+        connectionStepTitles.clear()
+        connectionStepConnectors.clear()
+        tvStatus?.visibility = View.INVISIBLE
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(48, 24, 48, 24)
+        }
+
+        val subtitle = TextView(this).apply {
+            textSize = 14f
+            text = "Please wait while we connect and download data"
+            alpha = 0.85f
+        }
+        content.addView(subtitle)
+
+        val stepperRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            val params = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+            params.topMargin = 20
+            layoutParams = params
+        }
+
+        for (i in stepTitles.indices) {
+            val stepContainer = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = android.view.Gravity.CENTER_HORIZONTAL
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            }
+
+            val circle = TextView(this).apply {
+                text = "${i + 1}"
+                gravity = android.view.Gravity.CENTER
+                setTextColor(Color.parseColor("#9CA3AF"))
+                textSize = 16f
+                background = createStepCircleDrawable("pending")
+                val size = (40 * resources.displayMetrics.density).toInt()
+                layoutParams = LinearLayout.LayoutParams(size, size)
+            }
+            stepContainer.addView(circle)
+
+            val stepLabel = TextView(this).apply {
+                text = "Step ${i + 1}"
+                textSize = 11f
+                setTextColor(Color.parseColor("#9CA3AF"))
+                val params = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                )
+                params.topMargin = 6
+                layoutParams = params
+            }
+            stepContainer.addView(stepLabel)
+
+            val stepTitle = TextView(this).apply {
+                text = stepTitles[i]
+                textSize = 12f
+                setTextColor(Color.parseColor("#D1D5DB"))
+            }
+            stepContainer.addView(stepTitle)
+
+            connectionStepCircles.add(circle)
+            connectionStepTitles.add(stepTitle)
+            stepperRow.addView(stepContainer)
+
+            if (i < stepTitles.lastIndex) {
+                val connector = View(this).apply {
+                    setBackgroundColor(Color.parseColor("#4B5563"))
+                    layoutParams = LinearLayout.LayoutParams(26, 4).apply {
+                        topMargin = (20 * resources.displayMetrics.density).toInt()
+                    }
+                }
+                connectionStepConnectors.add(connector)
+                stepperRow.addView(connector)
+            }
+        }
+        content.addView(stepperRow)
+
+        connectionProgressBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            isIndeterminate = false
+            max = 100
+            progress = 0
+            val params = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+            params.topMargin = 20
+            layoutParams = params
+        }
+        content.addView(connectionProgressBar)
+
+        connectionProgressPercentTextView = TextView(this).apply {
+            textSize = 13f
+            text = "0%"
+            gravity = android.view.Gravity.END
+        }
+        content.addView(connectionProgressPercentTextView)
+
+        connectionProgressTextView = TextView(this).apply {
+            textSize = 15f
+            text = ""
+            setLineSpacing(10f, 1.0f)
+            val params = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+            params.topMargin = 18
+            layoutParams = params
+        }
+        content.addView(connectionProgressTextView)
+
+        connectionProgressDialog = android.app.AlertDialog.Builder(this)
+            .setTitle("Downloading from Glass")
+            .setView(content)
+            .setCancelable(false)
+            .create()
+
+        connectionProgressDialog?.show()
+        updateConnectionStepper(0)
+    }
+
+    private fun appendConnectionStep(step: String) {
+        if (connectionProgressDialog?.isShowing != true) return
+        if (lastProgressLine == step) return
+
+        val current = connectionProgressTextView?.text?.toString().orEmpty()
+        val nextLine = "• $step"
+        connectionProgressTextView?.text = if (current.isBlank()) nextLine else "$current\n$nextLine"
+        lastProgressLine = step
+    }
+
+    private fun updateConnectionProgress(value: Int) {
+        if (connectionProgressDialog?.isShowing != true) return
+
+        val clamped = value.coerceIn(0, 100)
+        if (clamped < connectionProgressValue) return
+
+        connectionProgressValue = clamped
+        connectionProgressBar?.progress = connectionProgressValue
+        connectionProgressPercentTextView?.text = "$connectionProgressValue%"
+        updateConnectionStepper(connectionProgressValue)
+    }
+
+    private fun updateConnectionStepper(progress: Int) {
+        if (connectionStepCircles.isEmpty()) return
+
+        val activeIndex = when {
+            progress < 25 -> 0
+            progress < 50 -> 1
+            progress < 75 -> 2
+            else -> 3
+        }
+
+        connectionStepCircles.forEachIndexed { index, circle ->
+            when {
+                progress >= 100 || index < activeIndex -> {
+                    circle.text = "✓"
+                    circle.setTextColor(Color.WHITE)
+                    circle.background = createStepCircleDrawable("done")
+                    connectionStepTitles[index].setTextColor(Color.WHITE)
+                }
+                index == activeIndex -> {
+                    circle.text = "${index + 1}"
+                    circle.setTextColor(Color.WHITE)
+                    circle.background = createStepCircleDrawable("active")
+                    connectionStepTitles[index].setTextColor(Color.parseColor("#93C5FD"))
+                }
+                else -> {
+                    circle.text = "${index + 1}"
+                    circle.setTextColor(Color.parseColor("#9CA3AF"))
+                    circle.background = createStepCircleDrawable("pending")
+                    connectionStepTitles[index].setTextColor(Color.parseColor("#D1D5DB"))
+                }
+            }
+        }
+
+        connectionStepConnectors.forEachIndexed { index, connector ->
+            val done = progress >= 100 || index < activeIndex
+            connector.setBackgroundColor(
+                if (done) Color.parseColor("#3B82F6") else Color.parseColor("#4B5563")
+            )
+        }
+    }
+
+    private fun createStepCircleDrawable(state: String): GradientDrawable {
+        val drawable = GradientDrawable()
+        drawable.shape = GradientDrawable.OVAL
+
+        when (state) {
+            "done" -> {
+                drawable.setColor(Color.parseColor("#3B82F6"))
+                drawable.setStroke(3, Color.parseColor("#93C5FD"))
+            }
+            "active" -> {
+                drawable.setColor(Color.parseColor("#2563EB"))
+                drawable.setStroke(4, Color.parseColor("#60A5FA"))
+            }
+            else -> {
+                drawable.setColor(Color.parseColor("#1F2937"))
+                drawable.setStroke(3, Color.parseColor("#6B7280"))
+            }
+        }
+        return drawable
+    }
+
+    private fun closeConnectionProgressDialog(finalStatus: String) {
+        updateConnectionProgress(100)
+        if (connectionProgressDialog?.isShowing == true) {
+            connectionProgressDialog?.dismiss()
+        }
+        connectionProgressDialog = null
+        connectionProgressTextView = null
+        connectionProgressBar = null
+        connectionProgressPercentTextView = null
+        connectionProgressValue = 0
+        connectionStepCircles.clear()
+        connectionStepTitles.clear()
+        connectionStepConnectors.clear()
+        lastProgressLine = ""
+        tvStatus?.visibility = View.VISIBLE
+        updateStatus(finalStatus)
+        btnConnect?.isEnabled = true
+    }
+
     // Probes common ports on the given Glass IP; if open port found, set server ip/port and proceed
     private fun testPortsAndProceed(glassIp: String) {
         Thread {
@@ -981,6 +1289,9 @@ class GlassMediaGalleryActivity : AppCompatActivity(),
             runOnUiThread {
                 if (openPort == 80) {
                     // HTTP path
+                    appendConnectionStep("Device connected")
+                    appendConnectionStep("Preparing download")
+                    updateConnectionProgress(55)
                     updateStatus("✅ Connected via HTTP (Port 80)")
                     isConnectedToGlass = true
                     try {
@@ -996,6 +1307,9 @@ class GlassMediaGalleryActivity : AppCompatActivity(),
 
                 } else if (openPort != null) {
                     // Raw socket path
+                    appendConnectionStep("Device connected")
+                    appendConnectionStep("Preparing download")
+                    updateConnectionProgress(55)
                     glassMediaTransfer.setServerIp(glassIp)
                     glassMediaTransfer.setServerPort(openPort)
                     isConnectedToGlass = true
@@ -1015,6 +1329,8 @@ class GlassMediaGalleryActivity : AppCompatActivity(),
 
                 } else {
                     isConnectedToGlass = false
+                    appendConnectionStep("Failed to reach Glass server")
+                    closeConnectionProgressDialog("Glass server did not respond")
                     updateStatus("❌ Glass server failed to respond")
                 }
             }
@@ -1024,6 +1340,8 @@ class GlassMediaGalleryActivity : AppCompatActivity(),
     // HTTP download flow using AlbumDownloader (for port 80)
     private suspend fun downloadViaHttp(ip: String) {
         layoutProgress?.visibility = View.VISIBLE
+        appendConnectionStep("Fetching media list")
+        updateConnectionProgress(65)
         updateStatus("📋 Fetching HTTP file list...")
 
         // 1. List Fetch karo
@@ -1032,12 +1350,16 @@ class GlassMediaGalleryActivity : AppCompatActivity(),
         } catch (e: Exception) {
             Log.e(TAG, "HTTP fetchConfig failed: ${e.message}")
             layoutProgress?.visibility = View.GONE
+            appendConnectionStep("Failed: ${e.message}")
+            closeConnectionProgressDialog("HTTP fetch failed")
             updateStatus("⚠️ HTTP fetch failed: ${e.message}")
             return
         }
 
         if (files.isNotEmpty()) {
             val totalFiles = files.size
+            appendConnectionStep("Downloading data ($totalFiles files)")
+            updateConnectionProgress(72)
             updateStatus("📥 Found $totalFiles files. Checking local storage...")
 
             // 2. Progress Bar Setup (Fixed 0% issue)
@@ -1088,12 +1410,16 @@ class GlassMediaGalleryActivity : AppCompatActivity(),
                     runOnUiThread {
                         progressBar?.progress = currentFileNum
                         tvProgress?.text = "$currentFileNum/$totalFiles"
+                        val popupProgress = 72 + ((currentFileNum * 26) / totalFiles)
+                        updateConnectionProgress(popupProgress)
                     }
                 } else {
                     // Nahi hai -> DOWNLOAD KARO
                     runOnUiThread {
                         progressBar?.progress = currentFileNum
                         tvProgress?.text = "$currentFileNum/$totalFiles"
+                        val popupProgress = 72 + ((currentFileNum * 26) / totalFiles)
+                        updateConnectionProgress(popupProgress)
                         updateStatus("Downloading $currentFileNum/$totalFiles: ${item.fileName}")
                     }
 
@@ -1123,14 +1449,23 @@ class GlassMediaGalleryActivity : AppCompatActivity(),
                 if (downloadedCount == 0 && skippedCount > 0) {
                     // Agar sab pehle se tha
                     updateStatus("✅ All files already downloaded!")
+                    appendConnectionStep("Download completed")
+                    updateConnectionProgress(100)
+                    closeConnectionProgressDialog("Connected. Files already downloaded")
                     Toast.makeText(this@GlassMediaGalleryActivity, "All files already exist", Toast.LENGTH_SHORT).show()
                 } else {
                     // Agar kuch naya download hua
                     updateStatus("✅ Complete: $downloadedCount new, $skippedCount skipped")
+                    appendConnectionStep("Download completed")
+                    updateConnectionProgress(100)
+                    closeConnectionProgressDialog("Download complete: $downloadedCount new files")
                     Toast.makeText(this@GlassMediaGalleryActivity, "Downloaded $downloadedCount new files", Toast.LENGTH_SHORT).show()
                 }
             }
         } else {
+            appendConnectionStep("No files found")
+            updateConnectionProgress(100)
+            closeConnectionProgressDialog("Connected. No files found")
             updateStatus("⚠️ No files found via HTTP")
             layoutProgress?.visibility = View.GONE
         }
@@ -1140,13 +1475,16 @@ class GlassMediaGalleryActivity : AppCompatActivity(),
     
     override fun onHotspotTriggered() {
         runOnUiThread {
+            appendConnectionStep("Device switched to transfer mode")
+            updateConnectionProgress(15)
             updateStatus("Glass Hotspot triggered. Connect to Glass WiFi...")
-            Toast.makeText(this, "Please connect to Glass WiFi hotspot", Toast.LENGTH_LONG).show()
         }
     }
     
     override fun onConnected(ip: String) {
         runOnUiThread {
+            appendConnectionStep("Device connected at $ip")
+            updateConnectionProgress(50)
             updateStatus("Connected to Glass at $ip")
         }
     }
@@ -1170,6 +1508,9 @@ class GlassMediaGalleryActivity : AppCompatActivity(),
         runOnUiThread {
             progressBar?.progress = progress
             tvProgress?.text = "$progress%"
+            // Socket downloads report per-file percentage; map to final stage band.
+            val popupProgress = 72 + ((progress.coerceIn(0, 100) * 26) / 100)
+            updateConnectionProgress(popupProgress)
         }
     }
     
@@ -1182,6 +1523,12 @@ class GlassMediaGalleryActivity : AppCompatActivity(),
             }
             adapter?.notifyDataSetChanged()
             updateStatus("Downloaded: $fileName")
+
+            if (mediaFiles.isNotEmpty() && mediaFiles.all { it.isDownloaded }) {
+                appendConnectionStep("Download completed")
+                updateConnectionProgress(100)
+                closeConnectionProgressDialog("Download complete")
+            }
         }
     }
     
@@ -1194,6 +1541,8 @@ class GlassMediaGalleryActivity : AppCompatActivity(),
     
     override fun onError(error: String) {
         runOnUiThread {
+            appendConnectionStep("Failed: $error")
+            closeConnectionProgressDialog("Connection failed")
             updateStatus("Error: $error")
             Toast.makeText(this, error, Toast.LENGTH_LONG).show()
             btnConnect?.isEnabled = true
@@ -1236,23 +1585,30 @@ class GlassMediaGalleryActivity : AppCompatActivity(),
             discoveredDevices.addAll(peers)
             
             if (peers.isNotEmpty()) {
-                updateStatus("Found ${peers.size} devices")
-                showDeviceSelectionDialog(peers)
+                // WifiP2pHelper already auto-connects to a Glass device.
+                appendConnectionStep("Device found. Connecting...")
+                updateConnectionProgress(35)
+                updateStatus("Found ${peers.size} devices. Auto-connecting...")
+                discoveryRetryJob?.cancel()
+                discoveryRetryJob = null
             } else {
+                appendConnectionStep("No device found. Retrying...")
+                updateConnectionProgress(20)
                 updateStatus("No devices found. Retrying...")
-                // Auto-retry discovery
-                mainScope.launch {
-                    delay(3000)
-                    wifiP2pHelper.startDiscovery()
-                }
+                scheduleDiscoveryRetry(3000)
             }
         }
     }
     
     override fun onGlassConnected(glassIp: String) {
         runOnUiThread {
+            discoveryRetryJob?.cancel()
+            discoveryRetryJob = null
             btnConnect?.text = "⏳ Checking server..."
             btnConnect?.isEnabled = false
+            appendConnectionStep("Device connected")
+            appendConnectionStep("Verifying transfer server")
+            updateConnectionProgress(50)
             updateStatus("📡 Glass IP detected: $glassIp")
 
             // Probe ports then proceed
@@ -1263,6 +1619,7 @@ class GlassMediaGalleryActivity : AppCompatActivity(),
     override fun onP2pDisconnected() {
         runOnUiThread {
             isConnectedToGlass = false
+            closeConnectionProgressDialog("Disconnected from Glass")
             updateStatus("P2P Disconnected from Glass")
             btnConnect?.text = "🔗 Connect to Glass"
             btnConnect?.isEnabled = true
@@ -1277,33 +1634,27 @@ class GlassMediaGalleryActivity : AppCompatActivity(),
         }
 
         runOnUiThread {
-            updateStatus("P2P Error: $message")
-            Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+            appendConnectionStep("P2P error: $message")
+            updateStatus("P2P Error: $message. Retrying...")
             btnConnect?.isEnabled = true
+            scheduleDiscoveryRetry(1500)
         }
     }
     
     /**
-     * Show dialog to select which device to connect to
+     * Debounced discovery retry to avoid rapid reconnect loops.
      */
-    private fun showDeviceSelectionDialog(devices: List<WifiP2pDevice>) {
-        val deviceNames = devices.map { "${it.deviceName} (${it.deviceAddress})" }.toTypedArray()
-        
-        android.app.AlertDialog.Builder(this)
-            .setTitle("📱 Select Glass Device")
-            .setItems(deviceNames) { _, which ->
-                val selectedDevice = devices[which]
-                updateStatus("Connecting to ${selectedDevice.deviceName}...")
-                wifiP2pHelper.connectToDevice(selectedDevice)
-            }
-            .setNegativeButton("Manual Connect") { _, _ ->
-                showWifiConnectionDialog()
-            }
-            .setNeutralButton("🔄 Refresh") { _, _ ->
-                updateStatus("Searching for devices...")
+    private fun scheduleDiscoveryRetry(delayMs: Long) {
+        if (isConnectedToGlass) return
+        if (discoveryRetryJob?.isActive == true) return
+
+        discoveryRetryJob = mainScope.launch {
+            delay(delayMs)
+            if (!isConnectedToGlass) {
+                updateStatus("Retrying discovery...")
                 wifiP2pHelper.startDiscovery()
             }
-            .show()
+        }
     }
     
     /**
@@ -1312,71 +1663,39 @@ class GlassMediaGalleryActivity : AppCompatActivity(),
     class MediaAdapter(
         private val context: Context,
         private val items: List<GlassMediaTransfer.MediaFileInfo>,
-        private val onClick: (GlassMediaTransfer.MediaFileInfo) -> Unit
+        private val onTap: (GlassMediaTransfer.MediaFileInfo) -> Unit,
+        private val onLongPress: (GlassMediaTransfer.MediaFileInfo) -> Unit,
+        private val isSelectionMode: () -> Boolean,
+        private val isSelected: (GlassMediaTransfer.MediaFileInfo) -> Boolean
     ) : RecyclerView.Adapter<MediaAdapter.ViewHolder>() {
         
         class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {
-            val imageView: ImageView = view.findViewById(android.R.id.icon)
-            val textView: TextView = view.findViewById(android.R.id.text1)
-            val videoIcon: ImageView = view.findViewById(android.R.id.icon1)
+            val cardRoot: MaterialCardView = view.findViewById(R.id.cardRoot)
+            val imageView: ImageView = view.findViewById(R.id.imageView)
+            val tvFileName: TextView = view.findViewById(R.id.tvFileName)
+            val videoIcon: ImageView = view.findViewById(R.id.videoIcon)
+            val videoIconContainer: FrameLayout = view.findViewById(R.id.videoIconContainer)
         }
         
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
-            val layout = FrameLayout(context).apply {
-                layoutParams = ViewGroup.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    300
-                )
-                setPadding(4, 4, 4, 4)
-            }
-            
-            val imageView = ImageView(context).apply {
-                id = android.R.id.icon
-                layoutParams = FrameLayout.LayoutParams(
-                    FrameLayout.LayoutParams.MATCH_PARENT,
-                    FrameLayout.LayoutParams.MATCH_PARENT
-                )
-                scaleType = ImageView.ScaleType.CENTER_CROP
-                setBackgroundColor(0xFF333333.toInt())
-            }
-            layout.addView(imageView)
-            
-            // Video icon overlay
-            val videoIcon = ImageView(context).apply {
-                id = android.R.id.icon1
-                layoutParams = FrameLayout.LayoutParams(48, 48).apply {
-                    gravity = android.view.Gravity.CENTER
-                }
-                visibility = View.GONE
-            }
-            layout.addView(videoIcon)
-            
-            // File name text
-            val textView = TextView(context).apply {
-                id = android.R.id.text1
-                layoutParams = FrameLayout.LayoutParams(
-                    FrameLayout.LayoutParams.MATCH_PARENT,
-                    FrameLayout.LayoutParams.WRAP_CONTENT
-                ).apply {
-                    gravity = android.view.Gravity.BOTTOM
-                }
-                setBackgroundColor(0x99000000.toInt())
-                setTextColor(0xFFFFFFFF.toInt())
-                textSize = 10f
-                maxLines = 1
-            }
-            layout.addView(textView)
-            
-            return ViewHolder(layout)
+            val view = LayoutInflater.from(context).inflate(R.layout.item_gallery_photo, parent, false)
+            return ViewHolder(view)
         }
         
         override fun onBindViewHolder(holder: ViewHolder, position: Int) {
             val item = items[position]
+            val selected = isSelected(item)
 
-            holder.textView.text = item.fileName
+            holder.tvFileName.text = item.fileName
+            holder.cardRoot.strokeWidth = if (selected) dpToPx(2) else dpToPx(1)
+            holder.cardRoot.strokeColor = if (selected) {
+                Color.parseColor("#FFFA5A2E")
+            } else {
+                Color.parseColor("#FF202734")
+            }
 
             // Video icon logic
-            holder.videoIcon.visibility = if (item.fileType == "video") View.VISIBLE else View.GONE
+            holder.videoIconContainer.visibility = if (item.fileType == "video") View.VISIBLE else View.GONE
 
             // Clear previous image to free memory immediately
             holder.imageView.setImageBitmap(null)
@@ -1417,7 +1736,18 @@ class GlassMediaGalleryActivity : AppCompatActivity(),
                 holder.imageView.setImageResource(android.R.drawable.ic_menu_gallery)
             }
 
-            holder.itemView.setOnClickListener { onClick(item) }
+            holder.itemView.setOnClickListener { 
+                onTap(item)
+            }
+
+            holder.itemView.setOnLongClickListener {
+                onLongPress(item)
+                true
+            }
+        }
+
+        private fun dpToPx(dp: Int): Int {
+            return (dp * context.resources.displayMetrics.density).toInt().coerceAtLeast(1)
         }
         
         override fun getItemCount() = items.size

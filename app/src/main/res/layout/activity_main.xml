@@ -3,88 +3,100 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#1A1A1A">
+    android:background="@drawable/bg_app_gradient">
 
     <androidx.core.widget.NestedScrollView
         android:layout_width="match_parent"
         android:layout_height="match_parent"
+        android:layout_marginBottom="94dp"
         android:fillViewport="true">
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"
-            android:padding="20dp">
+            android:paddingStart="16dp"
+            android:paddingEnd="16dp"
+            android:paddingTop="14dp"
+            android:paddingBottom="10dp">
 
-            <!-- Header with Logo and Profile -->
+            <!-- Header -->
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:orientation="horizontal"
                 android:gravity="center_vertical"
-                android:layout_marginBottom="24dp">
+                android:layout_marginBottom="10dp"
+                android:orientation="horizontal">
 
-                <TextView
+                <LinearLayout
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
-                    android:text="IMI"
-                    android:textColor="#FFFFFF"
-                    android:textSize="32sp"
-                    android:textStyle="bold"
-                    android:fontFamily="sans-serif-black"/>
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:fontFamily="sans-serif-black"
+                        android:text="IMI"
+                        android:textColor="#F6FBFF"
+                        android:textSize="36sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="-4dp"
+                        android:text="Your smart companion"
+                        android:textColor="#FF3EADE8"
+                        android:textSize="12sp" />
+                </LinearLayout>
 
                 <RelativeLayout
                     android:id="@+id/profileIcon"
-                    android:layout_width="48dp"
-                    android:layout_height="48dp">
+                    android:layout_width="58dp"
+                    android:layout_height="58dp"
+                    android:clickable="true"
+                    android:focusable="true">
 
                     <ImageView
-                        android:layout_width="48dp"
-                        android:layout_height="48dp"
-                        android:src="@drawable/ic_profile"
-                        android:scaleType="centerCrop"
-                        android:background="@drawable/circle_button"/>
+                        android:layout_width="58dp"
+                        android:layout_height="58dp"
+                        android:background="@drawable/bg_notification_glow" />
 
                     <TextView
                         android:id="@+id/notificationBadge"
-                        android:layout_width="20dp"
-                        android:layout_height="20dp"
+                        android:layout_width="22dp"
+                        android:layout_height="22dp"
                         android:layout_alignParentEnd="true"
                         android:layout_alignParentTop="true"
+                        android:layout_marginEnd="-4dp"
+                        android:layout_marginTop="2dp"
                         android:background="@drawable/notification_badge"
                         android:text="5"
                         android:textColor="#FFFFFF"
                         android:textSize="11sp"
                         android:textStyle="bold"
-                        android:gravity="center"/>
+                        android:gravity="center" />
                 </RelativeLayout>
             </LinearLayout>
 
-            <!-- Location/Trip Info Card -->
-            <androidx.cardview.widget.CardView
+            <!-- Location Card -->
+            <com.google.android.material.card.MaterialCardView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginBottom="20dp"
-                app:cardBackgroundColor="#2A2A2A"
-                app:cardCornerRadius="16dp"
-                app:cardElevation="0dp">
+                android:layout_marginBottom="14dp"
+                app:cardBackgroundColor="#3A2E3036"
+                app:cardCornerRadius="22dp"
+                app:cardElevation="0dp"
+                app:strokeColor="#4A6D727B"
+                app:strokeWidth="1dp">
 
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:orientation="vertical"
-                    android:padding="16dp">
-
-                    <TextView
-                        android:id="@+id/tvLocationName"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="MUMBAI INTERNATIONAL AIRPORT LTD,\nCHHATRAPATI SHIVAJI MAHARAJ\nINTERNATIONAL AIRPORT, 1ST\nFLOOR, MUMBAI - 400099, INDIA."
-                        android:textColor="#AAAAAA"
-                        android:textSize="11sp"
-                        android:lineSpacingExtra="2dp"
-                        android:layout_marginBottom="12dp"/>
+                    android:padding="14dp">
 
                     <LinearLayout
                         android:layout_width="match_parent"
@@ -93,636 +105,697 @@
                         android:gravity="center_vertical">
 
                         <ImageView
-                            android:layout_width="14dp"
-                            android:layout_height="14dp"
-                            android:src="@drawable/ic_clock"
-                            android:layout_marginEnd="6dp"
-                            app:tint="#AAAAAA"/>
+                            android:layout_width="16dp"
+                            android:layout_height="16dp"
+                            android:layout_marginEnd="8dp"
+                            android:src="@android:drawable/ic_menu_mylocation"
+                            app:tint="#D7ECFF" />
 
                         <TextView
+                            android:id="@+id/tvLocationName"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="Stansted Airport"
-                            android:textColor="#AAAAAA"
-                            android:textSize="12sp"/>
+                            android:text="Chaupati, Rajasthan, India"
+                            android:textColor="#E5EEF8"
+                            android:textSize="14sp" />
                     </LinearLayout>
 
                     <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:orientation="horizontal"
-                        android:gravity="center_vertical"
-                        android:layout_marginTop="4dp">
+                        android:layout_marginTop="10dp"
+                        android:gravity="center_vertical">
+
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:background="@drawable/bg_location_chip"
+                            android:gravity="center_vertical"
+                            android:orientation="horizontal"
+                            android:paddingStart="12dp"
+                            android:paddingTop="8dp"
+                            android:paddingEnd="12dp"
+                            android:paddingBottom="8dp">
+
+                            <ImageView
+                                android:layout_width="14dp"
+                                android:layout_height="14dp"
+                                android:layout_marginEnd="8dp"
+                                android:src="@drawable/ic_send"
+                                app:tint="#CFE0F0" />
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="Stansted Airport"
+                                android:textColor="#D6E0EC"
+                                android:textSize="11sp" />
+                        </LinearLayout>
+
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="8dp"
+                            android:layout_weight="1"
+                            android:background="@drawable/bg_location_chip"
+                            android:gravity="center_vertical"
+                            android:orientation="horizontal"
+                            android:paddingStart="12dp"
+                            android:paddingTop="8dp"
+                            android:paddingEnd="12dp"
+                            android:paddingBottom="8dp">
+
+                            <ImageView
+                                android:layout_width="14dp"
+                                android:layout_height="14dp"
+                                android:layout_marginEnd="8dp"
+                                android:src="@drawable/ic_clock"
+                                app:tint="#CFE0F0" />
+
+                            <TextView
+                                android:id="@+id/tvCurrentTime"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="Fri, Apr 10 - 16:11"
+                                android:textColor="#D6E0EC"
+                                android:textSize="11sp" />
+                        </LinearLayout>
 
                         <ImageView
-                            android:layout_width="14dp"
-                            android:layout_height="14dp"
-                            android:src="@drawable/ic_clock"
-                            android:layout_marginEnd="6dp"
-                            app:tint="#AAAAAA"/>
-
-                        <TextView
-                            android:id="@+id/tvCurrentTime"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:text="16:45 - 20:15"
-                            android:textColor="#AAAAAA"
-                            android:textSize="12sp"/>
+                            android:layout_width="38dp"
+                            android:layout_height="38dp"
+                            android:layout_marginStart="8dp"
+                            android:background="@drawable/bg_round_arrow_button"
+                            android:padding="10dp"
+                            android:src="@drawable/ic_arrow_right"
+                            app:tint="#D8E3ED" />
                     </LinearLayout>
                 </LinearLayout>
-            </androidx.cardview.widget.CardView>
+            </com.google.android.material.card.MaterialCardView>
 
             <!-- Connect Glass Card -->
-            <androidx.cardview.widget.CardView
+            <com.google.android.material.card.MaterialCardView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginBottom="20dp"
-                app:cardBackgroundColor="#2A2A2A"
-                app:cardCornerRadius="16dp"
-                app:cardElevation="0dp">
+                android:layout_marginBottom="14dp"
+                app:cardBackgroundColor="@android:color/transparent"
+                app:cardCornerRadius="24dp"
+                app:cardElevation="0dp"
+                app:strokeColor="#6A7A8088"
+                app:strokeWidth="1dp">
 
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
+                    android:background="@drawable/bg_card_premium"
+                    android:gravity="center_vertical"
                     android:orientation="horizontal"
-                    android:padding="16dp"
-                    android:gravity="center_vertical">
+                    android:padding="12dp">
 
-                    <!-- Left Side: Title and Glass Image -->
                     <LinearLayout
                         android:id="@+id/btnBt"
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
-                        android:layout_weight="1"
-                        android:orientation="vertical"
+                        android:layout_weight="1.15"
+                        android:background="?attr/selectableItemBackground"
                         android:clickable="true"
                         android:focusable="true"
-                        android:background="?attr/selectableItemBackground">
+                        android:orientation="vertical"
+                        android:paddingEnd="10dp">
 
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
+                            android:maxLines="1"
+                            android:ellipsize="end"
                             android:text="Connect Glass"
-                            android:textColor="#FFFFFF"
-                            android:textSize="16sp"
-                            android:textStyle="bold"
-                            android:layout_marginBottom="4dp"/>
+                            android:textColor="#F4F9FF"
+                            android:textSize="14sp"
+                            android:textStyle="bold" />
 
                         <LinearLayout
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:orientation="horizontal"
-                            android:layout_marginBottom="12dp">
+                            android:gravity="center_vertical"
+                            android:orientation="horizontal">
+
+                            <View
+                                android:layout_width="10dp"
+                                android:layout_height="10dp"
+                                android:layout_marginEnd="8dp"
+                                android:background="@drawable/ic_status_dot" />
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="Connected"
+                                android:textColor="#D6E5F5"
+                                android:textSize="13sp" />
+                        </LinearLayout>
+
+                        <LinearLayout
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="4dp"
+                            android:orientation="horizontal">
 
                             <TextView
                                 android:id="@+id/tvTimeRemaining"
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
-                                android:text="2h 31min"
-                                android:textColor="#FFFFFF"
-                                android:textSize="12sp"/>
+                                android:text="2h 31m"
+                                android:textColor="#FFA7B0B9"
+                                android:textSize="13sp"
+                                android:textStyle="bold" />
 
                             <TextView
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
-                                android:text=" Remaining"
-                                android:textColor="#888888"
-                                android:textSize="12sp"/>
+                                android:text=" remaining"
+                                android:textColor="#859AB1"
+                                android:textSize="13sp" />
                         </LinearLayout>
 
-                        <!-- Glass Image from Assets -->
                         <ImageView
                             android:id="@+id/ivGlassImage"
-                            android:layout_width="120dp"
-                            android:layout_height="80dp"
-                            android:scaleType="fitCenter"
-                            android:contentDescription="Glass Image"/>
+                            android:layout_width="match_parent"
+                            android:layout_height="88dp"
+                            android:layout_marginTop="10dp"
+                            android:adjustViewBounds="true"
+                            android:contentDescription="Glass Image"
+                            android:maxWidth="200dp"
+                            android:scaleType="fitCenter" />
                     </LinearLayout>
 
-                    <!-- Right Side: Buttons -->
                     <LinearLayout
-                        android:layout_width="wrap_content"
+                        android:layout_width="0dp"
                         android:layout_height="wrap_content"
+                        android:layout_weight="0.95"
+                        android:gravity="center_vertical"
                         android:orientation="vertical"
-                        android:gravity="end">
+                        android:paddingStart="3dp">
 
-                        <!-- Quick Wake Button -->
                         <LinearLayout
                             android:id="@+id/btnQuickWake"
-                            android:layout_width="wrap_content"
+                            android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:orientation="horizontal"
+                            android:minHeight="62dp"
+                            android:layout_marginBottom="8dp"
                             android:background="@drawable/bg_button_secondary"
-                            android:paddingStart="16dp"
-                            android:paddingEnd="16dp"
-                            android:paddingTop="10dp"
-                            android:paddingBottom="10dp"
                             android:gravity="center_vertical"
-                            android:layout_marginBottom="8dp">
-
-                            <ImageView
-                                android:layout_width="18dp"
-                                android:layout_height="18dp"
-                                android:src="@drawable/ic_eye"
-                                android:layout_marginEnd="6dp"
-                                app:tint="#FFFFFF"/>
-
-                            <TextView
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:text="Quick Wake"
-                                android:textColor="#FFFFFF"
-                                android:textSize="12sp"/>
-                        </LinearLayout>
-
-                        <!-- Voice Command Button -->
-                        <LinearLayout
-                            android:id="@+id/btnVoiceCommand"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
                             android:orientation="horizontal"
-                            android:background="@drawable/bg_button_secondary"
-                            android:paddingStart="16dp"
-                            android:paddingEnd="16dp"
-                            android:paddingTop="10dp"
-                            android:paddingBottom="10dp"
-                            android:gravity="center_vertical"
-                            android:layout_marginBottom="8dp">
-
-                            <ImageView
-                                android:layout_width="18dp"
-                                android:layout_height="18dp"
-                                android:src="@drawable/ic_moon"
-                                android:layout_marginEnd="6dp"
-                                app:tint="#FFFFFF"/>
-
-                            <TextView
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:text="Voice Command"
-                                android:textColor="#FFFFFF"
-                                android:textSize="12sp"/>
-                        </LinearLayout>
-
-                        <!-- Interrupt Mode Toggle -->
-                        <LinearLayout
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:orientation="horizontal"
-                            android:background="@drawable/bg_button_secondary"
-                            android:paddingStart="16dp"
-                            android:paddingEnd="16dp"
-                            android:paddingTop="10dp"
-                            android:paddingBottom="10dp"
-                            android:gravity="center_vertical"
-                            android:layout_marginStart="10dp">
+                            android:paddingStart="10dp"
+                            android:paddingTop="8dp"
+                            android:paddingEnd="8dp"
+                            android:paddingBottom="8dp">
 
                             <ImageView
                                 android:layout_width="20dp"
                                 android:layout_height="20dp"
-                                android:src="@android:drawable/ic_media_pause"
-                                android:layout_marginEnd="8dp"
-                                app:tint="#00D9FF"/>
+                                android:layout_marginEnd="6dp"
+                                android:src="@drawable/ic_eye"
+                                app:tint="#DDEEFF" />
 
-                            <TextView
-                                android:layout_width="wrap_content"
+                            <LinearLayout
+                                android:layout_width="0dp"
                                 android:layout_height="wrap_content"
-                                android:text="Interrupt:"
-                                android:textColor="#FFFFFF"
-                                android:textSize="12sp"
-                                android:layout_marginEnd="8dp"/>
+                                android:layout_weight="1"
+                                android:orientation="vertical">
+
+                                <TextView
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:ellipsize="end"
+                                    android:maxLines="1"
+                                    android:text="Quick Wake"
+                                    android:textColor="#F2F8FF"
+                                    android:textSize="11sp" />
+
+                                <TextView
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:ellipsize="end"
+                                    android:maxLines="1"
+                                    android:text="Wake instantly"
+                                    android:textColor="#A7B9CB"
+                                    android:textSize="9sp" />
+                            </LinearLayout>
+                        </LinearLayout>
+
+                        <LinearLayout
+                            android:id="@+id/btnVoiceCommand"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:minHeight="62dp"
+                            android:layout_marginBottom="8dp"
+                            android:background="@drawable/bg_button_secondary"
+                            android:gravity="center_vertical"
+                            android:orientation="horizontal"
+                            android:paddingStart="10dp"
+                            android:paddingTop="8dp"
+                            android:paddingEnd="8dp"
+                            android:paddingBottom="8dp">
+
+                            <ImageView
+                                android:layout_width="20dp"
+                                android:layout_height="20dp"
+                                android:layout_marginEnd="6dp"
+                                android:src="@drawable/ic_mic"
+                                app:tint="#DDEEFF" />
+
+                            <LinearLayout
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:orientation="vertical">
+
+                                <TextView
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:ellipsize="end"
+                                    android:maxLines="1"
+                                    android:text="Voice Command"
+                                    android:textColor="#F2F8FF"
+                                    android:textSize="11sp" />
+
+                                <TextView
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:ellipsize="end"
+                                    android:maxLines="1"
+                                    android:text="Hands-free control"
+                                    android:textColor="#A7B9CB"
+                                    android:textSize="9sp" />
+                            </LinearLayout>
+                        </LinearLayout>
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:minHeight="62dp"
+                            android:background="@drawable/bg_button_secondary"
+                            android:gravity="center_vertical"
+                            android:orientation="horizontal"
+                            android:paddingStart="10dp"
+                            android:paddingTop="8dp"
+                            android:paddingEnd="8dp"
+                            android:paddingBottom="8dp">
+
+                            <ImageView
+                                android:layout_width="20dp"
+                                android:layout_height="20dp"
+                                android:layout_marginEnd="6dp"
+                                android:src="@android:drawable/ic_media_pause"
+                                app:tint="#DDEEFF" />
+
+                            <LinearLayout
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:orientation="vertical">
+
+                                <TextView
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:ellipsize="end"
+                                    android:maxLines="1"
+                                    android:text="Interrupt"
+                                    android:textColor="#F2F8FF"
+                                    android:textSize="11sp" />
+
+                                <TextView
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:ellipsize="end"
+                                    android:maxLines="1"
+                                    android:text="Smart pause"
+                                    android:textColor="#A7B9CB"
+                                    android:textSize="9sp" />
+                            </LinearLayout>
 
                             <androidx.appcompat.widget.SwitchCompat
                                 android:id="@+id/switchInterruptMode"
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
-                                android:checked="false"
-                                app:thumbTint="@android:color/white"
-                                app:trackTint="#555555"/>
+                                android:checked="true"
+                                android:scaleX="0.82"
+                                android:scaleY="0.82"
+                                app:thumbTint="#FFFFFFFF"
+                                app:trackTint="#FF2FB8FF" />
                         </LinearLayout>
                     </LinearLayout>
                 </LinearLayout>
-            </androidx.cardview.widget.CardView>
+            </com.google.android.material.card.MaterialCardView>
 
-            <!-- Feature Grid (2x2) -->
+            <!-- Feature Grid -->
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:layout_marginBottom="20dp">
+                android:layout_marginBottom="14dp"
+                android:orientation="vertical">
 
-                <!-- First Row -->
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:orientation="horizontal"
                     android:weightSum="2">
 
-                    <!-- Camera Card -->
-                    <androidx.cardview.widget.CardView
+                    <com.google.android.material.card.MaterialCardView
                         android:id="@+id/cardCamera"
                         android:layout_width="0dp"
-                        android:layout_height="120dp"
+                        android:layout_height="156dp"
+                        android:layout_marginEnd="6dp"
+                        android:layout_marginBottom="6dp"
                         android:layout_weight="1"
-                        android:layout_marginEnd="10dp"
-                        android:layout_marginBottom="10dp"
-                        app:cardBackgroundColor="#2A2A2A"
-                        app:cardCornerRadius="16dp"
+                        app:cardBackgroundColor="@android:color/transparent"
+                        app:cardCornerRadius="22dp"
                         app:cardElevation="0dp">
 
                         <LinearLayout
                             android:id="@+id/btnCamera"
                             android:layout_width="match_parent"
                             android:layout_height="match_parent"
-                            android:orientation="vertical"
-                            android:gravity="center"
-                            android:padding="20dp"
+                            android:background="@drawable/bg_feature_camera"
                             android:clickable="true"
                             android:focusable="true"
-                            android:background="?attr/selectableItemBackground">
+                            android:orientation="vertical"
+                            android:padding="14dp">
 
                             <ImageView
-                                android:layout_width="40dp"
-                                android:layout_height="40dp"
+                                android:layout_width="32dp"
+                                android:layout_height="32dp"
                                 android:src="@drawable/ic_camera"
-                                android:layout_marginBottom="12dp"
-                                app:tint="#FFFFFF"/>
+                                app:tint="#ECF5FF" />
 
                             <TextView
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
+                                android:layout_marginTop="28dp"
                                 android:text="Camera"
-                                android:textColor="#FFFFFF"
-                                android:textSize="14sp"/>
-                        </LinearLayout>
-                    </androidx.cardview.widget.CardView>
+                                android:textColor="#F3F8FF"
+                                android:textSize="14sp" />
 
-                    <!-- Video Card -->
-                    <androidx.cardview.widget.CardView
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="2dp"
+                                android:text="Capture the moment"
+                                android:textColor="#AFC3D8"
+                                android:textSize="10sp" />
+
+                            <ImageView
+                                android:layout_width="30dp"
+                                android:layout_height="30dp"
+                                android:layout_gravity="end"
+                                android:layout_marginTop="6dp"
+                                android:background="@drawable/bg_round_arrow_button"
+                                android:padding="8dp"
+                                android:src="@drawable/ic_arrow_right"
+                                app:tint="#D2DFED" />
+                        </LinearLayout>
+                    </com.google.android.material.card.MaterialCardView>
+
+                    <com.google.android.material.card.MaterialCardView
                         android:id="@+id/cardVideo"
                         android:layout_width="0dp"
-                        android:layout_height="120dp"
+                        android:layout_height="156dp"
+                        android:layout_marginStart="6dp"
+                        android:layout_marginBottom="6dp"
                         android:layout_weight="1"
-                        android:layout_marginStart="10dp"
-                        android:layout_marginBottom="10dp"
-                        app:cardBackgroundColor="#2A2A2A"
-                        app:cardCornerRadius="16dp"
+                        app:cardBackgroundColor="@android:color/transparent"
+                        app:cardCornerRadius="22dp"
                         app:cardElevation="0dp">
 
                         <LinearLayout
                             android:id="@+id/btnVideo"
                             android:layout_width="match_parent"
                             android:layout_height="match_parent"
-                            android:orientation="vertical"
-                            android:gravity="center"
-                            android:padding="20dp"
+                            android:background="@drawable/bg_feature_video"
                             android:clickable="true"
                             android:focusable="true"
-                            android:background="?attr/selectableItemBackground">
+                            android:orientation="vertical"
+                            android:padding="14dp">
 
                             <ImageView
-                                android:layout_width="40dp"
-                                android:layout_height="40dp"
+                                android:layout_width="32dp"
+                                android:layout_height="32dp"
                                 android:src="@drawable/ic_video"
-                                android:layout_marginBottom="12dp"
-                                app:tint="#FFFFFF"/>
+                                app:tint="#ECF5FF" />
 
                             <TextView
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
+                                android:layout_marginTop="28dp"
                                 android:text="Video"
-                                android:textColor="#FFFFFF"
-                                android:textSize="14sp"/>
+                                android:textColor="#F3F8FF"
+                                android:textSize="14sp" />
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="2dp"
+                                android:text="Record your world"
+                                android:textColor="#AFC3D8"
+                                android:textSize="10sp" />
+
+                            <ImageView
+                                android:layout_width="30dp"
+                                android:layout_height="30dp"
+                                android:layout_gravity="end"
+                                android:layout_marginTop="6dp"
+                                android:background="@drawable/bg_round_arrow_button"
+                                android:padding="8dp"
+                                android:src="@drawable/ic_arrow_right"
+                                app:tint="#D2DFED" />
                         </LinearLayout>
-                    </androidx.cardview.widget.CardView>
+                    </com.google.android.material.card.MaterialCardView>
                 </LinearLayout>
 
-                <!-- Second Row -->
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:orientation="horizontal"
                     android:weightSum="2">
 
-                    <!-- Battery Card -->
-                    <androidx.cardview.widget.CardView
+                    <com.google.android.material.card.MaterialCardView
                         android:id="@+id/cardBattery"
                         android:layout_width="0dp"
-                        android:layout_height="120dp"
+                        android:layout_height="156dp"
+                        android:layout_marginEnd="6dp"
                         android:layout_weight="1"
-                        android:layout_marginEnd="10dp"
-                        app:cardBackgroundColor="#2A2A2A"
-                        app:cardCornerRadius="16dp"
+                        android:clickable="true"
+                        android:focusable="true"
+                        app:cardBackgroundColor="@android:color/transparent"
+                        app:cardCornerRadius="22dp"
                         app:cardElevation="0dp">
 
                         <LinearLayout
                             android:layout_width="match_parent"
                             android:layout_height="match_parent"
+                            android:background="@drawable/bg_feature_battery"
                             android:orientation="vertical"
-                            android:gravity="center"
-                            android:padding="20dp">
+                            android:padding="14dp">
 
                             <ImageView
-                                android:layout_width="40dp"
-                                android:layout_height="40dp"
+                                android:layout_width="32dp"
+                                android:layout_height="32dp"
                                 android:src="@drawable/ic_battery"
-                                android:layout_marginBottom="12dp"
-                                app:tint="#FFFFFF"/>
+                                app:tint="#ECF5FF" />
 
                             <TextView
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
+                                android:layout_marginTop="28dp"
                                 android:text="Battery"
-                                android:textColor="#FFFFFF"
-                                android:textSize="14sp"/>
-                        </LinearLayout>
-                    </androidx.cardview.widget.CardView>
+                                android:textColor="#F3F8FF"
+                                android:textSize="14sp" />
 
-                    <!-- Settings Card -->
-                    <androidx.cardview.widget.CardView
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="2dp"
+                                android:text="Check power status"
+                                android:textColor="#AFC3D8"
+                                android:textSize="10sp" />
+
+                            <ImageView
+                                android:layout_width="30dp"
+                                android:layout_height="30dp"
+                                android:layout_gravity="end"
+                                android:layout_marginTop="6dp"
+                                android:background="@drawable/bg_round_arrow_button"
+                                android:padding="8dp"
+                                android:src="@drawable/ic_arrow_right"
+                                app:tint="#D2DFED" />
+                        </LinearLayout>
+                    </com.google.android.material.card.MaterialCardView>
+
+                    <com.google.android.material.card.MaterialCardView
                         android:id="@+id/cardSettings"
                         android:layout_width="0dp"
-                        android:layout_height="120dp"
+                        android:layout_height="156dp"
+                        android:layout_marginStart="6dp"
                         android:layout_weight="1"
-                        android:layout_marginStart="10dp"
-                        app:cardBackgroundColor="#2A2A2A"
-                        app:cardCornerRadius="16dp"
+                        android:clickable="true"
+                        android:focusable="true"
+                        app:cardBackgroundColor="@android:color/transparent"
+                        app:cardCornerRadius="22dp"
                         app:cardElevation="0dp">
 
                         <LinearLayout
                             android:layout_width="match_parent"
                             android:layout_height="match_parent"
+                            android:background="@drawable/bg_feature_settings"
                             android:orientation="vertical"
-                            android:gravity="center"
-                            android:padding="20dp">
+                            android:padding="14dp">
 
                             <ImageView
-                                android:layout_width="40dp"
-                                android:layout_height="40dp"
+                                android:layout_width="32dp"
+                                android:layout_height="32dp"
                                 android:src="@drawable/ic_settings"
-                                android:layout_marginBottom="12dp"
-                                app:tint="#FFFFFF"/>
+                                app:tint="#ECF5FF" />
 
                             <TextView
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
+                                android:layout_marginTop="28dp"
                                 android:text="Settings"
-                                android:textColor="#FFFFFF"
-                                android:textSize="14sp"/>
-                        </LinearLayout>
-                    </androidx.cardview.widget.CardView>
-                </LinearLayout>
-
-                <!-- Third Row - Glass Gallery -->
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:orientation="horizontal"
-                    android:layout_marginTop="10dp"
-                    android:weightSum="2">
-
-                    <!-- Glass Gallery Card -->
-                    <androidx.cardview.widget.CardView
-                        android:id="@+id/cardGlassGallery"
-                        android:layout_width="0dp"
-                        android:layout_height="120dp"
-                        android:layout_weight="1"
-                        android:layout_marginEnd="10dp"
-                        app:cardBackgroundColor="#1A3A2A"
-                        app:cardCornerRadius="16dp"
-                        app:cardElevation="0dp">
-
-                        <LinearLayout
-                            android:id="@+id/btnGlassGallery"
-                            android:layout_width="match_parent"
-                            android:layout_height="match_parent"
-                            android:orientation="vertical"
-                            android:gravity="center"
-                            android:padding="20dp"
-                            android:clickable="true"
-                            android:focusable="true"
-                            android:background="?attr/selectableItemBackground">
-
-                            <ImageView
-                                android:layout_width="40dp"
-                                android:layout_height="40dp"
-                                android:src="@drawable/ic_gallery"
-                                android:layout_marginBottom="12dp"
-                                app:tint="#00FF88"/>
+                                android:textColor="#F3F8FF"
+                                android:textSize="14sp" />
 
                             <TextView
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
-                                android:text="Glass Gallery"
-                                android:textColor="#00FF88"
-                                android:textSize="14sp"
-                                android:textStyle="bold"/>
-                        </LinearLayout>
-                    </androidx.cardview.widget.CardView>
-
-                    <!-- Vision Chat Card -->
-                    <androidx.cardview.widget.CardView
-                        android:id="@+id/cardVisionChat"
-                        android:layout_width="0dp"
-                        android:layout_height="120dp"
-                        android:layout_weight="1"
-                        android:layout_marginStart="10dp"
-                        app:cardBackgroundColor="#2A1A3A"
-                        app:cardCornerRadius="16dp"
-                        app:cardElevation="0dp">
-
-                        <LinearLayout
-                            android:id="@+id/btnVisionChat"
-                            android:layout_width="match_parent"
-                            android:layout_height="match_parent"
-                            android:orientation="vertical"
-                            android:gravity="center"
-                            android:padding="20dp"
-                            android:clickable="true"
-                            android:focusable="true"
-                            android:background="?attr/selectableItemBackground">
+                                android:layout_marginTop="2dp"
+                                android:text="Customize IMI"
+                                android:textColor="#AFC3D8"
+                                android:textSize="10sp" />
 
                             <ImageView
-                                android:layout_width="40dp"
-                                android:layout_height="40dp"
-                                android:src="@drawable/ic_ai_vision"
-                                android:layout_marginBottom="12dp"
-                                app:tint="#AA88FF"/>
-
-                            <TextView
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:text="Vision Chat"
-                                android:textColor="#AA88FF"
-                                android:textSize="14sp"
-                                android:textStyle="bold"/>
+                                android:layout_width="30dp"
+                                android:layout_height="30dp"
+                                android:layout_gravity="end"
+                                android:layout_marginTop="6dp"
+                                android:background="@drawable/bg_round_arrow_button"
+                                android:padding="8dp"
+                                android:src="@drawable/ic_arrow_right"
+                                app:tint="#D2DFED" />
                         </LinearLayout>
-                    </androidx.cardview.widget.CardView>
+                    </com.google.android.material.card.MaterialCardView>
                 </LinearLayout>
             </LinearLayout>
 
-            <!-- IMI AI Card -->
-            <androidx.cardview.widget.CardView
+            <com.google.android.material.card.MaterialCardView
+                android:id="@+id/cardLetUsKnowYou"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                app:cardBackgroundColor="#2A2A2A"
-                app:cardCornerRadius="16dp"
+                android:layout_marginBottom="14dp"
+                android:clickable="true"
+                android:focusable="true"
+                app:cardBackgroundColor="@android:color/transparent"
+                app:cardCornerRadius="22dp"
                 app:cardElevation="0dp">
 
                 <LinearLayout
+                    android:id="@+id/btnLetUsKnowYou"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:orientation="vertical"
-                    android:padding="20dp">
+                    android:background="@drawable/bg_feature_settings"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:padding="14dp">
 
-                    <!-- IMI AI Header -->
                     <LinearLayout
-                        android:layout_width="match_parent"
+                        android:layout_width="0dp"
                         android:layout_height="wrap_content"
-                        android:orientation="horizontal"
-                        android:gravity="center_vertical"
-                        android:layout_marginBottom="12dp">
+                        android:layout_weight="1"
+                        android:orientation="vertical">
 
                         <TextView
-                            android:layout_width="0dp"
-                            android:layout_height="wrap_content"
-                            android:layout_weight="1"
-                            android:text="IMI AI"
-                            android:textColor="#FFFFFF"
-                            android:textSize="20sp"
-                            android:textStyle="bold"/>
-
-                        <TextView
-                            android:id="@+id/btnGuideUsage"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="Guide to use glasses Usage"
-                            android:textColor="#AAAAAA"
-                            android:textSize="10sp"
-                            android:background="@drawable/bg_button_secondary"
-                            android:paddingStart="12dp"
-                            android:paddingEnd="12dp"
-                            android:paddingTop="6dp"
-                            android:paddingBottom="6dp"/>
+                            android:text="Let Us Know You"
+                            android:textColor="#F3F8FF"
+                            android:textSize="15sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="2dp"
+                            android:text="Answer 15 questions to personalize AI"
+                            android:textColor="#AFC3D8"
+                            android:textSize="11sp" />
                     </LinearLayout>
 
-                    <!-- Chat Messages RecyclerView -->
-                    <androidx.recyclerview.widget.RecyclerView
-                        android:id="@+id/rvChatMessages"
-                        android:layout_width="match_parent"
-                        android:layout_height="300dp"
-                        android:layout_marginBottom="16dp"
-                        android:scrollbars="vertical"
-                        android:overScrollMode="always"/>
-
-                    <!-- Action Chips -->
-                    <LinearLayout
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:orientation="horizontal"
-                        android:layout_marginBottom="16dp">
-
-                        <TextView
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:text="Create a Image"
-                            android:textColor="#888888"
-                            android:textSize="11sp"
-                            android:background="@drawable/chip_background"
-                            android:paddingStart="14dp"
-                            android:paddingEnd="14dp"
-                            android:paddingTop="8dp"
-                            android:paddingBottom="8dp"
-                            android:layout_marginEnd="8dp"/>
-
-                        <TextView
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:text="Summarize conversation"
-                            android:textColor="#888888"
-                            android:textSize="11sp"
-                            android:background="@drawable/chip_background"
-                            android:paddingStart="14dp"
-                            android:paddingEnd="14dp"
-                            android:paddingTop="8dp"
-                            android:paddingBottom="8dp"
-                            android:layout_marginEnd="8dp"/>
-
-                        <TextView
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:text="Deep Thinking"
-                            android:textColor="#888888"
-                            android:textSize="11sp"
-                            android:background="@drawable/chip_background"
-                            android:paddingStart="14dp"
-                            android:paddingEnd="14dp"
-                            android:paddingTop="8dp"
-                            android:paddingBottom="8dp"/>
-                    </LinearLayout>
-
-                    <!-- Input Field -->
-                    <LinearLayout
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:orientation="horizontal"
-                        android:background="@drawable/input_background"
-                        android:padding="12dp"
-                        android:gravity="center_vertical">
-
-                        <ImageView
-                            android:id="@+id/btnAddAttachment"
-                            android:layout_width="32dp"
-                            android:layout_height="32dp"
-                            android:src="@drawable/ic_add"
-                            android:background="@drawable/circle_button"
-                            android:padding="6dp"
-                            android:layout_marginEnd="8dp"
-                            app:tint="#FFFFFF"/>
-
-                        <EditText
-                            android:id="@+id/etChatInput"
-                            android:layout_width="0dp"
-                            android:layout_height="wrap_content"
-                            android:layout_weight="1"
-                            android:hint="Ask anything"
-                            android:textColorHint="#666666"
-                            android:textColor="#FFFFFF"
-                            android:textSize="14sp"
-                            android:background="@android:color/transparent"
-                            android:padding="8dp"/>
-
-                        <EditText
-                            android:id="@+id/etCommand"
-                            android:layout_width="0dp"
-                            android:layout_height="0dp"
-                            android:visibility="gone"/>
-
-                        <ImageView
-                            android:id="@+id/btnVoiceInput"
-                            android:layout_width="32dp"
-                            android:layout_height="32dp"
-                            android:src="@drawable/ic_mic"
-                            android:padding="6dp"
-                            android:layout_marginEnd="8dp"
-                            app:tint="#FFFFFF"/>
-
-                        <ImageView
-                            android:id="@+id/btnVoice"
-                            android:layout_width="0dp"
-                            android:layout_height="0dp"
-                            android:visibility="gone"/>
-
-                        <ImageView
-                            android:id="@+id/btnSendMessage"
-                            android:layout_width="32dp"
-                            android:layout_height="32dp"
-                            android:src="@drawable/ic_send"
-                            android:padding="6dp"
-                            app:tint="#FFFFFF"/>
-                    </LinearLayout>
+                    <ImageView
+                        android:layout_width="34dp"
+                        android:layout_height="34dp"
+                        android:background="@drawable/bg_round_arrow_button"
+                        android:padding="9dp"
+                        android:src="@drawable/ic_arrow_right"
+                        app:tint="#D2DFED" />
                 </LinearLayout>
-            </androidx.cardview.widget.CardView>
+            </com.google.android.material.card.MaterialCardView>
+
+            <!-- Hidden IDs retained for existing code compatibility -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:visibility="gone">
+
+                <com.google.android.material.card.MaterialCardView
+                    android:id="@+id/cardGlassGallery"
+                    android:layout_width="1dp"
+                    android:layout_height="1dp" />
+
+                <com.google.android.material.card.MaterialCardView
+                    android:id="@+id/cardVisionChat"
+                    android:layout_width="1dp"
+                    android:layout_height="1dp" />
+
+                <com.google.android.material.card.MaterialCardView
+                    android:id="@+id/cardLiveGallery"
+                    android:layout_width="1dp"
+                    android:layout_height="1dp" />
+
+                <com.google.android.material.card.MaterialCardView
+                    android:id="@+id/cardChat"
+                    android:layout_width="1dp"
+                    android:layout_height="1dp" />
+
+                <com.google.android.material.card.MaterialCardView
+                    android:id="@+id/cardMeetingMinutes"
+                    android:layout_width="1dp"
+                    android:layout_height="1dp" />
+
+                <com.google.android.material.card.MaterialCardView
+                    android:id="@+id/cardQuickNotes"
+                    android:layout_width="1dp"
+                    android:layout_height="1dp" />
+
+                <com.google.android.material.card.MaterialCardView
+                    android:id="@+id/cardConversationHistory"
+                    android:layout_width="1dp"
+                    android:layout_height="1dp" />
+
+                <LinearLayout
+                    android:id="@+id/btnGlassGallery"
+                    android:layout_width="1dp"
+                    android:layout_height="1dp"
+                    android:orientation="vertical" />
+
+                <LinearLayout
+                    android:id="@+id/btnVisionChat"
+                    android:layout_width="1dp"
+                    android:layout_height="1dp"
+                    android:orientation="vertical" />
+            </LinearLayout>
 
             <!-- Hidden Views for Compatibility -->
             <LinearLayout
@@ -736,7 +809,7 @@
                     android:id="@+id/ivConversationImage"
                     android:layout_width="match_parent"
                     android:layout_height="200dp"
-                    android:scaleType="centerCrop"/>
+                    android:scaleType="centerCrop" />
 
                 <ScrollView
                     android:layout_width="match_parent"
@@ -746,8 +819,8 @@
                         android:id="@+id/tvConversation"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:textColor="#FFFFFF"
-                        android:padding="16dp"/>
+                        android:padding="16dp"
+                        android:textColor="#FFFFFF" />
                 </ScrollView>
             </LinearLayout>
 
@@ -755,7 +828,139 @@
                 android:id="@+id/btnSavePhoto"
                 android:layout_width="0dp"
                 android:layout_height="0dp"
-                android:visibility="gone"/>
+                android:visibility="gone" />
+
+            <!-- Hidden Compatibility Views -->
+            <TextView
+                android:id="@+id/tvLiveGalleryCount"
+                android:layout_width="0dp"
+                android:layout_height="0dp"
+                android:visibility="gone" />
+
+            <TextView
+                android:id="@+id/tvMuteStatus"
+                android:layout_width="0dp"
+                android:layout_height="0dp"
+                android:visibility="gone" />
+
+            <ImageView
+                android:id="@+id/ivMuteIcon"
+                android:layout_width="0dp"
+                android:layout_height="0dp"
+                android:visibility="gone" />
+
+            <Button
+                android:id="@+id/btnMuteAi"
+                android:layout_width="0dp"
+                android:layout_height="0dp"
+                android:visibility="gone" />
+
+            <LinearLayout
+                android:id="@+id/btnChat"
+                android:layout_width="0dp"
+                android:layout_height="0dp"
+                android:orientation="vertical"
+                android:visibility="gone" />
+
+            <LinearLayout
+                android:id="@+id/btnQuickNotes"
+                android:layout_width="0dp"
+                android:layout_height="0dp"
+                android:orientation="vertical"
+                android:visibility="gone" />
+
+            <LinearLayout
+                android:id="@+id/btnMeetingMinutes"
+                android:layout_width="0dp"
+                android:layout_height="0dp"
+                android:orientation="vertical"
+                android:visibility="gone" />
+
+            <LinearLayout
+                android:id="@+id/btnUserMemory"
+                android:layout_width="0dp"
+                android:layout_height="0dp"
+                android:orientation="vertical"
+                android:visibility="gone" />
+
+            <LinearLayout
+                android:id="@+id/btnLiveGallery"
+                android:layout_width="0dp"
+                android:layout_height="0dp"
+                android:orientation="vertical"
+                android:visibility="gone" />
+
+            <LinearLayout
+                android:id="@+id/btnVisionDescriptions"
+                android:layout_width="0dp"
+                android:layout_height="0dp"
+                android:orientation="vertical"
+                android:visibility="gone" />
+
+            <Button
+                android:id="@+id/btnModelGpt"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:layout_marginBottom="8dp"
+                android:background="@drawable/bg_button_secondary"
+                android:padding="12dp"
+                android:text="GPT Realtime"
+                android:textAllCaps="false"
+                android:textColor="#CCCCCC"
+                android:textSize="12sp"
+                android:visibility="gone" />
+
+            <Button
+                android:id="@+id/btnModelGemini"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="8dp"
+                android:background="@drawable/bg_button_secondary"
+                android:padding="12dp"
+                android:text="Gemini Live"
+                android:textAllCaps="false"
+                android:textColor="#CCCCCC"
+                android:textSize="12sp"
+                android:visibility="gone" />
+
+            <TextView
+                android:id="@+id/tvCurrentModel"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="12dp"
+                android:text="Current: GPT Realtime Mini"
+                android:textColor="@color/glass_primary"
+                android:textSize="10sp"
+                android:visibility="gone" />
+
+            <TextView
+                android:id="@+id/tvVisionDescCount"
+                android:layout_width="0dp"
+                android:layout_height="0dp"
+                android:visibility="gone" />
+
+            <TextView
+                android:id="@+id/tvVisionDescPreview"
+                android:layout_width="0dp"
+                android:layout_height="0dp"
+                android:visibility="gone" />
         </LinearLayout>
     </androidx.core.widget.NestedScrollView>
+
+    <com.google.android.material.bottomnavigation.BottomNavigationView
+        android:id="@+id/bottomNavigation"
+        android:layout_width="match_parent"
+        android:layout_height="68dp"
+        android:layout_gravity="bottom"
+        android:layout_marginStart="12dp"
+        android:layout_marginEnd="12dp"
+        android:layout_marginBottom="8dp"
+        android:background="@drawable/bg_bottom_nav_glass"
+        app:itemBackground="@drawable/bg_bottom_nav_item"
+        app:itemIconTint="@color/bottom_nav_item_color"
+        app:itemTextColor="@color/bottom_nav_item_color"
+        app:labelVisibilityMode="labeled"
+        app:menu="@menu/menu_bottom_nav" />
 </androidx.coordinatorlayout.widget.CoordinatorLayout>
+

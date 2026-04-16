@@ -1,5 +1,6 @@
-﻿package com.sdk.glassessdksample.ui
+package com.sdk.glassessdksample.ui
 
+import com.sdk.glassessdksample.RemoteConfigManager
 import android.media.AudioFormat
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
@@ -37,21 +38,33 @@ import com.sdk.glassessdksample.ui.ScoConnectionHelper
 
 /**
  * GeminiLiveService - Android implementation of real-time bidirectional audio streaming
- * with Google's Gemini 2.0 Flash Live API.
+ * Supports BOTH OpenAI GPT Realtime API and Google Gemini Live API.
+ * User can switch between models from the home screen.
  * 
  * This service handles:
- * - Real-time audio input capture (16kHz PCM)
- * - Real-time audio output playback (24kHz PCM)
+ * - Real-time audio input capture (PCM16LE)
+ * - Real-time audio output playback (PCM16LE)
  * - WebSocket-based bidirectional communication
  * - Live transcription (input and output)
  * - Turn-based conversation management
  */
+
+/** Which AI provider to use for realtime voice */
+enum class ModelProvider {
+    GPT_REALTIME,      // OpenAI gpt-4o-mini-realtime-preview
+    GEMINI_LIVE        // Google gemini-2.5-flash-native-audio
+}
+
 class GeminiLiveService(
     private val context: Context,
     private val callbacks: GeminiLiveCallbacks
 ) {
     companion object {
         private const val TAG = "GeminiLiveService"
+        
+        // SharedPreferences key for model selection
+        const val PREF_NAME = "imi_model_prefs"
+        const val PREF_KEY_MODEL = "selected_model" // "gpt" or "gemini"
         
         // 🆕 Singleton instance for cross-activity access
         @Volatile
@@ -67,32 +80,62 @@ class GeminiLiveService(
          */
         fun isActive(): Boolean = instance?.webSocket != null
         
+        /**
+         * Read saved model preference
+         */
+        fun getSavedModelProvider(context: Context): ModelProvider {
+            val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+            val saved = prefs.getString(PREF_KEY_MODEL, "gpt") ?: "gpt"
+            return if (saved == "gemini") ModelProvider.GEMINI_LIVE else ModelProvider.GPT_REALTIME
+        }
+        
+        /**
+         * Save model preference
+         */
+        fun saveModelProvider(context: Context, provider: ModelProvider) {
+            val value = if (provider == ModelProvider.GEMINI_LIVE) "gemini" else "gpt"
+            context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+                .edit().putString(PREF_KEY_MODEL, value).apply()
+        }
+        
         // Audio configuration constants
-        private const val INPUT_SAMPLE_RATE = 16000 // 16kHz for input
-        private const val OUTPUT_SAMPLE_RATE = 24000 // 24kHz for output
+        // Both APIs use PCM16LE; sample rates differ
         private val CHANNEL_CONFIG_IN = android.media.AudioFormat.CHANNEL_IN_MONO
         private val CHANNEL_CONFIG_OUT = android.media.AudioFormat.CHANNEL_OUT_MONO
         private val AUDIO_FORMAT = android.media.AudioFormat.ENCODING_PCM_16BIT
-        private const val BUFFER_SIZE_MULTIPLIER = 8 // INCREASED for smoother audio without crackling
+        private const val BUFFER_SIZE_MULTIPLIER = 8
         
         // Pre-buffering: Wait for this many audio chunks before starting playback
-        private const val PRE_BUFFER_COUNT = 3 // ⚡ REDUCED: 8 -> 3 for faster start (lower latency)
+        private const val PRE_BUFFER_COUNT = 3
         
         // Audio timeout: How long to wait for more audio before declaring end of speech
-        // 🔥 TUNED: 700ms - Fast enough for snappy replies, slow enough to catch pauses
         private const val AUDIO_END_TIMEOUT_MS = 700L
         
         // Loudness settings
-        // Balanced gain to prevent audio distortion/clipping
-        private const val SOFTWARE_GAIN = 0.85f // REDUCED slightly to prevent any clipping
+        private const val SOFTWARE_GAIN = 1.0f
         
-        // WebSocket configuration
-        private const val MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
-        private const val VOICE_NAME = "Kore" // Gentle, soft voice (requested by user)
+        // ---- OpenAI GPT Realtime ----
+        private const val GPT_MODEL = "gpt-4o-mini-realtime-preview"
+        private const val GPT_VOICE = "shimmer" // alloy, echo, fable, onyx, nova, shimmer
+        private const val GPT_INPUT_SAMPLE_RATE = 24000
+        private const val GPT_OUTPUT_SAMPLE_RATE = 24000
+        
+        // ---- Google Gemini Live ----
+        private const val GEMINI_MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
+        private const val GEMINI_VOICE = "Kore"
+        private const val GEMINI_INPUT_SAMPLE_RATE = 16000
+        private const val GEMINI_OUTPUT_SAMPLE_RATE = 24000
         
         // Echo cancellation and noise suppression
-        private const val ENERGY_THRESHOLD = 200.0 // RMS threshold - lowered for better speech detection
+        private const val ENERGY_THRESHOLD = 200.0
     }
+    
+    // Active model provider (read from prefs at start)
+    private var activeProvider: ModelProvider = getSavedModelProvider(context)
+    
+    // Dynamic sample rates based on provider
+    private val inputSampleRate: Int get() = if (activeProvider == ModelProvider.GPT_REALTIME) GPT_INPUT_SAMPLE_RATE else GEMINI_INPUT_SAMPLE_RATE
+    private val outputSampleRate: Int get() = if (activeProvider == ModelProvider.GPT_REALTIME) GPT_OUTPUT_SAMPLE_RATE else GEMINI_OUTPUT_SAMPLE_RATE
 
     // Callbacks interface for communication with UI
     interface GeminiLiveCallbacks {
@@ -239,11 +282,26 @@ class GeminiLiveService(
         instance = this
         Log.d(TAG, "🌐 GeminiLiveService instance set for cross-activity access")
 
-        val apiKey = BuildConfig.GEMINI_API_KEY
-        if (apiKey.isEmpty()) {
-            callbacks.onError("API Key is not configured")
+        // Re-read model preference at start
+        activeProvider = getSavedModelProvider(context)
+        Log.d(TAG, "🔄 Starting with model provider: $activeProvider")
+        
+        val apiKey = if (activeProvider == ModelProvider.GPT_REALTIME) {
+            RemoteConfigManager.openAiApiKey
+        } else {
+            RemoteConfigManager.geminiApiKey
+        }
+        
+        val providerName = if (activeProvider == ModelProvider.GPT_REALTIME) "OpenAI" else "Gemini"
+        
+        if (apiKey.isEmpty() || apiKey == "YOUR_GEMINI_API_KEY_HERE" || apiKey == "YOUR_OPENAI_API_KEY_HERE") {
+            val errorMsg = "$providerName API Key is not configured properly"
+            Log.e(TAG, "❌ $errorMsg")
+            callbacks.onError(errorMsg)
             return
         }
+        
+        Log.d(TAG, "✅ $providerName API Key validated successfully")
 
         scope.launch {
             try {
@@ -283,35 +341,45 @@ class GeminiLiveService(
         val ws = webSocket
         if (ws == null) {
             Log.e(TAG, "❌ Cannot speak text - WebSocket not connected")
-            callbacks.onError("Gemini Live not connected")
+            callbacks.onError("AI not connected")
             return
         }
         
         try {
-            // Speak the text naturally and COMPLETELY without stopping
             val promptText = if (speakDirectly) {
                 "Read this COMPLETELY in one go, do not pause or stop in the middle: $textToSpeak"
             } else {
                 textToSpeak
             }
             
-            val message = mapOf(
-                "clientContent" to mapOf(
-                    "turns" to listOf(
-                        mapOf(
-                            "role" to "user",
-                            "parts" to listOf(
-                                mapOf("text" to promptText)
-                            )
+            if (activeProvider == ModelProvider.GPT_REALTIME) {
+                // OpenAI Realtime: send conversation.item.create + response.create
+                val itemCreate = mapOf(
+                    "type" to "conversation.item.create",
+                    "item" to mapOf(
+                        "type" to "message",
+                        "role" to "user",
+                        "content" to listOf(
+                            mapOf("type" to "input_text", "text" to promptText)
                         )
-                    ),
-                    "turnComplete" to true
+                    )
                 )
-            )
+                ws.send(gson.toJson(itemCreate))
+                ws.send(gson.toJson(mapOf("type" to "response.create")))
+            } else {
+                // Gemini Live: client_content
+                val clientContent = mapOf(
+                    "client_content" to mapOf(
+                        "turns" to listOf(
+                            mapOf("role" to "user", "parts" to listOf(mapOf("text" to promptText)))
+                        ),
+                        "turn_complete" to true
+                    )
+                )
+                ws.send(gson.toJson(clientContent))
+            }
             
-            val jsonMessage = gson.toJson(message)
-            val sent = ws.send(jsonMessage)
-            Log.d(TAG, "🔊 Injected text for Gemini to speak: ${textToSpeak.take(100)}... sent=$sent")
+            Log.d(TAG, "🔊 Injected text to speak: ${textToSpeak.take(100)}...")
             
         } catch (e: Exception) {
             Log.e(TAG, "❌ Failed to inject speak text: ${e.message}", e)
@@ -332,26 +400,35 @@ class GeminiLiveService(
         }
         
         try {
-            // Inject as a system/context message that Gemini will remember
             val contextMessage = "VISION CONTEXT: $visionDescription"
             
-            val message = mapOf(
-                "clientContent" to mapOf(
-                    "turns" to listOf(
-                        mapOf(
-                            "role" to "user",
-                            "parts" to listOf(
-                                mapOf("text" to contextMessage)
-                            )
+            if (activeProvider == ModelProvider.GPT_REALTIME) {
+                // OpenAI Realtime: inject as a user message
+                val itemCreate = mapOf(
+                    "type" to "conversation.item.create",
+                    "item" to mapOf(
+                        "type" to "message",
+                        "role" to "user",
+                        "content" to listOf(
+                            mapOf("type" to "input_text", "text" to contextMessage)
                         )
-                    ),
-                    "turnComplete" to true
+                    )
                 )
-            )
-            
-            val jsonMessage = gson.toJson(message)
-            val sent = ws.send(jsonMessage)
-            Log.d(TAG, "📝 Injected vision context into conversation memory: sent=$sent")
+                val sent = ws.send(gson.toJson(itemCreate))
+                Log.d(TAG, "📝 Injected vision context (GPT): sent=$sent")
+            } else {
+                // Gemini Live: client_content
+                val clientContent = mapOf(
+                    "client_content" to mapOf(
+                        "turns" to listOf(
+                            mapOf("role" to "user", "parts" to listOf(mapOf("text" to contextMessage)))
+                        ),
+                        "turn_complete" to false
+                    )
+                )
+                val sent = ws.send(gson.toJson(clientContent))
+                Log.d(TAG, "📝 Injected vision context (Gemini): sent=$sent")
+            }
             
         } catch (e: Exception) {
             Log.e(TAG, "❌ Failed to inject vision context: ${e.message}", e)
@@ -406,33 +483,59 @@ class GeminiLiveService(
         }
         
         try {
-            val message = mapOf(
-                "clientContent" to mapOf(
-                    "turns" to listOf(
-                        mapOf(
-                            "role" to "user",
-                            "parts" to listOf(
-                                mapOf("text" to "Say naturally like you're thinking: 'hmm... hmm... let me see... hmm... looking at this... hmm hmm...' Keep going for about 5-10 seconds, like you're carefully examining something. Sound natural and thoughtful.")
+            val thinkingPrompt = "Say naturally like you're thinking: 'hmm... hmm... let me see... hmm... looking at this... hmm hmm...' Keep going for about 5-10 seconds, like you're carefully examining something. Sound natural and thoughtful."
+
+            if (activeProvider == ModelProvider.GPT_REALTIME) {
+                // OpenAI Realtime: send as user message + trigger response
+                val itemCreate = mapOf(
+                    "type" to "conversation.item.create",
+                    "item" to mapOf(
+                        "type" to "message",
+                        "role" to "user",
+                        "content" to listOf(
+                            mapOf(
+                                "type" to "input_text",
+                                "text" to thinkingPrompt
                             )
                         )
-                    ),
-                    "turnComplete" to true
+                    )
                 )
-            )
-            
-            val jsonMessage = gson.toJson(message)
-            ws.send(jsonMessage)
-            Log.d(TAG, "🎵 Playing CONTINUOUS thinking sound through Gemini Live")
-            
+                ws.send(gson.toJson(itemCreate))
+                val responseCreate = mapOf("type" to "response.create")
+                ws.send(gson.toJson(responseCreate))
+                Log.d(TAG, "🎵 Playing CONTINUOUS thinking sound through GPT Realtime")
+            } else {
+                // Gemini Live: send as client_content user turn
+                val clientContent = mapOf(
+                    "client_content" to mapOf(
+                        "turns" to listOf(
+                            mapOf(
+                                "role" to "user",
+                                "parts" to listOf(mapOf("text" to thinkingPrompt))
+                            )
+                        ),
+                        "turn_complete" to true
+                    )
+                )
+                ws.send(gson.toJson(clientContent))
+                Log.d(TAG, "🎵 Playing CONTINUOUS thinking sound through Gemini Live")
+            }
         } catch (e: Exception) {
             Log.e(TAG, "❌ Failed to play thinking sound: ${e.message}", e)
         }
     }
 
     private suspend fun initializeAudioComponents() {
-    Log.d(TAG, "🎧 Initializing DUAL CONNECTION audio (BLE Data + System Audio)")
+    Log.d(TAG, "🎧 ======================================")
+    Log.d(TAG, "🎧 AUDIO INITIALIZATION STARTED")
+    Log.d(TAG, "🎧 ======================================")
     
     audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+    if (audioManager == null) {
+        Log.e(TAG, "❌ FATAL: AudioManager is null!")
+        throw IllegalStateException("AudioManager not available")
+    }
+    Log.d(TAG, "✅ AudioManager obtained")
     
     // ========== OPTION A: Use System Bluetooth for Audio ==========
     // BLE handles data (photos, commands) - System Bluetooth handles audio
@@ -465,13 +568,13 @@ class GeminiLiveService(
     
     // 4. Calculate buffer sizes
     val inputBufferSize = AudioRecord.getMinBufferSize(
-        INPUT_SAMPLE_RATE,
+        inputSampleRate,
         CHANNEL_CONFIG_IN,
         AUDIO_FORMAT
     ) * BUFFER_SIZE_MULTIPLIER
 
     val outputBufferSize = AudioTrack.getMinBufferSize(
-        OUTPUT_SAMPLE_RATE,
+        outputSampleRate,
         CHANNEL_CONFIG_OUT,
         AUDIO_FORMAT
     ) * BUFFER_SIZE_MULTIPLIER
@@ -483,7 +586,7 @@ class GeminiLiveService(
             .setAudioFormat(
                 AudioFormat.Builder()
                     .setEncoding(AUDIO_FORMAT)
-                    .setSampleRate(INPUT_SAMPLE_RATE)
+                    .setSampleRate(inputSampleRate)
                     .setChannelMask(CHANNEL_CONFIG_IN)
                     .build()
             )
@@ -554,7 +657,7 @@ class GeminiLiveService(
             )
             .setAudioFormat(
                 AudioFormat.Builder()
-                    .setSampleRate(OUTPUT_SAMPLE_RATE)
+                    .setSampleRate(outputSampleRate)
                     .setChannelMask(CHANNEL_CONFIG_OUT)
                     .setEncoding(AUDIO_FORMAT)
                     .build()
@@ -575,8 +678,8 @@ class GeminiLiveService(
         Log.d(TAG, "🎧 ===== AUDIO INITIALIZATION COMPLETE =====")
         Log.d(TAG, "   📡 BLE Connection: Active (for data/commands)")
         Log.d(TAG, "   🎤 Audio Input: $deviceName ($deviceType)")
-        Log.d(TAG, "   🔊 Audio Output: ${OUTPUT_SAMPLE_RATE}Hz")
-        Log.d(TAG, "   🎧 Mode: Dual Connection (BLE + Audio)")
+        Log.d(TAG, "   🔊 Audio Output: ${outputSampleRate}Hz")
+        Log.d(TAG, "   🎧 Provider: $activeProvider")
         Log.d(TAG, "==========================================")
         
     } catch (e: Exception) {
@@ -586,56 +689,49 @@ class GeminiLiveService(
 }
 
     /**
-     * Connect to Gemini Live WebSocket
+     * Connect to Realtime WebSocket (GPT or Gemini based on activeProvider)
      */
     private fun connectWebSocket(apiKey: String, systemInstruction: String) {
-        val url = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key=$apiKey"
+        val url: String
+        val requestBuilder = Request.Builder()
         
-        val request = Request.Builder()
-            .url(url)
-            .build()
+        if (activeProvider == ModelProvider.GPT_REALTIME) {
+            url = "wss://api.openai.com/v1/realtime?model=$GPT_MODEL"
+            requestBuilder.url(url)
+                .header("Authorization", "Bearer $apiKey")
+                .header("OpenAI-Beta", "realtime=v1")
+            Log.d(TAG, "🌐 Connecting to OpenAI Realtime: $GPT_MODEL")
+        } else {
+            url = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=$apiKey"
+            requestBuilder.url(url)
+            Log.d(TAG, "🌐 Connecting to Gemini Live: $GEMINI_MODEL")
+        }
+        
+        val request = requestBuilder.build()
 
         val listener = object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
-                Log.d(TAG, "✅ WebSocket connected")
+                val providerName = if (activeProvider == ModelProvider.GPT_REALTIME) "OpenAI Realtime" else "Gemini Live"
+                Log.d(TAG, "✅ ======================================")
+                Log.d(TAG, "✅ WEBSOCKET CONNECTED TO $providerName")
+                Log.d(TAG, "✅ Response code: ${response.code}")
+                Log.d(TAG, "✅ ======================================")
                 this@GeminiLiveService.webSocket = webSocket
                 callbacks.onConnectionStatusChanged(true)
 
-                // Send initial setup configuration
+                // Send session configuration
+                Log.d(TAG, "📤 Sending setup message...")
                 sendSetupMessage(webSocket, systemInstruction)
 
                 // Start audio playback (ready to receive)
+                Log.d(TAG, "🔊 Starting audio playback...")
                 startAudioPlayback()
                 
-                // Start audio capture immediately (don't wait for setupComplete)
-                // The API should work even without explicit setupComplete message
+                // Start audio capture immediately
                 scope.launch {
-                    // Give the server a very short moment to respond
-                    delay(10) // 10ms - faster startup
-                    if (!isSetupComplete.get()) {
-                        Log.d(TAG, "⚡ Starting audio capture (fallback - no setupComplete received)")
-                        
-                        // Send a test text message first to verify connection
-                        val testMessage = mapOf(
-                            "clientContent" to mapOf(
-                                "turns" to listOf(
-                                    mapOf(
-                                        "role" to "user",
-                                        "parts" to listOf(
-                                            mapOf("text" to "Hello, please respond with a short greeting.")
-                                        )
-                                    )
-                                ),
-                                "turnComplete" to true
-                            )
-                        )
-                        val testJson = gson.toJson(testMessage)
-                        Log.d(TAG, "📤 Sending test text message to verify connection")
-                        webSocket.send(testJson)
-                        
-                        // Then start audio capture immediately
-                        startAudioCapture(webSocket)
-                    }
+                    delay(100) // Brief startup delay
+                    Log.d(TAG, "⚡ Starting audio capture for $providerName")
+                    startAudioCapture(webSocket)
                 }
             }
 
@@ -646,7 +742,6 @@ class GeminiLiveService(
             
             override fun onMessage(webSocket: WebSocket, bytes: okio.ByteString) {
                 Log.d(TAG, "📩 WebSocket onMessage (bytes): ${bytes.size} bytes")
-                // Convert bytes to string and handle
                 handleWebSocketMessage(bytes.utf8())
             }
 
@@ -658,12 +753,12 @@ class GeminiLiveService(
                     Log.e(TAG, "❌ Could not read response body")
                 }
                 
-                // Handle network disconnection gracefully - don't crash
                 val errorMessage = when {
                     t.message?.contains("network", ignoreCase = true) == true -> "Network disconnected"
                     t.message?.contains("internet", ignoreCase = true) == true -> "No internet connection"
                     t.message?.contains("connection", ignoreCase = true) == true -> "Connection lost"
                     t.message?.contains("timeout", ignoreCase = true) == true -> "Connection timeout"
+                    t.message?.contains("401", ignoreCase = true) == true -> "Invalid OpenAI API Key"
                     else -> "Connection failed: ${t.message}"
                 }
                 
@@ -674,7 +769,6 @@ class GeminiLiveService(
                     Log.e(TAG, "Error in callbacks: ${e.message}")
                 }
                 
-                // Cleanup safely
                 try {
                     cleanup()
                 } catch (e: Exception) {
@@ -698,250 +792,236 @@ class GeminiLiveService(
     }
 
     /**
-     * Send initial setup message to configure the session with tools
+     * Send session.update to configure the OpenAI Realtime session with tools
      */
     private fun sendSetupMessage(webSocket: WebSocket, systemInstruction: String) {
-        // Define tools/functions that Gemini can call
+        // Define tools/functions for OpenAI Realtime format
         val tools = listOf(
             mapOf(
-                "functionDeclarations" to listOf(
-                    mapOf(
-                        "name" to "make_phone_call",
-                        "description" to "Make a phone call to a contact by name",
-                        "parameters" to mapOf(
-                            "type" to "object",
-                            "properties" to mapOf(
-                                "contact_name" to mapOf(
-                                    "type" to "string",
-                                    "description" to "Name of the contact to call"
-                                )
-                            ),
-                            "required" to listOf("contact_name")
-                        )
+                "type" to "function",
+                "name" to "make_phone_call",
+                "description" to "Make a phone call to a contact by name",
+                "parameters" to mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "contact_name" to mapOf("type" to "string", "description" to "Name of the contact to call")
                     ),
-                    mapOf(
-                        "name" to "play_music",
-                        "description" to "Play music or a specific song on Spotify",
-                        "parameters" to mapOf(
-                            "type" to "object",
-                            "properties" to mapOf(
-                                "song_or_artist" to mapOf(
-                                    "type" to "string",
-                                    "description" to "Song name, artist name, or music genre to play"
-                                )
-                            ),
-                            "required" to listOf("song_or_artist")
-                        )
+                    "required" to listOf("contact_name")
+                )
+            ),
+            mapOf(
+                "type" to "function",
+                "name" to "play_music",
+                "description" to "Play music or a specific song on Spotify",
+                "parameters" to mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "song_or_artist" to mapOf("type" to "string", "description" to "Song name, artist name, or music genre to play")
                     ),
-                    mapOf(
-                        "name" to "play_youtube",
-                        "description" to "Play a video on YouTube",
-                        "parameters" to mapOf(
-                            "type" to "object",
-                            "properties" to mapOf(
-                                "search_query" to mapOf(
-                                    "type" to "string",
-                                    "description" to "Video or topic to search on YouTube"
-                                )
-                            ),
-                            "required" to listOf("search_query")
-                        )
+                    "required" to listOf("song_or_artist")
+                )
+            ),
+            mapOf(
+                "type" to "function",
+                "name" to "play_youtube",
+                "description" to "Play a video on YouTube",
+                "parameters" to mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "search_query" to mapOf("type" to "string", "description" to "Video or topic to search on YouTube")
                     ),
-                    mapOf(
-                        "name" to "open_camera",
-                        "description" to "Open the camera to take a photo or record video",
-                        "parameters" to mapOf(
-                            "type" to "object",
-                            "properties" to mapOf(
-                                "mode" to mapOf(
-                                    "type" to "string",
-                                    "description" to "Camera mode: 'photo', 'video', or 'view'",
-                                    "enum" to listOf("photo", "video", "view")
-                                )
-                            ),
-                            "required" to listOf("mode")
-                        )
+                    "required" to listOf("search_query")
+                )
+            ),
+            mapOf(
+                "type" to "function",
+                "name" to "open_camera",
+                "description" to "Open the camera to take a photo or record video",
+                "parameters" to mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "mode" to mapOf("type" to "string", "description" to "Camera mode: 'photo', 'video', or 'view'", "enum" to listOf("photo", "video", "view"))
                     ),
-                    mapOf(
-                        "name" to "take_photo",
-                        "description" to "Capture a photo with the camera",
-                        "parameters" to mapOf(
-                            "type" to "object",
-                            "properties" to mapOf<String, Any>()
-                        )
+                    "required" to listOf("mode")
+                )
+            ),
+            mapOf(
+                "type" to "function",
+                "name" to "take_photo",
+                "description" to "Capture a photo with the camera",
+                "parameters" to mapOf(
+                    "type" to "object",
+                    "properties" to mapOf<String, Any>()
+                )
+            ),
+            mapOf(
+                "type" to "function",
+                "name" to "record_video",
+                "description" to "Start or stop video recording",
+                "parameters" to mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "action" to mapOf("type" to "string", "description" to "Action: 'start' to begin recording, 'stop' to end recording", "enum" to listOf("start", "stop"))
                     ),
-                    mapOf(
-                        "name" to "record_video",
-                        "description" to "Start or stop video recording",
-                        "parameters" to mapOf(
-                            "type" to "object",
-                            "properties" to mapOf(
-                                "action" to mapOf(
-                                    "type" to "string",
-                                    "description" to "Action: 'start' to begin recording, 'stop' to end recording",
-                                    "enum" to listOf("start", "stop")
-                                )
-                            ),
-                            "required" to listOf("action")
-                        )
-                    ),
-                    mapOf(
-                        "name" to "analyze_view",
-                        "description" to "Analyze what is in front of the user using the camera (what is this, what is in front of me, identify object)",
-                        "parameters" to mapOf(
-                            "type" to "object",
-                            "properties" to mapOf(
-                                "question" to mapOf(
-                                    "type" to "string",
-                                    "description" to "The question about what the user wants to know about their view"
-                                )
-                            )
-                        )
-                    ),
-                    mapOf(
-                        "name" to "capture_new_frame",
-                        "description" to "Capture a new photo/frame from glasses camera when user wants to see something new (click another, new photo, take another picture, naya photo, dusra click karo, agla frame)",
-                        "parameters" to mapOf(
-                            "type" to "object",
-                            "properties" to mapOf<String, Any>()
-                        )
-                    ),
-                    mapOf(
-                        "name" to "open_maps",
-                        "description" to "Open Google Maps for navigation or location search",
-                        "parameters" to mapOf(
-                            "type" to "object",
-                            "properties" to mapOf(
-                                "destination" to mapOf(
-                                    "type" to "string",
-                                    "description" to "Destination or place to navigate to or search for"
-                                ),
-                                "mode" to mapOf(
-                                    "type" to "string",
-                                    "description" to "Navigation mode: 'driving', 'walking', 'transit'",
-                                    "enum" to listOf("driving", "walking", "transit")
-                                )
-                            )
-                        )
-                    ),
-                    mapOf(
-                        "name" to "send_message",
-                        "description" to "Send a WhatsApp or SMS message to a contact",
-                        "parameters" to mapOf(
-                            "type" to "object",
-                            "properties" to mapOf(
-                                "contact_name" to mapOf(
-                                    "type" to "string",
-                                    "description" to "Name of the contact to message"
-                                ),
-                                "message" to mapOf(
-                                    "type" to "string",
-                                    "description" to "Message content to send"
-                                ),
-                                "app" to mapOf(
-                                    "type" to "string",
-                                    "description" to "Messaging app to use: 'whatsapp' or 'sms'",
-                                    "enum" to listOf("whatsapp", "sms")
-                                )
-                            ),
-                            "required" to listOf("contact_name", "message")
-                        )
-                    ),
-                    mapOf(
-                        "name" to "set_reminder",
-                        "description" to "Set a reminder or alarm",
-                        "parameters" to mapOf(
-                            "type" to "object",
-                            "properties" to mapOf(
-                                "reminder_text" to mapOf(
-                                    "type" to "string",
-                                    "description" to "What to remind about"
-                                ),
-                                "time" to mapOf(
-                                    "type" to "string",
-                                    "description" to "When to remind (e.g., 'in 10 minutes', '3 PM', 'tomorrow 9 AM')"
-                                )
-                            ),
-                            "required" to listOf("reminder_text")
-                        )
-                    ),
-                    mapOf(
-                        "name" to "get_weather",
-                        "description" to "Get current weather information",
-                        "parameters" to mapOf(
-                            "type" to "object",
-                            "properties" to mapOf(
-                                "location" to mapOf(
-                                    "type" to "string",
-                                    "description" to "City or location to get weather for (optional, uses current location if not specified)"
-                                )
-                            )
-                        )
-                    ),
-                    mapOf(
-                        "name" to "web_search",
-                        "description" to "Perform a web search and return a concise summary",
-                        "parameters" to mapOf(
-                            "type" to "object",
-                            "properties" to mapOf(
-                                "query" to mapOf(
-                                    "type" to "string",
-                                    "description" to "Search query to look up on the web"
-                                )
-                            ),
-                            "required" to listOf("query")
-                        )
-                    ),
-                    mapOf(
-                        "name" to "get_news",
-                        "description" to "Fetch top news headlines for a topic or location",
-                        "parameters" to mapOf(
-                            "type" to "object",
-                            "properties" to mapOf(
-                                "query" to mapOf(
-                                    "type" to "string",
-                                    "description" to "Topic or location for news (optional)"
-                                )
-                            )
-                        )
-                    ),
-                    mapOf(
-                        "name" to "play_shayari",
-                        "description" to "Play or return a short shayari/poem",
-                        "parameters" to mapOf(
-                            "type" to "object",
-                            "properties" to mapOf(
-                                "mood" to mapOf(
-                                    "type" to "string",
-                                    "description" to "Optional mood: romantic, sad, funny"
-                                )
-                            )
-                        )
-                    ),
-                    mapOf(
-                        "name" to "control_volume",
-                        "description" to "Control the device volume",
-                        "parameters" to mapOf(
-                            "type" to "object",
-                            "properties" to mapOf(
-                                "action" to mapOf(
-                                    "type" to "string",
-                                    "description" to "Volume action: 'up', 'down', 'mute', 'unmute', or a number 0-100",
-                                    "enum" to listOf("up", "down", "mute", "unmute", "max")
-                                )
-                            ),
-                            "required" to listOf("action")
-                        )
+                    "required" to listOf("action")
+                )
+            ),
+            mapOf(
+                "type" to "function",
+                "name" to "analyze_view",
+                "description" to "Analyze what is in front of the user using the camera (what is this, what is in front of me, identify object)",
+                "parameters" to mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "question" to mapOf("type" to "string", "description" to "The question about what the user wants to know about their view")
                     )
                 )
             ),
-            // Enable Google Search tool so Gemini can call it when asked
             mapOf(
-                "googleSearch" to emptyMap<String, Any>()
+                "type" to "function",
+                "name" to "capture_new_frame",
+                "description" to "Capture a new photo/frame from glasses camera when user wants to see something new",
+                "parameters" to mapOf(
+                    "type" to "object",
+                    "properties" to mapOf<String, Any>()
+                )
+            ),
+            mapOf(
+                "type" to "function",
+                "name" to "open_maps",
+                "description" to "Open Google Maps for navigation or location search",
+                "parameters" to mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "destination" to mapOf("type" to "string", "description" to "Destination or place to navigate to or search for"),
+                        "mode" to mapOf("type" to "string", "description" to "Navigation mode: 'driving', 'walking', 'transit'", "enum" to listOf("driving", "walking", "transit"))
+                    )
+                )
+            ),
+            mapOf(
+                "type" to "function",
+                "name" to "send_message",
+                "description" to "Send a WhatsApp or SMS message to a contact",
+                "parameters" to mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "contact_name" to mapOf("type" to "string", "description" to "Name of the contact to message"),
+                        "message" to mapOf("type" to "string", "description" to "Message content to send"),
+                        "app" to mapOf("type" to "string", "description" to "Messaging app to use: 'whatsapp' or 'sms'", "enum" to listOf("whatsapp", "sms"))
+                    ),
+                    "required" to listOf("contact_name", "message")
+                )
+            ),
+            mapOf(
+                "type" to "function",
+                "name" to "set_reminder",
+                "description" to "Set a reminder or alarm",
+                "parameters" to mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "reminder_text" to mapOf("type" to "string", "description" to "What to remind about"),
+                        "time" to mapOf("type" to "string", "description" to "When to remind (e.g., 'in 10 minutes', '3 PM', 'tomorrow 9 AM')")
+                    ),
+                    "required" to listOf("reminder_text")
+                )
+            ),
+            mapOf(
+                "type" to "function",
+                "name" to "create_note",
+                "description" to "Create a quick note or reminder when user asks to remember something or add to notes",
+                "parameters" to mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "title" to mapOf("type" to "string", "description" to "Short title for the note"),
+                        "content" to mapOf("type" to "string", "description" to "Content of the note")
+                    ),
+                    "required" to listOf("title", "content")
+                )
+            ),
+            mapOf(
+                "type" to "function",
+                "name" to "capture_photo_note",
+                "description" to "Take a photo with the glasses camera and attach it to a new note. Use when user says 'take a pic and add to notes', 'click photo and save in notes', 'capture this and note it down', or similar requests to photograph something and save it as a note.",
+                "parameters" to mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "title" to mapOf("type" to "string", "description" to "Short title for the photo note"),
+                        "content" to mapOf("type" to "string", "description" to "Optional text description to go with the photo")
+                    ),
+                    "required" to listOf("title")
+                )
+            ),
+            mapOf(
+                "type" to "function",
+                "name" to "start_meeting",
+                "description" to "Start meeting minutes recording with speech-to-text transcription",
+                "parameters" to mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "title" to mapOf("type" to "string", "description" to "Optional meeting title, auto-generated if not provided")
+                    )
+                )
+            ),
+            mapOf(
+                "type" to "function",
+                "name" to "get_weather",
+                "description" to "Get current weather information",
+                "parameters" to mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "location" to mapOf("type" to "string", "description" to "City or location to get weather for (optional, uses current location if not specified)")
+                    )
+                )
+            ),
+            mapOf(
+                "type" to "function",
+                "name" to "web_search",
+                "description" to "Perform a web search and return a concise summary",
+                "parameters" to mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "query" to mapOf("type" to "string", "description" to "Search query to look up on the web")
+                    ),
+                    "required" to listOf("query")
+                )
+            ),
+            mapOf(
+                "type" to "function",
+                "name" to "get_news",
+                "description" to "Fetch top news headlines for a topic or location",
+                "parameters" to mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "query" to mapOf("type" to "string", "description" to "Topic or location for news (optional)")
+                    )
+                )
+            ),
+            mapOf(
+                "type" to "function",
+                "name" to "play_shayari",
+                "description" to "Play or return a short shayari/poem",
+                "parameters" to mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "mood" to mapOf("type" to "string", "description" to "Optional mood: romantic, sad, funny")
+                    )
+                )
+            ),
+            mapOf(
+                "type" to "function",
+                "name" to "control_volume",
+                "description" to "Control the device volume",
+                "parameters" to mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "action" to mapOf("type" to "string", "description" to "Volume action: 'up', 'down', 'mute', 'unmute', or a number 0-100", "enum" to listOf("up", "down", "mute", "unmute", "max"))
+                    ),
+                    "required" to listOf("action")
+                )
             )
         )
 
-        // Natural conversation with intelligent voice detection
+        // Enhanced system instruction
         val enhancedInstruction = """$systemInstruction
 
 You are Imi Glass, a smart glasses assistant.
@@ -950,54 +1030,99 @@ IMPORTANT LANGUAGE RULE: ALWAYS Reply in the EXACT SAME LANGUAGE the user speaks
 - If user speaks Hindi -> Reply in Hindi.
 - If user speaks Hinglish -> Reply in Hinglish.
 
-CRITICAL: You have access to REAL-TIME data via 'googleSearch' tool.
-- If user asks about current events, news, or live info, USE 'googleSearch' IMMEDIATELY.
-- Do NOT say "I cannot browse the web" or "My knowledge is limited". USE THE TOOL.
-- Reply FAST and CONCISELY. No filler words. Match the user's vibe."""
+CRITICAL: Reply FAST and CONCISELY. No filler words. Match the user's vibe.
 
-        val setupMessage = mapOf(
-            "setup" to mapOf(
-                "model" to "models/$MODEL",
-                "generationConfig" to mapOf(
-                    "responseModalities" to listOf("AUDIO"),
-                    "temperature" to 0.6, // 🔥 Optimized: 0.6 for faster, sharper responses
-                    "topP" to 0.9,
-                    "topK" to 40,
-                    "maxOutputTokens" to 512, // 🔥 INCREASED: 512 tokens for more detailed responses (user request)
-                    "speechConfig" to mapOf(
-                        "voiceConfig" to mapOf(
-                            "prebuiltVoiceConfig" to mapOf(
-                                "voiceName" to VOICE_NAME
+QUICK NOTES: When the user asks to "remember this", "add to notes", "note this down", or mentions saving information, use the create_note tool to save it.
+When the user asks to "take a pic and add to notes", "click photo and save in notes", "capture this and note it", or wants to photograph something AND save it as a note, use the capture_photo_note tool.
+
+MEETING MINUTES: When the user asks to "start meeting minutes", "record this meeting", "start recording the meeting", or similar, use the start_meeting tool to begin recording. If they mention a specific meeting name (e.g., "start meeting minutes for Raghav Meeting"), extract the meeting name and pass it in the 'title' parameter. Otherwise leave title empty for auto-generation.
+"""
+
+        if (activeProvider == ModelProvider.GPT_REALTIME) {
+            // ====== OpenAI Realtime: session.update event ======
+            val sessionUpdate = mapOf(
+                "type" to "session.update",
+                "session" to mapOf(
+                    "modalities" to listOf("text", "audio"),
+                    "instructions" to enhancedInstruction,
+                    "voice" to GPT_VOICE,
+                    "input_audio_format" to "pcm16",
+                    "output_audio_format" to "pcm16",
+                    "input_audio_transcription" to mapOf(
+                        "model" to "whisper-1"
+                    ),
+                    "turn_detection" to mapOf(
+                        "type" to "server_vad",
+                        "threshold" to 0.5,
+                        "prefix_padding_ms" to 300,
+                        "silence_duration_ms" to 700
+                    ),
+                    "tools" to tools,
+                    "tool_choice" to "auto",
+                    "temperature" to 0.6,
+                    "max_response_output_tokens" to 512
+                )
+            )
+            val json = gson.toJson(sessionUpdate)
+            Log.d(TAG, "📤 Sending GPT session.update: ${json.take(500)}...")
+            webSocket.send(json)
+        } else {
+            // ====== Gemini Live: BidiGenerateContent setup ======
+            val geminiToolDeclarations = tools.map { tool ->
+                val name = tool["name"] as? String ?: ""
+                val desc = tool["description"] as? String ?: ""
+                val params = tool["parameters"] as? Map<*, *> ?: emptyMap<String, Any>()
+                mapOf(
+                    "name" to name,
+                    "description" to desc,
+                    "parameters" to params
+                )
+            }
+            
+            val setupMessage = mapOf(
+                "setup" to mapOf(
+                    "model" to "models/$GEMINI_MODEL",
+                    "generation_config" to mapOf(
+                        "response_modalities" to listOf("AUDIO"),
+                        "speech_config" to mapOf(
+                            "voice_config" to mapOf(
+                                "prebuilt_voice_config" to mapOf(
+                                    "voice_name" to GEMINI_VOICE
+                                )
                             )
                         )
+                    ),
+                    "system_instruction" to mapOf(
+                        "parts" to listOf(
+                            mapOf("text" to enhancedInstruction)
+                        )
+                    ),
+                    "tools" to listOf(
+                        mapOf("function_declarations" to geminiToolDeclarations),
+                        mapOf("google_search" to mapOf<String, Any>())
                     )
-                ),
-                "systemInstruction" to mapOf(
-                    "parts" to listOf(
-                        mapOf("text" to enhancedInstruction)
-                    )
-                ),
-                "tools" to tools
+                )
             )
-        )
-
-        val json = gson.toJson(setupMessage)
-        Log.d(TAG, "📤 Sending setup with tools: $json")
-        webSocket.send(json)
+            val json = gson.toJson(setupMessage)
+            Log.d(TAG, "📤 Sending Gemini setup: ${json.take(500)}...")
+            webSocket.send(json)
+        }
     }
 
     /**
      * Start capturing audio from microphone and streaming to WebSocket
+     * GPT: input_audio_buffer.append with base64 PCM16 24kHz
+     * Gemini: realtime_input with base64 PCM16 16kHz
      */
     private fun startAudioCapture(webSocket: WebSocket) {
         scope.launch {
             try {
                 audioRecord?.startRecording()
                 isRecording.set(true)
-                Log.d(TAG, "🎤 Audio capture started")
+                Log.d(TAG, "🎤 Audio capture started (${inputSampleRate}Hz for $activeProvider)")
 
-                // Use smaller buffer for lower latency (about 30ms chunks at 16kHz)
-                val bufferSize = 480 // 30ms at 16kHz mono = 480 samples (ultra-fast response)
+                // Buffer: ~30ms worth of samples
+                val bufferSize = (inputSampleRate * 30 / 1000) // 30ms
                 val buffer = ShortArray(bufferSize)
                 var chunkCount = 0
                 var totalBytes = 0
@@ -1013,32 +1138,38 @@ CRITICAL: You have access to REAL-TIME data via 'googleSearch' tool.
                             continue
                         }
                         
-                        // VAD DISABLED - Send all audio, let Gemini handle speech detection
-                        // AEC + NoiseSuppressor will handle echo/noise at hardware level
-                        
                         // Convert PCM16 to base64
                         val pcmData = shortArrayToByteArray(buffer, readSize)
                         val base64Data = Base64.encodeToString(pcmData, Base64.NO_WRAP)
                         totalBytes += pcmData.size
 
-                        // Send realtime input with correct format for Gemini Live API
-                        val realtimeInput = mapOf(
-                            "realtimeInput" to mapOf(
-                                "mediaChunks" to listOf(
-                                    mapOf(
-                                        "mimeType" to "audio/pcm;rate=16000",
-                                        "data" to base64Data
+                        val json: String
+                        if (activeProvider == ModelProvider.GPT_REALTIME) {
+                            // OpenAI Realtime: input_audio_buffer.append
+                            val audioAppend = mapOf(
+                                "type" to "input_audio_buffer.append",
+                                "audio" to base64Data
+                            )
+                            json = gson.toJson(audioAppend)
+                        } else {
+                            // Gemini Live: realtime_input
+                            val audioAppend = mapOf(
+                                "realtime_input" to mapOf(
+                                    "media_chunks" to listOf(
+                                        mapOf(
+                                            "data" to base64Data,
+                                            "mime_type" to "audio/pcm;rate=${inputSampleRate}"
+                                        )
                                     )
                                 )
                             )
-                        )
+                            json = gson.toJson(audioAppend)
+                        }
 
-                        val json = gson.toJson(realtimeInput)
                         val sent = webSocket.send(json)
                         
                         chunkCount++
                         
-                        // Log first chunk for debugging
                         if (chunkCount == 1) {
                             Log.d(TAG, "📤 First audio chunk: ${pcmData.size} bytes, base64 length: ${base64Data.length}")
                             if (!sent) {
@@ -1050,8 +1181,6 @@ CRITICAL: You have access to REAL-TIME data via 'googleSearch' tool.
                             Log.d(TAG, "📤 Sent $chunkCount audio chunks (${totalBytes/1024} KB total) | Half-duplex skips: $halfDuplexSkips")
                         }
                     }
-
-                    // Removed delay for fastest possible streaming
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Error in audio capture: ${e.message}", e)
@@ -1060,7 +1189,8 @@ CRITICAL: You have access to REAL-TIME data via 'googleSearch' tool.
         }
     }
 
-        // Send image frames over the active WebSocket for Gemini Live (chunked, camelCase)
+        // Send image over WebSocket for GPT Realtime vision analysis
+        // Note: OpenAI Realtime API supports images via conversation.item.create
         fun sendRealtimeImage(imageBytes: ByteArray) {
             if (webSocket == null) {
                 Log.e(TAG, "❌ WebSocket not connected. Cannot send image.")
@@ -1068,28 +1198,55 @@ CRITICAL: You have access to REAL-TIME data via 'googleSearch' tool.
             }
 
             try {
-                // Split large images into manageable Base64 chunks to avoid huge single messages
-                val maxChunkBytes = 160 * 1024 // 160 KB per chunk (tune if needed)
-                val chunks = mutableListOf<Map<String, Any>>()
-                var offset = 0
-                while (offset < imageBytes.size) {
-                    val len = minOf(maxChunkBytes, imageBytes.size - offset)
-                    val part = imageBytes.copyOfRange(offset, offset + len)
-                    val base64Part = Base64.encodeToString(part, Base64.NO_WRAP)
-                    chunks.add(mapOf("mimeType" to "image/jpeg", "data" to base64Part))
-                    offset += len
-                }
+                val base64Image = Base64.encodeToString(imageBytes, Base64.NO_WRAP)
 
-                // Build message using camelCase keys to match audio path
-                val message = mapOf(
-                    "realtimeInput" to mapOf(
-                        "mediaChunks" to chunks
+                if (activeProvider == ModelProvider.GPT_REALTIME) {
+                    // GPT Realtime: send as conversation item with text context
+                    val itemCreate = mapOf(
+                        "type" to "conversation.item.create",
+                        "item" to mapOf(
+                            "type" to "message",
+                            "role" to "user",
+                            "content" to listOf(
+                                mapOf(
+                                    "type" to "input_text",
+                                    "text" to "I'm sharing an image from my glasses camera. Please analyze what you see."
+                                )
+                            )
+                        )
                     )
-                )
-
-                val jsonMessage = gson.toJson(message)
-                val sent = webSocket?.send(jsonMessage) ?: false
-                Log.d(TAG, "� Sent Live Image Frame to Gemini (${imageBytes.size} bytes) in ${chunks.size} chunk(s). sent=$sent")
+                    val sent = webSocket?.send(gson.toJson(itemCreate)) ?: false
+                    val responseCreate = mapOf("type" to "response.create")
+                    webSocket?.send(gson.toJson(responseCreate))
+                    Log.d(TAG, "📷 Sent image context to GPT Realtime (${imageBytes.size} bytes). sent=$sent")
+                } else {
+                    // Gemini Live: send image as inline_data in realtime_input
+                    val realtimeInput = mapOf(
+                        "realtime_input" to mapOf(
+                            "media_chunks" to listOf(
+                                mapOf(
+                                    "mime_type" to "image/jpeg",
+                                    "data" to base64Image
+                                )
+                            )
+                        )
+                    )
+                    webSocket?.send(gson.toJson(realtimeInput))
+                    // Follow up with a text prompt asking to analyze
+                    val clientContent = mapOf(
+                        "client_content" to mapOf(
+                            "turns" to listOf(
+                                mapOf(
+                                    "role" to "user",
+                                    "parts" to listOf(mapOf("text" to "I'm sharing an image from my glasses camera. Please analyze what you see."))
+                                )
+                            ),
+                            "turn_complete" to true
+                        )
+                    )
+                    webSocket?.send(gson.toJson(clientContent))
+                    Log.d(TAG, "📷 Sent image to Gemini Live (${imageBytes.size} bytes)")
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "❌ Failed to send realtime image: ${e.message}", e)
                 callbacks.onError("Failed to send image: ${e.message}")
@@ -1205,246 +1362,443 @@ CRITICAL: You have access to REAL-TIME data via 'googleSearch' tool.
     }
 
     /**
-     * Handle incoming WebSocket messages
+     * Handle incoming WebSocket messages (routes to GPT or Gemini handler)
      */
     private fun handleWebSocketMessage(text: String) {
         try {
-            // Log the raw message (truncated for large audio data)
             val logText = if (text.length > 500) text.substring(0, 500) + "...(truncated)" else text
             Log.d(TAG, "📩 Raw message: $logText")
             
             val messageMap = gson.fromJson(text, Map::class.java) as Map<*, *>
-            Log.d(TAG, "📨 Received message keys: ${messageMap.keys}")
-
-            // Handle setup complete
-            if (messageMap.containsKey("setupComplete")) {
-                Log.d(TAG, "✅ Setup complete received from server!")
-                isSetupComplete.set(true)
-                webSocket?.let { startAudioCapture(it) }
+            
+            if (activeProvider == ModelProvider.GEMINI_LIVE) {
+                handleGeminiMessage(messageMap)
                 return
             }
+            
+            val eventType = messageMap["type"] as? String ?: ""
+            Log.d(TAG, "📨 Event type: $eventType")
 
-            // Handle server content
-            val serverContent = messageMap["serverContent"] as? Map<*, *>
-            if (serverContent != null) {
-                Log.d(TAG, "📦 ServerContent keys: ${serverContent.keys}")
-                handleServerContent(serverContent)
-            }
-
-            // Handle top-level toolCall (function calls from Gemini)
-            val toolCall = messageMap["toolCall"] as? Map<*, *>
-            if (toolCall != null) {
-                Log.d(TAG, "🔧 Top-level toolCall received")
-                handleToolCall(toolCall)
-            }
-
-            // Handle errors
-            val error = messageMap["error"] as? Map<*, *>
-            if (error != null) {
-                val errorMsg = error["message"] as? String ?: "Unknown error"
-                Log.e(TAG, "❌ Server error: $errorMsg")
-                callbacks.onError(errorMsg)
+            when (eventType) {
+                // Session created/updated - setup is complete
+                "session.created", "session.updated" -> {
+                    Log.d(TAG, "✅ Session configured: $eventType")
+                    isSetupComplete.set(true)
+                }
+                
+                // Input audio buffer speech started (VAD detected speech)
+                "input_audio_buffer.speech_started" -> {
+                    Log.d(TAG, "🎤 Speech detected - user is speaking")
+                    // Interrupt current AI response if playing
+                    if (isAIPlaying.get()) {
+                        Log.d(TAG, "⚠️ User interrupted AI - clearing audio queue")
+                        stopThinkingSound()
+                        synchronized(audioQueueLock) {
+                            audioQueue.clear()
+                        }
+                        audioTrack?.flush()
+                        isAIPlaying.set(false)
+                        callbacks.onAudioPlaybackEnd()
+                    }
+                }
+                
+                // Input audio buffer speech stopped
+                "input_audio_buffer.speech_stopped" -> {
+                    Log.d(TAG, "🎤 Speech ended - processing...")
+                    startThinkingSound()
+                }
+                
+                // Input audio buffer committed
+                "input_audio_buffer.committed" -> {
+                    Log.d(TAG, "📤 Audio buffer committed for processing")
+                }
+                
+                // Conversation item input audio transcription completed
+                "conversation.item.input_audio_transcription.completed" -> {
+                    val transcript = messageMap["transcript"] as? String
+                    if (!transcript.isNullOrEmpty()) {
+                        currentInputTranscription.clear()
+                        currentInputTranscription.append(transcript)
+                        callbacks.onTranscriptionUpdate(
+                            currentInputTranscription.toString(),
+                            currentOutputTranscription.toString(),
+                            true
+                        )
+                        Log.d(TAG, "👤 User transcription: $transcript")
+                        
+                        // Notify vision listener
+                        visionTranscriptionListener?.onUserTranscription(transcript, true)
+                    }
+                }
+                
+                // Response created
+                "response.created" -> {
+                    Log.d(TAG, "🤖 Response generation started")
+                    receivedAudioInCurrentTurn = false
+                    hasTranscriptionForCurrentTurn = false
+                }
+                
+                // Response audio delta - streaming audio chunks
+                "response.audio.delta" -> {
+                    val delta = messageMap["delta"] as? String
+                    if (delta != null) {
+                        // First AI audio chunk - stop thinking sound
+                        if (!receivedAudioInCurrentTurn) {
+                            stopThinkingSound()
+                        }
+                        
+                        val audioData = Base64.decode(delta, Base64.DEFAULT)
+                        synchronized(audioQueueLock) {
+                            audioQueue.add(audioData)
+                        }
+                        receivedAudioInCurrentTurn = true
+                        Log.v(TAG, "🎵 Received audio delta: ${audioData.size} bytes")
+                    }
+                }
+                
+                // Response audio done
+                "response.audio.done" -> {
+                    Log.d(TAG, "🎵 Audio streaming complete for this response")
+                }
+                
+                // Response audio transcript delta - streaming text of AI speech
+                "response.audio_transcript.delta" -> {
+                    val delta = messageMap["delta"] as? String
+                    if (!delta.isNullOrEmpty()) {
+                        currentOutputTranscription.append(delta)
+                        hasTranscriptionForCurrentTurn = true
+                        callbacks.onTranscriptionUpdate(
+                            currentInputTranscription.toString(),
+                            currentOutputTranscription.toString(),
+                            false
+                        )
+                        Log.d(TAG, "🤖 Model transcript delta: $delta")
+                    }
+                }
+                
+                // Response audio transcript done
+                "response.audio_transcript.done" -> {
+                    val transcript = messageMap["transcript"] as? String
+                    if (!transcript.isNullOrEmpty()) {
+                        currentOutputTranscription.clear()
+                        currentOutputTranscription.append(transcript)
+                        hasTranscriptionForCurrentTurn = true
+                        callbacks.onTranscriptionUpdate(
+                            currentInputTranscription.toString(),
+                            currentOutputTranscription.toString(),
+                            true
+                        )
+                        Log.d(TAG, "🤖 Model transcript final: $transcript")
+                    }
+                }
+                
+                // Response text delta (for text-only responses)
+                "response.text.delta" -> {
+                    val delta = messageMap["delta"] as? String
+                    if (!delta.isNullOrEmpty()) {
+                        currentOutputTranscription.append(delta)
+                        hasTranscriptionForCurrentTurn = true
+                        callbacks.onTranscriptionUpdate(
+                            currentInputTranscription.toString(),
+                            currentOutputTranscription.toString(),
+                            false
+                        )
+                    }
+                }
+                
+                // Response function call arguments delta
+                "response.function_call_arguments.delta" -> {
+                    // Accumulate function call arguments
+                    val delta = messageMap["delta"] as? String
+                    Log.d(TAG, "🔧 Function call args delta: $delta")
+                }
+                
+                // Response function call arguments done - execute the function
+                "response.function_call_arguments.done" -> {
+                    handleOpenAIFunctionCall(messageMap)
+                }
+                
+                // Response output item done
+                "response.output_item.done" -> {
+                    val item = messageMap["item"] as? Map<*, *>
+                    val itemType = item?.get("type") as? String
+                    if (itemType == "function_call") {
+                        handleOpenAIFunctionCallFromItem(item)
+                    }
+                }
+                
+                // Response done - turn complete
+                "response.done" -> {
+                    stopThinkingSound()
+                    
+                    if (receivedAudioInCurrentTurn && !hasTranscriptionForCurrentTurn) {
+                        currentOutputTranscription.append("[AI speaking...]")
+                        Log.d(TAG, "📝 Generated placeholder transcription (no text from API)")
+                    }
+                    
+                    val fullInput = currentInputTranscription.toString()
+                    val fullOutput = currentOutputTranscription.toString()
+                    
+                    callbacks.onTranscriptionUpdate(fullInput, fullOutput, true)
+                    
+                    if (fullInput.isNotEmpty()) {
+                        visionTranscriptionListener?.onUserTranscription(fullInput, true)
+                    }
+                    
+                    Log.d(TAG, "✅ Response done - Input: '$fullInput', Output: '$fullOutput'")
+                    callbacks.onTurnComplete(fullInput, fullOutput)
+                    
+                    // Reset transcriptions
+                    currentInputTranscription.clear()
+                    currentOutputTranscription.clear()
+                    receivedAudioInCurrentTurn = false
+                    hasTranscriptionForCurrentTurn = false
+                }
+                
+                // Rate limit info
+                "rate_limits.updated" -> {
+                    Log.d(TAG, "📊 Rate limits updated")
+                }
+                
+                // Error from server
+                "error" -> {
+                    val error = messageMap["error"] as? Map<*, *>
+                    val errorMsg = error?.get("message") as? String ?: "Unknown error"
+                    val errorCode = error?.get("code") as? String ?: ""
+                    Log.e(TAG, "❌ Server error [$errorCode]: $errorMsg")
+                    callbacks.onError(errorMsg)
+                }
+                
+                else -> {
+                    Log.d(TAG, "📩 Unhandled event: $eventType")
+                }
             }
 
         } catch (e: Exception) {
             Log.e(TAG, "Error parsing message: ${e.message}", e)
         }
     }
-
+    
     /**
-     * Handle server content (transcriptions, audio, turn complete, tool calls, etc.)
+     * Handle Gemini Live WebSocket messages
      */
-    private fun handleServerContent(serverContent: Map<*, *>) {
-        // Handle model turn (audio response and tool calls)
-        val modelTurn = serverContent["modelTurn"] as? Map<*, *>
-        if (modelTurn != null) {
-            val parts = modelTurn["parts"] as? List<*>
-            parts?.forEach { part ->
-                val partMap = part as? Map<*, *>
+    private fun handleGeminiMessage(messageMap: Map<*, *>) {
+        try {
+            // Check for setupComplete
+            val setupComplete = messageMap["setupComplete"] as? Map<*, *>
+            if (setupComplete != null) {
+                Log.d(TAG, "✅ Gemini session setup complete")
+                isSetupComplete.set(true)
+                return
+            }
+            
+            // Check for serverContent (audio/text responses)
+            val serverContent = messageMap["serverContent"] as? Map<*, *>
+            if (serverContent != null) {
+                val turnComplete = serverContent["turnComplete"] as? Boolean ?: false
+                val interrupted = serverContent["interrupted"] as? Boolean ?: false
                 
-                // Extract audio data
-                val inlineData = partMap?.get("inlineData") as? Map<*, *>
-                if (inlineData != null) {
-                    val base64Audio = inlineData["data"] as? String
-                    if (base64Audio != null) {
-                        // 🎵 First AI audio chunk arrived - stop thinking sound immediately
-                        if (!receivedAudioInCurrentTurn) {
-                            stopThinkingSound()
+                val modelTurn = serverContent["modelTurn"] as? Map<*, *>
+                if (modelTurn != null) {
+                    val parts = modelTurn["parts"] as? List<*>
+                    parts?.forEach { part ->
+                        val partMap = part as? Map<*, *> ?: return@forEach
+                        
+                        // Audio data from Gemini
+                        val inlineData = partMap["inlineData"] as? Map<*, *>
+                        if (inlineData != null) {
+                            val audioBase64 = inlineData["data"] as? String
+                            if (audioBase64 != null) {
+                                if (!receivedAudioInCurrentTurn) {
+                                    stopThinkingSound()
+                                }
+                                val audioData = Base64.decode(audioBase64, Base64.DEFAULT)
+                                synchronized(audioQueueLock) {
+                                    audioQueue.add(audioData)
+                                }
+                                receivedAudioInCurrentTurn = true
+                            }
                         }
                         
-                        val audioData = Base64.decode(base64Audio, Base64.DEFAULT)
-                        synchronized(audioQueueLock) {
-                            audioQueue.add(audioData)
+                        // Text response
+                        val textContent = partMap["text"] as? String
+                        if (!textContent.isNullOrEmpty()) {
+                            currentOutputTranscription.append(textContent)
+                            hasTranscriptionForCurrentTurn = true
+                            callbacks.onTranscriptionUpdate(
+                                currentInputTranscription.toString(),
+                                currentOutputTranscription.toString(),
+                                false
+                            )
                         }
-                        receivedAudioInCurrentTurn = true
-                        Log.d(TAG, "🎵 Received audio chunk: ${audioData.size} bytes")
                     }
                 }
                 
-                // Handle function calls
-                val functionCall = partMap?.get("functionCall") as? Map<*, *>
-                if (functionCall != null) {
-                    handleFunctionCall(functionCall)
+                if (turnComplete || interrupted) {
+                    stopThinkingSound()
+                    val fullInput = currentInputTranscription.toString()
+                    val fullOutput = currentOutputTranscription.toString()
+                    callbacks.onTranscriptionUpdate(fullInput, fullOutput, true)
+                    if (fullInput.isNotEmpty()) {
+                        visionTranscriptionListener?.onUserTranscription(fullInput, true)
+                    }
+                    callbacks.onTurnComplete(fullInput, fullOutput)
+                    currentInputTranscription.clear()
+                    currentOutputTranscription.clear()
+                    receivedAudioInCurrentTurn = false
+                    hasTranscriptionForCurrentTurn = false
                 }
-            }
-        }
-        
-        // Handle tool call response (alternative format)
-        val toolCall = serverContent["toolCall"] as? Map<*, *>
-        if (toolCall != null) {
-            handleFunctionCall(toolCall)
-        }
-
-        // Handle output transcription (model's speech-to-text)
-        val outputTranscription = serverContent["modelTurnTranscription"] as? Map<*, *>
-        if (outputTranscription != null) {
-            val text = outputTranscription["text"] as? String
-            if (!text.isNullOrEmpty()) {
-                currentOutputTranscription.append(text)
-                hasTranscriptionForCurrentTurn = true
-                callbacks.onTranscriptionUpdate(
-                    currentInputTranscription.toString(),
-                    currentOutputTranscription.toString(),
-                    false
-                )
-                Log.d(TAG, "🤖 Model transcription: $text")
-            }
-        }
-
-        // Handle input transcription (user's speech-to-text)
-        val inputTranscription = serverContent["userInputTranscription"] as? Map<*, *>
-        if (inputTranscription != null) {
-            val text = inputTranscription["text"] as? String
-            if (!text.isNullOrEmpty()) {
-                currentInputTranscription.append(text)
-                callbacks.onTranscriptionUpdate(
-                    currentInputTranscription.toString(),
-                    currentOutputTranscription.toString(),
-                    false
-                )
-                Log.d(TAG, "👤 User transcription: $text")
-                
-                // User has spoken - start thinking sound immediately
-                startThinkingSound()
-
-                // Notify vision listener
-                visionTranscriptionListener?.onUserTranscription(text, false)
-            }
-        }
-
-        // Handle turn complete
-        val turnComplete = serverContent["turnComplete"] as? Boolean
-        if (turnComplete == true) {
-            // 🎵 Safety: Stop thinking sound if still playing
-            stopThinkingSound()
-            
-            // If we received audio but no transcription, generate a placeholder
-            if (receivedAudioInCurrentTurn && !hasTranscriptionForCurrentTurn) {
-                currentOutputTranscription.append("[AI speaking...]")
-                Log.d(TAG, "📝 Generated placeholder transcription (no text from API)")
+                return
             }
             
-            val fullInput = currentInputTranscription.toString()
-            val fullOutput = currentOutputTranscription.toString()
-            
-            // Send final update with isFinal=true
-            callbacks.onTranscriptionUpdate(fullInput, fullOutput, true)
-            
-            // 🆕 Notify vision listener with FINAL user input (for command detection)
-            if (fullInput.isNotEmpty()) {
-                visionTranscriptionListener?.onUserTranscription(fullInput, true)
-            }
-            
-            Log.d(TAG, "✅ Turn complete - Input: '$fullInput', Output: '$fullOutput'")
-            callbacks.onTurnComplete(fullInput, fullOutput)
-            
-            // Reset transcriptions and flags
-            currentInputTranscription.clear()
-            currentOutputTranscription.clear()
-            receivedAudioInCurrentTurn = false
-            hasTranscriptionForCurrentTurn = false
-        }
-
-        // Handle interruption
-        val interrupted = serverContent["interrupted"] as? Boolean
-        if (interrupted == true) {
-            Log.d(TAG, "⚠️ Turn interrupted - clearing audio queue")
-            stopThinkingSound() // 🎵 Stop thinking sound on interruption
-            synchronized(audioQueueLock) {
-                audioQueue.clear()
-            }
-            audioTrack?.flush()
-            callbacks.onAudioPlaybackEnd()
-        }
-    }
-
-    /**
-     * Handle top-level toolCall from Gemini (contains functionCalls array)
-     */
-    private fun handleToolCall(toolCall: Map<*, *>) {
-        val functionCalls = toolCall["functionCalls"] as? List<*>
-        if (functionCalls == null) {
-            Log.w(TAG, "⚠️ toolCall has no functionCalls")
-            return
-        }
-        
-        functionCalls.forEach { call ->
-            val callMap = call as? Map<*, *> ?: return@forEach
-            handleFunctionCall(callMap)
-        }
-    }
-
-    /**
-     * Handle function/tool calls from Gemini
-     */
-    private fun handleFunctionCall(functionCall: Map<*, *>) {
-        val name = functionCall["name"] as? String ?: return
-        val argsRaw = functionCall["args"] as? Map<*, *> ?: emptyMap<String, Any>()
-        val args = argsRaw.mapKeys { it.key.toString() }.mapValues { it.value as Any }
-        val callId = functionCall["id"] as? String
-        
-        Log.d(TAG, "🔧 Function call received: $name with args: $args")
-        
-        // Execute the function via callback
-        scope.launch {
-            try {
-                val result = callbacks.onToolCall(name, args)
-                Log.d(TAG, "✅ Function $name result: $result")
-                
-                // Send function response back to Gemini
-                if (callId != null) {
-                    sendFunctionResponse(callId, name, result)
+            // Check for toolCall
+            val toolCall = messageMap["toolCall"] as? Map<*, *>
+            if (toolCall != null) {
+                val functionCalls = toolCall["functionCalls"] as? List<*>
+                functionCalls?.forEach { fc ->
+                    val fcMap = fc as? Map<*, *> ?: return@forEach
+                    val name = fcMap["name"] as? String ?: return@forEach
+                    val id = fcMap["id"] as? String ?: ""
+                    val args = fcMap["args"] as? Map<String, Any> ?: emptyMap()
+                    
+                    Log.d(TAG, "🔧 Gemini function call: $name, args: $args")
+                    scope.launch {
+                        try {
+                            val result = callbacks.onToolCall(name, args)
+                            Log.d(TAG, "✅ Gemini function $name result: $result")
+                            sendGeminiFunctionResponse(id, name, result)
+                        } catch (e: Exception) {
+                            Log.e(TAG, "❌ Error executing Gemini function $name: ${e.message}")
+                            sendGeminiFunctionResponse(id, name, "Error: ${e.message}")
+                        }
+                    }
                 }
-            } catch (e: Exception) {
-                Log.e(TAG, "❌ Error executing function $name: ${e.message}", e)
-                if (callId != null) {
-                    sendFunctionResponse(callId, name, "Error: ${e.message}")
-                }
+                return
             }
+            
+            // Check for toolCallCancellation
+            val toolCallCancellation = messageMap["toolCallCancellation"] as? Map<*, *>
+            if (toolCallCancellation != null) {
+                Log.d(TAG, "⚠️ Gemini tool call cancelled")
+                return
+            }
+            
+            Log.d(TAG, "📩 Unhandled Gemini message keys: ${messageMap.keys}")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error handling Gemini message: ${e.message}", e)
         }
     }
     
     /**
-     * Send function response back to Gemini
+     * Send function response back to Gemini Live
      */
-    private fun sendFunctionResponse(callId: String, name: String, result: String) {
+    private fun sendGeminiFunctionResponse(id: String, name: String, result: String) {
         val response = mapOf(
-            "toolResponse" to mapOf(
-                "functionResponses" to listOf(
+            "tool_response" to mapOf(
+                "function_responses" to listOf(
                     mapOf(
-                        "id" to callId,
+                        "id" to id,
                         "name" to name,
-                        "response" to mapOf(
-                            "result" to result
-                        )
+                        "response" to mapOf("result" to result)
                     )
                 )
             )
         )
-        
         val json = gson.toJson(response)
-        Log.d(TAG, "📤 Sending function response: $json")
+        Log.d(TAG, "📤 Sending Gemini function response: $json")
         webSocket?.send(json)
+    }
+    
+    /**
+     * Handle function call from OpenAI response.function_call_arguments.done
+     */
+    private fun handleOpenAIFunctionCall(messageMap: Map<*, *>) {
+        val name = messageMap["name"] as? String
+        val callId = messageMap["call_id"] as? String
+        val argsJson = messageMap["arguments"] as? String ?: "{}"
+        
+        if (name == null || callId == null) {
+            Log.w(TAG, "⚠️ Function call missing name or call_id")
+            return
+        }
+        
+        Log.d(TAG, "🔧 Function call: $name, args: $argsJson")
+        
+        try {
+            val argsMap = gson.fromJson(argsJson, Map::class.java) as? Map<String, Any> ?: emptyMap()
+            
+            scope.launch {
+                try {
+                    val result = callbacks.onToolCall(name, argsMap)
+                    Log.d(TAG, "✅ Function $name result: $result")
+                    
+                    // Send function output back to OpenAI
+                    sendOpenAIFunctionResponse(callId, result)
+                } catch (e: Exception) {
+                    Log.e(TAG, "❌ Error executing function $name: ${e.message}", e)
+                    sendOpenAIFunctionResponse(callId, "Error: ${e.message}")
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Failed to parse function args: ${e.message}")
+        }
+    }
+    
+    /**
+     * Handle function call from response.output_item.done event
+     */
+    private fun handleOpenAIFunctionCallFromItem(item: Map<*, *>) {
+        val name = item["name"] as? String
+        val callId = item["call_id"] as? String
+        val argsJson = item["arguments"] as? String ?: "{}"
+        
+        if (name == null || callId == null) {
+            Log.w(TAG, "⚠️ Function call item missing name or call_id")
+            return
+        }
+        
+        Log.d(TAG, "🔧 Function call from item: $name, args: $argsJson")
+        
+        try {
+            val argsMap = gson.fromJson(argsJson, Map::class.java) as? Map<String, Any> ?: emptyMap()
+            
+            scope.launch {
+                try {
+                    val result = callbacks.onToolCall(name, argsMap)
+                    Log.d(TAG, "✅ Function $name result: $result")
+                    sendOpenAIFunctionResponse(callId, result)
+                } catch (e: Exception) {
+                    Log.e(TAG, "❌ Error executing function $name: ${e.message}", e)
+                    sendOpenAIFunctionResponse(callId, "Error: ${e.message}")
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Failed to parse function args from item: ${e.message}")
+        }
+    }
+    
+    /**
+     * Send function output back to OpenAI Realtime and trigger a new response
+     */
+    private fun sendOpenAIFunctionResponse(callId: String, result: String) {
+        // conversation.item.create with function_call_output
+        val functionOutput = mapOf(
+            "type" to "conversation.item.create",
+            "item" to mapOf(
+                "type" to "function_call_output",
+                "call_id" to callId,
+                "output" to result
+            )
+        )
+        
+        val json = gson.toJson(functionOutput)
+        Log.d(TAG, "📤 Sending function output: $json")
+        webSocket?.send(json)
+        
+        // Trigger response generation after function output
+        val responseCreate = mapOf("type" to "response.create")
+        webSocket?.send(gson.toJson(responseCreate))
+        Log.d(TAG, "📤 Triggered new response after function output")
     }
 
     private fun cleanup() {

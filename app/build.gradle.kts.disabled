@@ -11,6 +11,7 @@ if (localPropertiesFile.exists()) {
 // Read keys (default to empty string if missing to avoid build errors)
 val picovoiceKey = localProps.getProperty("PICOVOICE_ACCESS_KEY") ?: ""
 val geminiKey = localProps.getProperty("GEMINI_API_KEY") ?: ""
+val openaiKey = localProps.getProperty("OPENAI_API_KEY") ?: ""
 val googleCloudKey = localProps.getProperty("GOOGLE_CLOUD_API_KEY") ?: ""
 val googleSearchKey = localProps.getProperty("GOOGLE_SEARCH_API_KEY") ?: ""
 val googleSearchCx = localProps.getProperty("GOOGLE_SEARCH_CX") ?: ""
@@ -35,6 +36,7 @@ android {
         // Inject keys into BuildConfig so Kotlin code can read them
         buildConfigField("String", "PICOVOICE_ACCESS_KEY", "\"$picovoiceKey\"")
         buildConfigField("String", "GEMINI_API_KEY", "\"$geminiKey\"")
+        buildConfigField("String", "OPENAI_API_KEY", "\"$openaiKey\"")
         buildConfigField("String", "GOOGLE_CLOUD_API_KEY", "\"$googleCloudKey\"")
         buildConfigField("String", "GOOGLE_SEARCH_API_KEY", "\"$googleSearchKey\"")
         buildConfigField("String", "GOOGLE_SEARCH_CX", "\"$googleSearchCx\"")

@@ -24,9 +24,8 @@ class MyBluetoothReceiver : QCBluetoothCallbackCloneReceiver() {
     private val hotHelper by lazy { HotHelper.getInstance(MyApplication.instance) }
     private val mainHandler = Handler(Looper.getMainLooper())
     // When true, prefer the glasses' native/firmware wake-word detection
-    // and do not start the in-app Porcupine `HotHelper`.
-    // Set to false to use phone-based "Hey IMI" detection via Porcupine
-    // instead of the glasses' firmware "Hey Cyan" detector.
+    // and do not start the in-app wake detector.
+    // Set to false to use the selected app wake engine from Settings.
     private var enableNativeWake = false
 
     @SuppressLint("MissingPermission")
@@ -34,47 +33,28 @@ class MyBluetoothReceiver : QCBluetoothCallbackCloneReceiver() {
         Log.i(TAG, "Connection Status: Device=${device?.name}, Connected=$connected")
         if (device != null && connected) {
             device.name?.let { DeviceManager.getInstance().deviceName = it }
+            requestMicPermissionIfNeeded()
             EventBus.getDefault().post(BluetoothEvent(BluetoothEvent.EventType.CONNECTED))
-            // Start phone mic Porcupine to detect "Hey Imi"
-            startCustomWakeWord()
         } else {
             stopCustomWakeWord()
             EventBus.getDefault().post(BluetoothEvent(BluetoothEvent.EventType.DISCONNECTED))
         }
     }
 
-    private fun startCustomWakeWord() {
-        try {
-            // Check microphone permission before attempting to initialize custom voice detector.
-            val micGranted = ContextCompat.checkSelfPermission(
-                MyApplication.instance,
-                Manifest.permission.RECORD_AUDIO
-            ) == PackageManager.PERMISSION_GRANTED
+    private fun requestMicPermissionIfNeeded() {
+        val micGranted = ContextCompat.checkSelfPermission(
+            MyApplication.instance,
+            Manifest.permission.RECORD_AUDIO
+        ) == PackageManager.PERMISSION_GRANTED
 
-            if (!micGranted) {
-                Log.w(TAG, "RECORD_AUDIO permission is not granted. Posting request event.")
-                EventBus.getDefault().post(BluetoothEvent(BluetoothEvent.EventType.REQUEST_MIC_PERMISSION))
-                return
-            }
-
-            Log.i(TAG, "Starting custom voice detector for wake word detection")
-
-            // Delay initialization slightly to allow BLE connection to settle
-            mainHandler.postDelayed({
-                try {
-                    Log.i(TAG, "Initializing HotHelper (delayed start).")
-                    hotHelper.start()
-                } catch (e: Exception) {
-                    Log.e(TAG, "Error initializing or starting HotHelper: ${e.message}", e)
-                }
-            }, 700) // 700 ms delay
-
-        } catch (e: Exception) {
-            Log.e(TAG, "Error starting custom voice detection: ${e.message}")
+        if (!micGranted) {
+            Log.w(TAG, "RECORD_AUDIO permission is not granted. Posting request event.")
+            EventBus.getDefault().post(BluetoothEvent(BluetoothEvent.EventType.REQUEST_MIC_PERMISSION))
         }
     }
 
     private fun stopCustomWakeWord() {
+        mainHandler.removeCallbacksAndMessages(null)
         hotHelper.stop()
     }
 
@@ -99,16 +79,9 @@ class MyBluetoothReceiver : QCBluetoothCallbackCloneReceiver() {
         LargeDataHandler.getInstance().initEnable()
         BleOperateManager.getInstance().isReady = true
 
-        // Disable firmware wake word - we use phone mic Porcupine for "Hey Imi"
+        // Disable firmware wake word - app handles wake-word detection.
         setNativeWakeWord(false)
-        // Prefer glass BLE audio for wake if available (process glass audio frames)
-        try {
-            hotHelper.setPreferGlassBleAudio(true)
-            Log.i(TAG, "✅ Prefer Glass BLE audio for wake - initializing HotHelper")
-            hotHelper.start()
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to prefer Glass BLE audio: ${e.message}")
-        }
+        requestMicPermissionIfNeeded()
 
         EventBus.getDefault().post(BluetoothEvent(BluetoothEvent.EventType.CONNECTED))
     }

@@ -31,6 +31,11 @@ object VoiceCommandInterpreter {
             return GlassAction.WAKE_UP to text
         }
 
+        // --- Mute Command ---
+        if (text.contains("imi mute") || text.contains("hey mute") || text.contains("mute ai")) {
+            return GlassAction.GENERAL_CHAT to "mute"
+        }
+
         // --- Specific Commands ---
 
         if (listOf("photo", "take a picture", "click photo").any { text.contains(it) }) {

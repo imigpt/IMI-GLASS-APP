@@ -17,34 +17,27 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.media.AudioManager
 import com.sdk.glassessdksample.wakeword.HeyImiWakeWordDetector
+import com.sdk.glassessdksample.wakeword.SnowboyWakeWordDetector
+import com.sdk.glassessdksample.wakeword.WakeWordEngine
+import com.sdk.glassessdksample.wakeword.WakeWordEngineSettings
 import org.greenrobot.eventbus.EventBus
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 
 /**
  * HotHelper - Wake Word Detection Manager
  * 
  * ========================================================================
- * 🎤 NOW USING ONNX-BASED "HEY IMI" WAKE WORD DETECTION! 
+ * 🎤 SUPPORTS MULTIPLE WAKE-WORD ENGINES
  * ========================================================================
  * 
- * This replaces Picovoice Porcupine with a custom ONNX model.
+ * Engines:
+ * - Custom ONNX model (default)
+ * - Snowboy (optional, requires Snowboy assets + SDK runtime)
  * 
- * Advantages:
- * - ✅ No API Key Required
- * - ✅ Custom trained for "Hey IMI" (96% accurate)
- * - ✅ Free to use - no licensing costs
- * - ✅ Works offline
- * 
- * Required ONNX Model Files (in assets/models/):
- * - melspectrogram.onnx
- * - embedding_model.onnx
- * - hey_imi_model.onnx
+ * Engine selection is controlled from SettingsActivity and stored in imi_prefs.
+ * Users can change engine before connecting the device.
  * 
  * Optional Chime Sound (for wake acknowledgment):
  * - res/raw/chime.mp3 OR assets/sounds/chime.mp3
- * 
- * To switch back to Picovoice, see HotHelper_Picovoice_Backup.kt
  * ========================================================================
  */
 class HotHelper private constructor(private val context: Context) {
@@ -60,28 +53,52 @@ class HotHelper private constructor(private val context: Context) {
             }
         }
         
-        // Buffer size for audio processing (1.5s at 16kHz)
-        private const val BUFFER_SIZE = 24000
     }
 
-    // ONNX-based Hey IMI detector (replaces Porcupine)
+    // Detectors
     private var heyImiDetector: HeyImiWakeWordDetector? = null
+    private var snowboyDetector: SnowboyWakeWordDetector? = null
+    private var activeEngine: WakeWordEngine = WakeWordEngineSettings.getSelectedEngine(context)
+
+    // Null means "use detector/model default" (for ONNX this includes metadata threshold).
+    private var configuredThreshold: Float? = null
+
     private var isStarted = false
+    private var isStartPending = false
+    private var startPendingSinceMs = 0L
+    private var startRequestId = 0
     private val mainHandler = Handler(Looper.getMainLooper())
-    private val RESTART_DELAY_MS = 3_000L // Cooldown before restarting listen
     private var audioManager: AudioManager? = null
     private var scoReceiver: BroadcastReceiver? = null
     private val SCO_WAIT_TIMEOUT_MS = 1500L
+    private var scoFallbackRunnable: Runnable? = null
+    private val STALE_PENDING_TIMEOUT_MS = 6_000L
     
     // Audio buffer for Glass BLE audio processing
     private val audioBuffer = mutableListOf<Short>()
     private val bufferLock = Any()
+    private var lastExternalFeedLogTs = 0L
     
     // Mode: true = Glass BLE audio, false = Phone mic
     private var useGlassBLEAudio = false
+    
+    // Mute state - when true, wake word detection is disabled
+    private var isMuted = false
 
     init {
         audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+    }
+
+    /**
+     * Set mute state - when muted, wake word detection is disabled
+     */
+    fun setMuted(muted: Boolean) {
+        isMuted = muted
+        if (muted && (isStarted || isStartPending)) {
+            Log.d(TAG, "🔇 Mute enabled - stopping wake word detection")
+            stop()
+        }
+        Log.d(TAG, "🔇 Wake word detection mute: ${if (muted) "ENABLED" else "DISABLED"}")
     }
 
     /**
@@ -96,93 +113,216 @@ class HotHelper private constructor(private val context: Context) {
      * Set detection threshold (0.0 to 1.0)
      * Lower = more sensitive but more false positives
      * Higher = less sensitive but fewer false positives
-     * Default: 0.3 (recommended)
      */
     fun setThreshold(value: Float) {
+        configuredThreshold = value
         heyImiDetector?.setThreshold(value)
-        Log.d(TAG, "Detection threshold set to: $value")
+        snowboyDetector?.setThreshold(value)
+        Log.d(TAG, "Detection threshold set to: $value (engine=${activeEngine.displayName})")
+    }
+
+    /**
+     * Save preferred wake-word engine from Settings.
+     * If detector is currently running, restart with the new engine.
+     */
+    fun setWakeWordEngine(engine: WakeWordEngine) {
+        WakeWordEngineSettings.setSelectedEngine(context, engine)
+
+        if (engine == activeEngine) return
+
+        val shouldRestart = isStarted || isStartPending
+        stop()
+        releaseDetectorForEngine(activeEngine)
+        activeEngine = engine
+
+        Log.i(TAG, "Wake-word engine changed to ${engine.displayName}")
+        if (shouldRestart) {
+            start()
+        }
+    }
+
+    fun getWakeWordEngine(): WakeWordEngine {
+        return WakeWordEngineSettings.getSelectedEngine(context)
+    }
+
+    fun isWakeDetectorActive(): Boolean {
+        return isStarted || isStartPending || activeDetectorIsListening()
     }
 
     fun start() {
-        if (isStarted) {
-            Log.d(TAG, "Already listening, ignoring start()")
+        if (isMuted) {
+            Log.d(TAG, "🔇 Wake word detection is muted - not starting")
+            return
+        }
+
+        syncEngineFromSettings()
+
+        if (isStartPending) {
+            val pendingAge = System.currentTimeMillis() - startPendingSinceMs
+            if (pendingAge > STALE_PENDING_TIMEOUT_MS) {
+                Log.w(TAG, "⚠️ Stale wake start pending ($pendingAge ms). Resetting pending state.")
+                isStartPending = false
+                startPendingSinceMs = 0L
+                unregisterScoReceiverForStart()
+            }
+        }
+        
+        if (isStarted || isStartPending) {
+            val detectorListening = activeDetectorIsListening()
+            if (isStarted) {
+                Log.d(TAG, "Wake detector already active. engine=${activeEngine.displayName} detectorListening=$detectorListening")
+            } else {
+                val pendingAge = System.currentTimeMillis() - startPendingSinceMs
+                Log.d(TAG, "Wake detector start pending ($pendingAge ms). engine=${activeEngine.displayName} detectorListening=$detectorListening")
+            }
             return
         }
         
         try {
-            // Initialize detector if needed
-            if (heyImiDetector == null) {
-                initHeyImiDetector()
+            if (!ensureDetectorInitializedForActiveEngine()) {
+                Log.e(TAG, "Wake detector initialization failed for engine=${activeEngine.displayName}")
+                return
             }
             
             if (useGlassBLEAudio) {
-                // For Glass BLE audio, mark as started but don't use AudioRecord
-                // Audio will come from processGlassAudio()
-                isStarted = true
-                Log.i(TAG, "✅ Glass BLE audio mode - Ready to process voiceFromGlasses()")
-            } else {
-                // Prefer SCO (glass mic) when available
-                attemptScoThenStartDetector()
+                Log.i(TAG, "Glass BLE audio preferred: external PCM can be fed via processGlassAudio()")
             }
+
+            isStartPending = true
+            startPendingSinceMs = System.currentTimeMillis()
+            val requestId = ++startRequestId
+
+            // Prefer SCO (glass mic) when available; fallback to default mic.
+            attemptScoThenStartDetector(requestId)
         } catch (e: Exception) {
+            isStartPending = false
+            startPendingSinceMs = 0L
             Log.e(TAG, "Error starting wake word detection: ${e.message}", e)
         }
     }
 
     /**
-     * Initialize the ONNX-based Hey IMI wake word detector
+     * Keep runtime engine aligned with settings without requiring app restart.
      */
-    private fun initHeyImiDetector() {
+    private fun syncEngineFromSettings() {
+        val selected = WakeWordEngineSettings.getSelectedEngine(context)
+        if (selected == activeEngine) return
+
+        val wasRunning = isStarted || isStartPending
+        stop()
+        releaseDetectorForEngine(activeEngine)
+        activeEngine = selected
+
+        Log.i(TAG, "Wake-word engine synced from settings: ${activeEngine.displayName}")
+        if (wasRunning) {
+            Log.d(TAG, "Wake detector will restart with updated engine")
+        }
+    }
+
+    private fun ensureDetectorInitializedForActiveEngine(): Boolean {
+        return when (activeEngine) {
+            WakeWordEngine.CUSTOM_ONNX -> initHeyImiDetector()
+            WakeWordEngine.SNOWBOY -> {
+                if (initSnowboyDetector()) {
+                    true
+                } else {
+                    Log.w(TAG, "Snowboy unavailable at runtime, falling back to Custom ONNX for this session")
+                    activeEngine = WakeWordEngine.CUSTOM_ONNX
+                    initHeyImiDetector()
+                }
+            }
+        }
+    }
+
+    /**
+     * Initialize the ONNX-based Hey IMI wake word detector.
+     */
+    private fun initHeyImiDetector(): Boolean {
+        if (heyImiDetector != null) return true
+
         try {
-            Log.i(TAG, "🔄 Initializing Hey IMI ONNX Detector...")
+            Log.i(TAG, "🔄 Initializing ONNX 'Hey IMI' Detector...")
             
             heyImiDetector = HeyImiWakeWordDetector(context) { confidence ->
-                Log.i(TAG, "🔥 HEY IMI DETECTED! Confidence: ${"%.2f".format(confidence)}")
-                
-                // Mark as stopped (detector auto-stops on detection)
-                isStarted = false
-                
-                // Clear Glass audio buffer
-                synchronized(bufferLock) {
-                    audioBuffer.clear()
-                }
-                
-                // Chime is already played by the detector
-                // Post wake word event via EventBus
-                Log.d(TAG, "📢 Posting 'wake up' event to EventBus")
-                EventBus.getDefault().post(
-                    BluetoothEvent(BluetoothEvent.EventType.VOICE_TEXT, "wake up")
-                )
+                onWakeWordDetected("Custom ONNX", confidence)
             }
             
-            // Initialize ONNX models
             heyImiDetector?.initialize()
+            configuredThreshold?.let { heyImiDetector?.setThreshold(it) }
             
-            Log.i(TAG, "✅ Hey IMI ONNX Detector initialized successfully")
-            Log.i(TAG, "   📦 Models loaded from assets/models/")
+            Log.i(TAG, "✅ ONNX Detector initialized successfully")
+            Log.i(TAG, "   📦 Model: custom_wakeword/imi_cnn.onnx")
             Log.i(TAG, "   🎯 Threshold: ${heyImiDetector?.getThreshold()}")
-            
+            return true
         } catch (e: Exception) {
-            Log.e(TAG, "❌ Failed to initialize Hey IMI detector: ${e.message}", e)
-            Log.e(TAG, "   Make sure ONNX model files are in assets/models/:")
-            Log.e(TAG, "   - melspectrogram.onnx")
-            Log.e(TAG, "   - embedding_model.onnx")
-            Log.e(TAG, "   - hey_imi_model.onnx")
+            Log.e(TAG, "❌ Failed to initialize ONNX detector: ${e.message}", e)
+            Log.e(TAG, "   Check assets/custom_wakeword/imi_cnn.onnx exists and onnxruntime dependency is present")
             heyImiDetector = null
+            return false
         }
+    }
+
+    /**
+     * Initialize Snowboy detector if SDK + model assets are available.
+     */
+    private fun initSnowboyDetector(): Boolean {
+        if (snowboyDetector != null) return true
+
+        try {
+            Log.i(TAG, "🔄 Initializing Snowboy Detector...")
+
+            snowboyDetector = SnowboyWakeWordDetector(context) { confidence ->
+                onWakeWordDetected("Snowboy", confidence)
+            }
+
+            snowboyDetector?.initialize()
+            configuredThreshold?.let { snowboyDetector?.setThreshold(it) }
+
+            Log.i(TAG, "✅ Snowboy detector initialized successfully")
+            Log.i(TAG, "   🎯 Threshold: ${snowboyDetector?.getThreshold()}")
+            return true
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Failed to initialize Snowboy detector: ${e.message}", e)
+            snowboyDetector = null
+            return false
+        }
+    }
+
+    private fun onWakeWordDetected(source: String, confidence: Float) {
+        Log.i(TAG, "🔥 WAKE WORD DETECTED by $source! Confidence: ${"%.2f".format(confidence)}")
+
+        // Mark as stopped (detector auto-stops on detection)
+        isStarted = false
+
+        synchronized(bufferLock) {
+            audioBuffer.clear()
+        }
+
+        Log.d(TAG, "📢 Posting 'wake up' event to EventBus")
+        EventBus.getDefault().post(
+            BluetoothEvent(BluetoothEvent.EventType.VOICE_TEXT, "wake up")
+        )
     }
 
     /**
      * Attempt to start SCO (if HFP/headset profile available) and wait briefly
      * for SCO to become active before starting detection.
      */
-    private fun attemptScoThenStartDetector() {
+    private fun attemptScoThenStartDetector(requestId: Int) {
+        if (!useGlassBLEAudio) {
+            // Reliability mode: use direct phone mic capture for wake detection.
+            Log.d(TAG, "Using phone mic mode for wake detection (SCO bypassed)")
+            unregisterScoReceiverForStart()
+            startDetectorInternal(requestId)
+            return
+        }
+
         val am = audioManager
         
         // If SCO already on, start immediately
         if (am?.isBluetoothScoOn == true) {
-            Log.d(TAG, "SCO already active — starting Hey IMI detector immediately")
-            startDetectorInternal()
+            Log.d(TAG, "SCO already active — starting ${activeEngine.displayName} detector immediately")
+            startDetectorInternal(requestId)
             return
         }
 
@@ -195,13 +335,13 @@ class HotHelper private constructor(private val context: Context) {
         }
 
         if (!hfpConnected) {
-            Log.d(TAG, "HFP not connected — starting Hey IMI detector on default mic")
-            startDetectorInternal()
+            Log.d(TAG, "HFP not connected — starting ${activeEngine.displayName} detector on default mic")
+            startDetectorInternal(requestId)
             return
         }
 
         // Register receiver and start SCO
-        registerScoReceiverForStart()
+        registerScoReceiverForStart(requestId)
         try {
             Log.d(TAG, "Attempting to start Bluetooth SCO for wake detection")
             am?.startBluetoothSco()
@@ -210,23 +350,26 @@ class HotHelper private constructor(private val context: Context) {
         }
 
         // Fallback after timeout
-        mainHandler.postDelayed({
+        scoFallbackRunnable?.let { mainHandler.removeCallbacks(it) }
+        scoFallbackRunnable = Runnable {
+            if (!isStartPending || requestId != startRequestId) return@Runnable
             Log.d(TAG, "SCO wait timeout — falling back to default mic")
             unregisterScoReceiverForStart()
-            startDetectorInternal()
-        }, SCO_WAIT_TIMEOUT_MS)
+            startDetectorInternal(requestId)
+        }
+        mainHandler.postDelayed(scoFallbackRunnable!!, SCO_WAIT_TIMEOUT_MS)
     }
 
-    private fun registerScoReceiverForStart() {
+    private fun registerScoReceiverForStart(requestId: Int) {
         unregisterScoReceiverForStart()
         scoReceiver = object : BroadcastReceiver() {
             override fun onReceive(ctx: Context?, intent: Intent?) {
                 val state = intent?.getIntExtra(AudioManager.EXTRA_SCO_AUDIO_STATE, -1)
                 Log.d(TAG, "HotHelper SCO state: $state")
-                if (state == AudioManager.SCO_AUDIO_STATE_CONNECTED) {
-                    Log.d(TAG, "SCO active — starting Hey IMI detector on SCO mic")
+                if (state == AudioManager.SCO_AUDIO_STATE_CONNECTED && isStartPending && requestId == startRequestId) {
+                    Log.d(TAG, "SCO active — starting ${activeEngine.displayName} detector on SCO mic")
                     unregisterScoReceiverForStart()
-                    startDetectorInternal()
+                    startDetectorInternal(requestId)
                 }
             }
         }
@@ -239,6 +382,8 @@ class HotHelper private constructor(private val context: Context) {
     }
 
     private fun unregisterScoReceiverForStart() {
+        scoFallbackRunnable?.let { mainHandler.removeCallbacks(it) }
+        scoFallbackRunnable = null
         scoReceiver?.let {
             try { context.unregisterReceiver(it) } catch (_: Exception) {}
         }
@@ -246,30 +391,115 @@ class HotHelper private constructor(private val context: Context) {
     }
 
     /**
-     * Internal method to start the Hey IMI detector
+     * Internal method to start the active detector.
      */
-    private fun startDetectorInternal() {
+    private fun startDetectorInternal(requestId: Int) {
+        if (!isStartPending || requestId != startRequestId) return
+        if (isMuted) {
+            isStartPending = false
+            startPendingSinceMs = 0L
+            unregisterScoReceiverForStart()
+            Log.d(TAG, "🔇 Canceled pending wake start because mute is enabled")
+            return
+        }
+
         try {
-            heyImiDetector?.start()
-            isStarted = true
-            Log.i(TAG, "🎤 Hey IMI wake word detection STARTED")
-            Log.i(TAG, "   Say 'Hey IMI' to trigger...")
+            startActiveDetector()
+            val detectorListening = activeDetectorIsListening()
+            isStarted = detectorListening
+            isStartPending = false
+            startPendingSinceMs = 0L
+            if (detectorListening) {
+                Log.i(TAG, "🎤 ${activeEngine.displayName} wake word detection STARTED")
+                Log.i(TAG, "   Say your wake phrase to trigger...")
+            } else {
+                Log.e(TAG, "❌ Wake detector start attempted but detector is not listening (engine=${activeEngine.displayName})")
+            }
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to start Hey IMI detector: ${e.message}", e)
+            isStarted = false
+            isStartPending = false
+            startPendingSinceMs = 0L
+            Log.e(TAG, "Failed to start wake detector (${activeEngine.displayName}): ${e.message}", e)
         }
     }
 
     fun stop() {
-        if (!isStarted) return
+        isStarted = false
+        isStartPending = false
+        startPendingSinceMs = 0L
+        unregisterScoReceiverForStart()
+
+        val detectorListening = activeDetectorIsListening()
+        if (!detectorListening) return
         try {
-            heyImiDetector?.stop()
-            isStarted = false
+            stopActiveDetector()
             synchronized(bufferLock) {
                 audioBuffer.clear()
             }
-            Log.i(TAG, "🛑 Hey IMI detector stopped")
+            Log.i(TAG, "🛑 ${activeEngine.displayName} detector stopped")
         } catch (e: Exception) {
-            Log.e(TAG, "Error stopping Hey IMI detector", e)
+            Log.e(TAG, "Error stopping wake detector (${activeEngine.displayName})", e)
+        }
+    }
+
+    private fun startActiveDetector() {
+        when (activeEngine) {
+            WakeWordEngine.CUSTOM_ONNX -> heyImiDetector?.start()
+            WakeWordEngine.SNOWBOY -> snowboyDetector?.start()
+        }
+    }
+
+    private fun stopActiveDetector() {
+        when (activeEngine) {
+            WakeWordEngine.CUSTOM_ONNX -> heyImiDetector?.stop()
+            WakeWordEngine.SNOWBOY -> snowboyDetector?.stop()
+        }
+    }
+
+    private fun activeDetectorIsListening(): Boolean {
+        return when (activeEngine) {
+            WakeWordEngine.CUSTOM_ONNX -> heyImiDetector?.isListening() == true
+            WakeWordEngine.SNOWBOY -> snowboyDetector?.isListening() == true
+        }
+    }
+
+    private fun releaseDetectorForEngine(engine: WakeWordEngine) {
+        when (engine) {
+            WakeWordEngine.CUSTOM_ONNX -> {
+                try {
+                    heyImiDetector?.cleanup()
+                } catch (_: Exception) {
+                }
+                heyImiDetector = null
+            }
+            WakeWordEngine.SNOWBOY -> {
+                try {
+                    snowboyDetector?.cleanup()
+                } catch (_: Exception) {
+                }
+                snowboyDetector = null
+            }
+        }
+    }
+
+    private fun activeDetectorThreshold(): Float? {
+        return when (activeEngine) {
+            WakeWordEngine.CUSTOM_ONNX -> heyImiDetector?.getThreshold()
+            WakeWordEngine.SNOWBOY -> snowboyDetector?.getThreshold()
+        }
+    }
+
+    private fun processExternalAudioForActiveDetector(pcmData: ByteArray) {
+        when (activeEngine) {
+            WakeWordEngine.CUSTOM_ONNX -> heyImiDetector?.processExternalAudio(pcmData)
+            WakeWordEngine.SNOWBOY -> snowboyDetector?.processExternalAudio(pcmData)
+        }
+    }
+
+    private fun playChimeForActiveDetector() {
+        when (activeEngine) {
+            WakeWordEngine.CUSTOM_ONNX -> heyImiDetector?.playChimeSound()
+            WakeWordEngine.SNOWBOY -> snowboyDetector?.playChimeSound()
         }
     }
 
@@ -300,13 +530,9 @@ class HotHelper private constructor(private val context: Context) {
 
     fun release() {
         stop()
-        try {
-            heyImiDetector?.cleanup()
-            heyImiDetector = null
-            Log.i(TAG, "✅ Hey IMI detector released")
-        } catch (e: Exception) {
-            Log.e(TAG, "Error releasing Hey IMI detector", e)
-        }
+        releaseDetectorForEngine(WakeWordEngine.CUSTOM_ONNX)
+        releaseDetectorForEngine(WakeWordEngine.SNOWBOY)
+        Log.i(TAG, "✅ Wake detectors released")
     }
     
     /**
@@ -315,9 +541,15 @@ class HotHelper private constructor(private val context: Context) {
      */
     fun processGlassAudio(pcmData: ByteArray) {
         if (!isStarted) return
+
+        val now = System.currentTimeMillis()
+        if (now - lastExternalFeedLogTs >= 3000L) {
+            Log.d(TAG, "Feeding external glass PCM to wake detector (${pcmData.size} bytes)")
+            lastExternalFeedLogTs = now
+        }
         
-        // Forward to ONNX detector
-        heyImiDetector?.processExternalAudio(pcmData)
+        // Feed external PCM stream (e.g., BLE mic) to the detector.
+        processExternalAudioForActiveDetector(pcmData)
     }
     
     /**
@@ -325,7 +557,7 @@ class HotHelper private constructor(private val context: Context) {
      * Note: Chime is automatically played on wake word detection
      */
     fun playChimeSound() {
-        heyImiDetector?.playChimeSound()
+        playChimeForActiveDetector()
     }
     
     /**
@@ -336,5 +568,5 @@ class HotHelper private constructor(private val context: Context) {
     /**
      * Get current detection threshold
      */
-    fun getThreshold(): Float = heyImiDetector?.getThreshold() ?: 0.3f
+    fun getThreshold(): Float = activeDetectorThreshold() ?: configuredThreshold ?: HeyImiWakeWordDetector.DEFAULT_THRESHOLD
 }

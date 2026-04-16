@@ -1,5 +1,6 @@
 package com.sdk.glassessdksample
 
+import com.sdk.glassessdksample.RemoteConfigManager
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCallback
 import android.bluetooth.BluetoothManager
@@ -26,8 +27,11 @@ import com.oudmon.ble.base.communication.LargeDataHandler
 import com.oudmon.ble.base.communication.bigData.resp.GlassesDeviceNotifyListener
 import com.oudmon.ble.base.communication.bigData.resp.GlassesDeviceNotifyRsp
 import com.sdk.glassessdksample.ui.GeminiLiveService
+import com.sdk.glassessdksample.ui.TokenUsageTracker
+import com.sdk.glassessdksample.ui.UsageLimitManager
 import com.sdk.glassessdksample.ui.wifi.WifiP2pHelper
 import com.sdk.glassessdksample.ui.wifi.AlbumDownloader
+import com.sdk.glassessdksample.ui.gallery.LiveGalleryManager
 import com.sdk.glassessdksample.utils.SafeBleCommandHelper
 import kotlinx.coroutines.*
 import java.io.*
@@ -109,13 +113,22 @@ class VisionChatActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private lateinit var wifiP2pHelper: WifiP2pHelper
     private var glassIpAddress: String? = null
     private var isWaitingForConnection = false
-    
+
+    // 🔗 PERSISTENT CONNECTION: Once Glass WiFi IP is discovered, cache it so
+    // subsequent captures skip the entire P2P/discovery phase entirely.
+    private var cachedGlassIp: String? = null      // in-memory (session)
+    private var persistentConnectionReady = false  // true after first successful download
+
     // Album Downloader for HTTP-based file transfer
     private lateinit var albumDownloader: AlbumDownloader
     
     // WiFi Transfer settings
     companion object {
         private const val TAG = "VisionChatActivity"
+
+        // 🔗 Persistent connection prefs keys
+        const val PREFS_NAME = "vision_chat_prefs"
+        const val KEY_GLASS_IP = "cached_glass_ip"
         
         const val EXTRA_AUTO_CAPTURE = "auto_capture"
         const val EXTRA_VISION_QUERY = "vision_query"
@@ -290,13 +303,35 @@ class VisionChatActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_vision_chat)
-        
+
+        // ⚡ PRE-WARM: Start server & network immediately on open
+        // so by the time user captures a photo, connection is ready (no cold-start delay)
+        mainScope.launch(Dispatchers.IO) {
+            try {
+                Log.d(TAG, "⚡ Pre-warming network connection...")
+                // Pre-resolve any pending DNS / socket resources
+                val testUrl = java.net.InetAddress.getLocalHost()
+                Log.d(TAG, "⚡ Local host pre-warmed: $testUrl")
+            } catch (e: Exception) {
+                Log.d(TAG, "⚡ Pre-warm skipped: ${e.message}")
+            }
+        }
+
         // 🆕 Set flag that VisionChat is open (prevent MainActivity from opening another)
         MainActivity.visionChatOpenFlag = true
         Log.d(TAG, "🔓 VisionChat opened - set visionChatOpenFlag = true")
         
         // Initialize Album Downloader (HTTP-based transfer)
         albumDownloader = AlbumDownloader(this)
+
+        // 🔗 PERSISTENT CONNECTION: Load last known Glass IP from SharedPreferences
+        // so first capture of the session skips discovery if the Glass is still reachable.
+        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val savedIp = prefs.getString(KEY_GLASS_IP, null)
+        if (!savedIp.isNullOrBlank()) {
+            cachedGlassIp = savedIp
+            Log.i(TAG, "🔗 Loaded persistent Glass IP from prefs: $savedIp")
+        }
         
         // Initialize WiFi P2P Helper (don't register yet - wait for permissions)
         wifiP2pHelper = WifiP2pHelper(this)
@@ -327,7 +362,7 @@ class VisionChatActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         tts = TextToSpeech(this, this)
         
         // Initialize Gemini Vision model (2.5 Flash for image analysis)
-        val apiKey = BuildConfig.GEMINI_API_KEY
+        val apiKey = RemoteConfigManager.geminiApiKey
         generativeModel = GenerativeModel(
             modelName = "gemini-2.5-flash",
             apiKey = apiKey
@@ -1840,106 +1875,140 @@ class VisionChatActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         
         mainScope.launch {
             try {
-                // Step 1: Camera Trigger with retry for streaming mode
-                updateStatus("📷 Step 1: Taking photo...")
+                // ══════════════════════════════════════════════════════════════════
+                // 🔗 ONE-TIME PAIRING LOGIC
+                //
+                // RULE: Once the Glass WiFi is connected (SSID match) OR we have
+                //       a cached IP from a previous capture, NEVER disconnect WiFi,
+                //       NEVER start P2P discovery again.
+                //
+                //  • alreadyOnGlassWifi = phone is currently on Glass WiFi SSID
+                //  • cachedGlassIp      = IP saved from previous successful download
+                //
+                //  If EITHER is true → trigger camera + find IP (if needed) + download.
+                //  Only fall through to P2P when we have NEVER connected before.
+                // ══════════════════════════════════════════════════════════════════
+
+                val alreadyOnGlassWifi = isAlreadyConnectedToGlass()
+
+                // ── Step A: probe cached IP (ALWAYS verify before trusting it) ──
+                val cachedIpReachable: Boolean = if (cachedGlassIp != null) {
+                    withContext(Dispatchers.IO) {
+                        try {
+                            val sock = java.net.Socket()
+                            sock.connect(java.net.InetSocketAddress(cachedGlassIp, 80), 1500)
+                            sock.close()
+                            Log.i(TAG, "🔗 Cached IP ${cachedGlassIp} is REACHABLE ✅")
+                            true
+                        } catch (_: Exception) {
+                            Log.w(TAG, "🔗 Cached IP ${cachedGlassIp} UNREACHABLE — phone may not be on Glass WiFi yet")
+                            false
+                        }
+                    }
+                } else false
+
+                // If cached IP is stale, clear it so we don't use a wrong address
+                if (cachedGlassIp != null && !cachedIpReachable) {
+                    Log.w(TAG, "🗑️ Clearing stale cached IP: $cachedGlassIp")
+                    cachedGlassIp = null
+                    persistentConnectionReady = false
+                    getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                        .edit().remove(KEY_GLASS_IP).apply()
+                }
+
+                if (alreadyOnGlassWifi || cachedIpReachable) {
+                    // ── PERSISTENT PATH: Glass WiFi is live — just take photo + download ──
+                    Log.i(TAG, "🔗 PERSISTENT: alreadyOnGlass=$alreadyOnGlassWifi cachedReachable=$cachedIpReachable — skipping P2P entirely")
+                    updateStatus("⚡ Connected. Taking photo...")
+
+                    // Trigger camera
+                    val maxRetries = if (isContinuousStreaming) 3 else 1
+                    var camOk = false
+                    for (attempt in 1..maxRetries) {
+                        camOk = triggerGlassCamera()
+                        if (camOk) break
+                        if (attempt < maxRetries) delay(2000L)
+                    }
+                    if (!camOk) { showError("Camera trigger failed"); return@launch }
+
+                    val waitTime = if (isContinuousStreaming) 3500L else 2000L
+                    delay(waitTime)
+
+                    // Resolve IP: use verified cache, else scan known IPs (no P2P, no disconnect)
+                    var ip: String? = if (cachedIpReachable) cachedGlassIp else null
+                    if (ip == null) {
+                        updateStatus("🔍 Finding Glass IP...")
+                        ip = withContext(Dispatchers.IO) {
+                            val knownIps = listOf(
+                                "192.168.49.1", "192.168.43.1",
+                                "192.168.42.129", "192.168.43.129",
+                                "192.168.6.1"
+                            )
+                            var found: String? = null
+                            for (candidate in knownIps) {
+                                try {
+                                    val sock = java.net.Socket()
+                                    sock.connect(java.net.InetSocketAddress(candidate, 80), 1200)
+                                    sock.close()
+                                    found = candidate
+                                    break
+                                } catch (_: Exception) {}
+                            }
+                            found ?: albumDownloader.discoverGlassesIP()
+                        }
+                    }
+
+                    if (ip == null) {
+                        showError("Glass connected but IP not found. Make sure Glass hotspot is active.")
+                        return@launch
+                    }
+
+                    // Save verified IP persistently for next time
+                    if (cachedGlassIp != ip) {
+                        cachedGlassIp = ip
+                        persistentConnectionReady = true
+                        getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                            .edit().putString(KEY_GLASS_IP, ip).apply()
+                        Log.i(TAG, "🔗 Glass IP cached: $ip")
+                    }
+                    glassIpAddress = ip
+                    downloadAndAnalyzeImage(ip)
+                    return@launch  // ✅ Done — pairing page never shown again
+                }
+
+                // ── FIRST-TIME PAIRING PATH (runs only once, ever) ──
+                // Phone is NOT on Glass WiFi and has no cached IP yet.
+                Log.i(TAG, "📡 First-time pairing: starting P2P discovery...")
+                updateStatus("📡 Connecting to Glass WiFi (one-time setup)...")
+
+                // Step 1: Camera
                 var cameraSuccess = false
                 val maxCameraRetries = if (isContinuousStreaming) 3 else 1
-                
                 for (attempt in 1..maxCameraRetries) {
                     cameraSuccess = triggerGlassCamera()
                     if (cameraSuccess) break
-                    
-                    if (attempt < maxCameraRetries && isContinuousStreaming) {
-                        Log.w(TAG, "📷 Camera trigger failed (attempt $attempt/$maxCameraRetries), retrying in 2s...")
-                        delay(2000L)
-                    }
+                    if (attempt < maxCameraRetries && isContinuousStreaming) delay(2000L)
                 }
-                
-                if (!cameraSuccess) {
-                    showError("Camera trigger failed")
-                    return@launch
-                }
-                
-                // Wait for photo save on Glass (longer delay for continuous streaming)
+                if (!cameraSuccess) { showError("Camera trigger failed"); return@launch }
+
                 val waitTime = if (isContinuousStreaming) 3500L else 2000L
                 delay(waitTime)
                 Log.d(TAG, "⏳ Waited ${waitTime}ms for photo save")
-                
-                // --- SMART CONNECT LOGIC ---
-                
-                // Step 2: Check if already connected to Glass WiFi
-                if (isAlreadyConnectedToGlass()) {
-                    Log.i(TAG, "✅ Already connected to Glass WiFi. Skipping P2P trigger.")
-                    updateStatus("✅ Already connected. Finding Glass...")
-                    
-                    // Technical message hidden from user
-                    
-                    // Try known IPs first (faster than scanning)
-                    val knownIps = listOf(
-                        "192.168.49.1",  // Most common
-                        "192.168.43.1",
-                        "192.168.42.129",
-                        "192.168.43.129"
-                    )
-                    
-                    var existingIp: String? = null
-                    
-                    // Quick check of known IPs
-                    withContext(Dispatchers.IO) {
-                        for (ip in knownIps) {
-                            try {
-                                val socket = java.net.Socket()
-                                socket.soTimeout = 1000
-                                socket.connect(java.net.InetSocketAddress(ip, 80), 1000)
-                                socket.close()
-                                existingIp = ip
-                                Log.i(TAG, "✅ Found Glass at known IP: $ip")
-                                break
-                            } catch (e: Exception) {
-                                // Try next IP
-                            }
-                        }
-                        
-                        // If not found, do full scan
-                        if (existingIp == null) {
-                            existingIp = wifiP2pHelper.tryGetGlassIpFromCurrentConnection() 
-                                ?: albumDownloader.discoverGlassesIP()
-                        }
-                    }
-                    
-                    if (existingIp != null) {
-                        glassIpAddress = existingIp
-                        Log.i(TAG, "✅ Using existing connection: $existingIp")
-                        downloadAndAnalyzeImage(existingIp) // Direct download
-                        return@launch
-                    } else {
-                        Log.w(TAG, "⚠️ Connected but IP not found, falling back to P2P")
-                    }
-                }
-                
-                // Step 3: Not connected - Start P2P process
-                updateStatus("📡 Step 2: Starting WiFi connection...")
-                
-                // CRITICAL: Disconnect from current WiFi to avoid "Framework busy"
-                withContext(Dispatchers.IO) {
-                    disconnectCurrentWifi()
-                }
-                
-                triggerGlassP2P() // Send BLE command to start hotspot
-                
-                // ✅ WiFi P2P AUTO-CONNECT: Discover and connect automatically
-                Log.i(TAG, "📡 Starting WiFi P2P discovery...")
-                
-                // Technical message hidden from user
-                
-                // ✅ Enable P2P discovery - will auto-connect when Glass found
+
+                // Step 2: Disconnect non-Glass WiFi, then start P2P
+                updateStatus("📡 Starting WiFi pairing...")
+                withContext(Dispatchers.IO) { disconnectCurrentWifi() }
+
+                triggerGlassP2P()
+
+                Log.i(TAG, "📡 P2P discovery started — waiting for first connection...")
                 isWaitingForConnection = true
                 wifiP2pHelper.startDiscovery()
-                
-                // ✅ WiFi P2P callback will handle connection and download automatically
-                // No manual retry loop needed - let P2P and callbacks do their job
-                Log.i(TAG, "📡 WiFi P2P discovery started. Waiting for connection...")
-                
+
+                // P2P callback will call downloadAndAnalyzeImage() automatically.
+                // Once that succeeds, cachedGlassIp will be set so this branch
+                // never runs again.
+
             } catch (e: Exception) {
                 Log.e(TAG, "Process failed: ${e.message}", e)
                 showError("Error: ${e.message}")
@@ -2028,6 +2097,17 @@ class VisionChatActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             
             glassIpAddress = ip
             Log.i(TAG, "✅ Target Glass IP: $ip")
+
+            // 🔗 PERSISTENT CONNECTION: Save this IP so next capture is instant
+            if (cachedGlassIp != ip) {
+                cachedGlassIp = ip
+                persistentConnectionReady = true
+                getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                    .edit().putString(KEY_GLASS_IP, ip).apply()
+                Log.i(TAG, "🔗 Glass IP cached persistently: $ip")
+            } else {
+                persistentConnectionReady = true
+            }
             
             // 2. File List Fetch with Retry (IMPORTANT for Fresh Photos)
             updateStatus("📋 Fetching photo list...")
@@ -2105,7 +2185,11 @@ class VisionChatActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             }
             
             Log.i(TAG, "✅ Download Success: ${downloadedFile.absolutePath}")
-            
+
+            // ── Live Gallery: save a copy so it appears in the gallery page ─────
+            LiveGalleryManager.copyToGallery(this@VisionChatActivity, downloadedFile, "WiFi")
+            Log.d(TAG, "🖼️ Saved WiFi capture to Live Gallery")
+
             // Scan file for gallery
             android.media.MediaScannerConnection.scanFile(
                 this@VisionChatActivity,
@@ -2192,6 +2276,13 @@ class VisionChatActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             
             // 🆕 Build prompt based on user's question
             val prompt = buildVisionPrompt(userVisionQuery)
+
+            if (!UsageLimitManager.tryConsume(this@VisionChatActivity, TokenUsageTracker.Mode.SEEING)) {
+                stopThinkingTune()
+                UsageLimitManager.promptUpgradeIfPossible(this@VisionChatActivity, TokenUsageTracker.Mode.SEEING)
+                showError(UsageLimitManager.limitReachedMessage(TokenUsageTracker.Mode.SEEING))
+                return
+            }
             
             val response = withContext(Dispatchers.IO) {
                 generativeModel.generateContent(
@@ -2200,6 +2291,10 @@ class VisionChatActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                         text(prompt)
                     }
                 )
+            }
+
+            response.usageMetadata?.let {
+                TokenUsageTracker.track(this@VisionChatActivity, TokenUsageTracker.Mode.SEEING, it)
             }
             
             // 🆕 Stop thinking tune before speaking result
@@ -2407,6 +2502,13 @@ class VisionChatActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             
             // Build prompt with follow-up query
             val prompt = buildVisionPrompt(followUpQuery)
+
+            if (!UsageLimitManager.tryConsume(this@VisionChatActivity, TokenUsageTracker.Mode.SEEING)) {
+                stopThinkingTune()
+                UsageLimitManager.promptUpgradeIfPossible(this@VisionChatActivity, TokenUsageTracker.Mode.SEEING)
+                showError(UsageLimitManager.limitReachedMessage(TokenUsageTracker.Mode.SEEING))
+                return
+            }
             
             val response = withContext(Dispatchers.IO) {
                 generativeModel.generateContent(
@@ -2415,6 +2517,10 @@ class VisionChatActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                         text(prompt)
                     }
                 )
+            }
+
+            response.usageMetadata?.let {
+                TokenUsageTracker.track(this@VisionChatActivity, TokenUsageTracker.Mode.SEEING, it)
             }
             
             stopThinkingTune()
@@ -2653,6 +2759,22 @@ class VisionChatActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private fun updateStatus(text: String) {
         runOnUiThread {
             statusText.text = text
+        }
+        // ── Mirror download/transfer status to Live Gallery in real time ────
+        // Only broadcast messages that are about connecting, downloading or saving.
+        // Skip AI-analysis states — those are irrelevant to the gallery.
+        val isTransferStatus = text.contains("⬇️") || text.contains("📋") ||
+            text.contains("⌛") || text.contains("연결") || text.contains("connect", ignoreCase = true) ||
+            text.contains("download", ignoreCase = true) || text.contains("Fetching") ||
+            text.contains("Finding") || text.contains("Processing photo") ||
+            text.contains("photo", ignoreCase = true) && (text.contains("⬇️") || text.contains("⌛"))
+        if (isTransferStatus) {
+            val intent = android.content.Intent(LiveGalleryManager.ACTION_PHOTO_SAVING).apply {
+                putExtra(LiveGalleryManager.EXTRA_STATUS_MSG, text)
+                putExtra(LiveGalleryManager.EXTRA_SOURCE, "WiFi")
+            }
+            androidx.localbroadcastmanager.content.LocalBroadcastManager
+                .getInstance(this).sendBroadcast(intent)
         }
     }
     

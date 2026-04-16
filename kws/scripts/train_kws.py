@@ -55,9 +55,43 @@ def random_background_noise(background_files, audio):
     return audio + gain * bg
 
 
+def augment_audio(audio):
+    """Data augmentation - creates variations of training samples"""
+    # Random pitch shift (slight: -1 to +1 semitones)
+    if random.random() > 0.5:
+        # Speed shift instead (tensorflow doesn't have native pitch)
+        speed_factor = random.uniform(0.9, 1.1)
+        # Resample by changing indices
+        indices = tf.cast(tf.linspace(0.0, tf.cast(tf.shape(audio)[0], tf.float32) - 1, 
+                                      tf.cast(tf.cast(tf.shape(audio)[0], tf.float32) / speed_factor, tf.int32)), tf.int32)
+        audio = tf.gather(audio, indices)
+    
+    # Random volume adjustment (±30%)
+    volume_factor = random.uniform(0.7, 1.3)
+    audio = audio * volume_factor
+    
+    # Add slight random noise (SNR boost for robustness)
+    if random.random() > 0.3:
+        noise = tf.random.normal(tf.shape(audio)) * 0.02
+        audio = audio + noise
+    
+    # Random time stretch (slow down/speed up)
+    if random.random() > 0.5:
+        stretch_factor = random.uniform(0.95, 1.05)
+        new_length = tf.cast(tf.cast(tf.shape(audio)[0], tf.float32) * stretch_factor, tf.int32)
+        audio = tf.image.resize(audio[tf.newaxis, :, tf.newaxis], [new_length, 1])[0, :, 0]
+    
+    # Clip to valid range
+    audio = tf.clip_by_value(audio, -1.0, 1.0)
+    return audio
+
+
 def preprocess(audio):
     # compute log-mel spectrogram
-    stft = tf.signal.stft(audio, frame_length=640, frame_step=320, fft_length=1024)
+    stft# Apply augmentation to training data (3x more variations)
+        if random.random() > 0.3:
+            audio = augment_audio(audio)
+         = tf.signal.stft(audio, frame_length=640, frame_step=320, fft_length=1024)
     spectrogram = tf.abs(stft)
 
     num_spectrogram_bins = spectrogram.shape[-1]

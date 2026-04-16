@@ -1,0 +1,305 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="#1E1E1E"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="0dp">
+
+        <!-- Header Section with Icon and Title -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/dialog_header_bg"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:padding="20dp">
+
+            <TextView
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:background="@drawable/icon_circle_bg"
+                android:gravity="center"
+                android:text="📋"
+                android:textSize="28sp" />
+
+            <TextView
+                android:id="@+id/tv_dialog_title"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="16dp"
+                android:layout_weight="1"
+                android:ellipsize="end"
+                android:maxLines="2"
+                android:text="Meeting Title"
+                android:textColor="#FFFFFF"
+                android:textSize="20sp"
+                android:textStyle="bold" />
+
+        </LinearLayout>
+
+        <!-- Meeting Info Section -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="#252525"
+            android:orientation="vertical"
+            android:padding="20dp">
+
+            <!-- Date Row -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:layout_width="32dp"
+                    android:layout_height="32dp"
+                    android:background="@drawable/info_badge_bg"
+                    android:gravity="center"
+                    android:text="📅"
+                    android:textSize="18sp" />
+
+                <TextView
+                    android:id="@+id/tv_dialog_date"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="12dp"
+                    android:layout_weight="1"
+                    android:text="Feb 13, 2026 at 04:30 pm"
+                    android:textColor="#E0E0E0"
+                    android:textSize="15sp" />
+
+            </LinearLayout>
+
+            <!-- Duration Row -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:layout_width="32dp"
+                    android:layout_height="32dp"
+                    android:background="@drawable/info_badge_bg"
+                    android:gravity="center"
+                    android:text="⏱️"
+                    android:textSize="18sp" />
+
+                <TextView
+                    android:id="@+id/tv_dialog_duration"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="12dp"
+                    android:layout_weight="1"
+                    android:text="Duration: 58s"
+                    android:textColor="#E0E0E0"
+                    android:textSize="15sp" />
+
+            </LinearLayout>
+
+            <!-- Word Count Row -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:layout_width="32dp"
+                    android:layout_height="32dp"
+                    android:background="@drawable/info_badge_bg"
+                    android:gravity="center"
+                    android:text="📝"
+                    android:textSize="18sp" />
+
+                <TextView
+                    android:id="@+id/tv_dialog_word_count"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="12dp"
+                    android:layout_weight="1"
+                    android:text="Words: 75"
+                    android:textColor="#E0E0E0"
+                    android:textSize="15sp" />
+
+            </LinearLayout>
+
+            <!-- Speaker Count Row -->
+            <LinearLayout
+                android:id="@+id/layout_speaker_count"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:visibility="gone">
+
+                <TextView
+                    android:layout_width="32dp"
+                    android:layout_height="32dp"
+                    android:background="@drawable/info_badge_bg"
+                    android:gravity="center"
+                    android:text="👥"
+                    android:textSize="18sp" />
+
+                <TextView
+                    android:id="@+id/tv_dialog_speaker_count"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="12dp"
+                    android:layout_weight="1"
+                    android:text="Participants: 3 speakers detected"
+                    android:textColor="#00D9FF"
+                    android:textSize="15sp"
+                    android:textStyle="bold" />
+
+            </LinearLayout>
+
+        </LinearLayout>
+
+        <!-- Summary Section -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="20dp">
+
+            <!-- Summary Header -->
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center"
+                android:letterSpacing="0.15"
+                android:paddingVertical="12dp"
+                android:text="SUMMARY"
+                android:textColor="#00D9FF"
+                android:textSize="14sp"
+                android:textStyle="bold" />
+
+            <!-- Divider -->
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="2dp"
+                android:layout_marginBottom="16dp"
+                android:background="@drawable/gradient_divider" />
+
+            <!-- Summary Content -->
+            <TextView
+                android:id="@+id/tv_dialog_summary"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:lineSpacingExtra="4dp"
+                android:text="Here's a concise meeting summary:\n\n**Subject: Informal Check-in**\n\n**1. Key Discussion Points:**\n\n* Update on the deployment of &quot;Grax&quot; which will soon be live on the Play Store.\n* Brief mention of &quot;Astro Guru कृपा&quot; and status.\n\n**2. Decisions Made:**\n\n* None explicitly stated.\n\n**3. Action Items:**\n\n* None explicitly stated.\n\n**4. Important Notes:**\n\n* The meeting was a casual check-in.\n* Further details about &quot;Grax&quot; and &quot;Astro Guru कृपा&quot; were not discussed in detail based on the transcript provided."
+                android:textColor="#D0D0D0"
+                android:textSize="15sp" />
+
+        </LinearLayout>
+
+        <!-- Transcript Section (collapsible) -->
+        <LinearLayout
+            android:id="@+id/layout_transcript_section"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="#1A1A1A"
+            android:orientation="vertical"
+            android:padding="20dp"
+            android:visibility="gone">
+
+            <!-- Transcript Header -->
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center"
+                android:letterSpacing="0.15"
+                android:paddingVertical="12dp"
+                android:text="TRANSCRIPT"
+                android:textColor="#888888"
+                android:textSize="14sp"
+                android:textStyle="bold" />
+
+            <!-- Divider -->
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:layout_marginBottom="16dp"
+                android:background="#333333" />
+
+            <!-- Transcript Content -->
+            <TextView
+                android:id="@+id/tv_dialog_transcript"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:lineSpacingExtra="3dp"
+                android:text="Full transcript text here..."
+                android:textColor="#999999"
+                android:textSize="13sp" />
+
+        </LinearLayout>
+
+        <!-- Show Transcript Toggle Button -->
+        <TextView
+            android:id="@+id/btn_toggle_transcript"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="?attr/selectableItemBackground"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:padding="16dp"
+            android:text="▼ Show Transcript"
+            android:textColor="#00D9FF"
+            android:textSize="14sp"
+            android:textStyle="bold" />
+
+        <!-- Action Buttons Row -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="#252525"
+            android:gravity="end"
+            android:orientation="horizontal"
+            android:padding="16dp">
+
+            <TextView
+                android:id="@+id/btn_dialog_delete"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:clickable="true"
+                android:focusable="true"
+                android:padding="12dp"
+                android:text="Delete"
+                android:textColor="#FF6B6B"
+                android:textSize="14sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/btn_dialog_close"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="16dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:clickable="true"
+                android:focusable="true"
+                android:padding="12dp"
+                android:text="Close"
+                android:textColor="#00D9FF"
+                android:textSize="14sp"
+                android:textStyle="bold" />
+
+        </LinearLayout>
+
+    </LinearLayout>
+
+</ScrollView>

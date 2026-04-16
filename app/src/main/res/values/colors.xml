@@ -1,37 +1,58 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
 
+    <!-- ===== APP THEME COLORS ===== -->
+
+    <!-- ===== GLASSMORPHISM TOKENS ===== -->
+    <color name="glass_primary">#C9CDD3</color>
+    <color name="glass_primary_deep">#A7ADB5</color>
+    <color name="glass_surface">#CC2F3136</color>
+    <color name="glass_surface_elevated">#E033353A</color>
+    <color name="glass_stroke">#14FFFFFF</color>
+    <color name="glass_stroke_soft">#0FFFFFFF</color>
+    <color name="glass_reflection">#0DFFFFFF</color>
+    <color name="glass_bg_start">#595959</color>
+    <color name="glass_bg_mid">#545454</color>
+    <color name="glass_bg_end">#4C4C4C</color>
+    
+    <!-- Background Colors -->
+    <color name="app_background">#545454</color>
+    <color name="background_card">#323438</color>
+    <color name="background_button">#3A3D42</color>
+    
     <!-- ===== DARK PREMIUM PALETTE ===== -->
     
     <!-- Background Colors -->
-    <color name="background_primary">#0F1113</color>
-    <color name="background_secondary">#141618</color>
-    <color name="card_background">#1B1E21</color>
-    <color name="card_background_elevated">#202428</color>
+    <color name="background_primary">@color/glass_bg_end</color>
+    <color name="background_secondary">#4A4A4A</color>
+    <color name="card_background">@color/glass_surface</color>
+    <color name="card_background_elevated">@color/glass_surface_elevated</color>
     
     <!-- Text Colors -->
-    <color name="text_primary">#EDEDED</color>
-    <color name="text_secondary">#9A9FA6</color>
-    <color name="text_tertiary">#6B7078</color>
+    <color name="text_primary">#FFFFFF</color>
+    <color name="text_secondary">#D7D9DD</color>
+    <color name="text_tertiary">#A7ACB3</color>
     
     <!-- Accent & Highlight Colors -->
-    <color name="accent_warm_gray">#B8BABC</color>
-    <color name="accent_silver">#D4D6D8</color>
-    <color name="accent_glow">#E8EAEC</color>
+    <color name="accent_warm_gray">#9CA3AF</color>
+    <color name="accent_silver">#D1D5DB</color>
+    <color name="accent_glow">#8D96A1</color>
+    <color name="accent_blue">#8D96A1</color>
+    <color name="accent_blue_deep">#6E7782</color>
     
     <!-- Dividers & Borders -->
-    <color name="divider_subtle">#2A2D31</color>
-    <color name="border_subtle">#33373B</color>
+    <color name="divider_subtle">#5A5F66</color>
+    <color name="border_subtle">@color/glass_stroke_soft</color>
     
     <!-- Interactive States -->
     <color name="ripple_effect">#33FFFFFF</color>
-    <color name="button_pressed">#252A2E</color>
+    <color name="button_pressed">#33C9CDD3</color>
     
     <!-- Semantic Colors (Muted) -->
-    <color name="success_muted">#4A6B5A</color>
-    <color name="warning_muted">#6B5E4A</color>
-    <color name="error_muted">#6B4A4A</color>
-    <color name="info_muted">#4A5A6B</color>
+    <color name="success_muted">#AEB5BE</color>
+    <color name="warning_muted">#AEB5BE</color>
+    <color name="error_muted">#AEB5BE</color>
+    <color name="info_muted">#AEB5BE</color>
     
     <!-- Legacy Material Colors (kept for compatibility) -->
     <color name="purple_200">#FFBB86FC</color>
@@ -47,8 +68,8 @@
     <color name="title_bar_center">@color/text_primary</color>
     <color name="title_bar_right">@color/text_secondary</color>
     <color name="title_bar_line">@color/divider_subtle</color>
-    <color name="main_nav_selected">@color/text_primary</color>
-    <color name="main_nav_unselected">@color/text_secondary</color>
+    <color name="main_nav_selected">@color/glass_primary</color>
+    <color name="main_nav_unselected">@color/text_tertiary</color>
     <color name="main_background">@color/background_primary</color>
     <color name="main_icon_dark">@color/text_primary</color>
     <color name="main_divider">@color/divider_subtle</color>

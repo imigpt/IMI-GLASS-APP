@@ -2,6 +2,7 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
+    id 'com.google.gms.google-services'
 }
 
 // 2. Imports come AFTER plugins
@@ -29,11 +30,11 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.sdk.glassessdksample"
+        applicationId = "com.aselea.imiglass"
         minSdk = 24
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 9
+        versionName = "1.8"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
 
         vectorDrawables {
@@ -42,16 +43,29 @@ android {
 
         // Inject API keys from local.properties
         buildConfigField("String", "GEMINI_API_KEY", safeQuote(localProperties["GEMINI_API_KEY"] ?: "YOUR_GEMINI_API_KEY_HERE"))
+        buildConfigField("String", "OPENAI_API_KEY", safeQuote(localProperties["OPENAI_API_KEY"] ?: ""))
         buildConfigField("String", "PICOVOICE_ACCESS_KEY", safeQuote(localProperties["PICOVOICE_ACCESS_KEY"] ?: ""))
+        buildConfigField("String", "GMAIL_CLIENT_ID", safeQuote(localProperties["GMAIL_CLIENT_ID"] ?: "YOUR_GMAIL_CLIENT_ID_HERE"))
+    }
+
+    signingConfigs {
+        release {
+            storeFile rootProject.file(localProperties["KEYSTORE_FILE"] ?: "app/imi_release.keystore")
+            storePassword localProperties["KEYSTORE_PASSWORD"] ?: "imi123"
+            keyAlias localProperties["KEY_ALIAS"] ?: "imi_key"
+            keyPassword localProperties["KEY_PASSWORD"] ?: "imi123"
+        }
     }
 
     buildTypes {
         release {
+            signingConfig signingConfigs.release
             minifyEnabled true
             shrinkResources true
             proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
         }
         debug {
+            signingConfig signingConfigs.release
             minifyEnabled false
         }
     }
@@ -118,6 +132,15 @@ dependencies {
     // Google AI SDK for Android
     implementation "com.google.ai.client.generativeai:generativeai:0.9.0"
 
+    // Gmail API Integration (Simplified - using REST API)
+    implementation 'com.google.android.gms:play-services-auth:20.7.0'
+    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+    implementation 'com.google.code.gson:gson:2.10.1'
+
+    // Glide - Image loading library
+    implementation "com.github.bumptech.glide:glide:4.15.1"
+    annotationProcessor "com.github.bumptech.glide:compiler:4.15.1"
+
     // ========================================================================
     // WAKE WORD DETECTION - Choose ONE option:
     // ========================================================================
@@ -127,13 +150,24 @@ dependencies {
     // - melspectrogram.onnx
     // - embedding_model.onnx  
     // - hey_imi_model.onnx
-    implementation "com.microsoft.onnxruntime:onnxruntime-android:1.17.0"
+    implementation "com.microsoft.onnxruntime:onnxruntime-android:1.20.0"
+    implementation "com.github.wendykierp:JTransforms:3.1"
     
     // OPTION 2: Picovoice Porcupine (Comment out if using ONNX)
     // Requires PICOVOICE_ACCESS_KEY in local.properties
-    // implementation "ai.picovoice:porcupine-android:4.0.0"
+    implementation "ai.picovoice:porcupine-android:4.0.0"
+
+    // OPTION 3: Snowboy (optional)
+    // Drop Snowboy SDK artifacts in app/libs with names like snowboy-android.aar
+    // and add assets: snowboy/common.res + snowboy/hey_imi.pmdl
+    implementation fileTree(dir: "libs", include: ["snowboy*.aar", "snowboy*.jar"])
     
     // ========================================================================
+
+    // Firebase Remote Config (for secure API key storage)
+    implementation platform('com.google.firebase:firebase-bom:33.0.0')
+    implementation 'com.google.firebase:firebase-config-ktx'
+    implementation 'com.google.firebase:firebase-analytics-ktx'
 
     // Testing
     testImplementation "junit:junit:4.13.2"

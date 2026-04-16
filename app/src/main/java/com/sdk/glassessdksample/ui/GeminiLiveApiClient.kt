@@ -1,5 +1,7 @@
 package com.sdk.glassessdksample.ui
 
+import com.sdk.glassessdksample.RemoteConfigManager
+import android.content.Context
 import android.util.Log
 import com.google.gson.Gson
 import com.sdk.glassessdksample.BuildConfig
@@ -10,7 +12,7 @@ import java.util.concurrent.TimeUnit
 import kotlin.coroutines.suspendCoroutine
 import kotlin.coroutines.resume
 
-class GeminiLiveApiClient {
+class GeminiLiveApiClient(private val context: Context? = null) {
     
     private val gson = Gson()
     private val client = OkHttpClient.Builder()
@@ -47,7 +49,10 @@ class GeminiLiveApiClient {
         // ⚡ LIVE API DISABLED - Using REST API only (more reliable)
         Log.d("GeminiLiveApiClient", "⚡ Using REST API (production mode)")
         return try {
-            val restResponse = GeminiAIClient().chat(prompt)
+            val restResponse = GeminiAIClient(context).chat(
+                prompt,
+                TokenUsageTracker.Mode.VOICE_CHAT
+            )
             Log.d("GeminiLiveApiClient", "✅ REST API success")
             restResponse
         } catch (restError: Exception) {
@@ -80,7 +85,7 @@ class GeminiLiveApiClient {
 
     private suspend fun connectAndSendMessage(prompt: String): String = suspendCoroutine { continuation ->
         try {
-            val url = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${BuildConfig.GEMINI_API_KEY}"
+            val url = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${RemoteConfigManager.geminiApiKey}"
             val request = Request.Builder().url(url).build()
             
             val listener = object : WebSocketListener() {

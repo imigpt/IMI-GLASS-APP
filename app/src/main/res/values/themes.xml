@@ -3,24 +3,41 @@
 
     <style name="Theme.GlassesSDKSample" parent="Theme.Material3.DayNight.NoActionBar">
 
+        <!-- Typography - Neue Plak Font -->
+        <item name="android:fontFamily">@font/neue_plak</item>
+        <item name="fontFamily">@font/neue_plak</item>
+        
+        <!-- Material3 Text Appearances -->
+        <item name="textAppearanceHeadline1">@style/TextAppearance.App.Headline</item>
+        <item name="textAppearanceHeadline2">@style/TextAppearance.App.Headline</item>
+        <item name="textAppearanceHeadline3">@style/TextAppearance.App.Headline</item>
+        <item name="textAppearanceHeadline4">@style/TextAppearance.App.Title</item>
+        <item name="textAppearanceHeadline5">@style/TextAppearance.App.Title</item>
+        <item name="textAppearanceHeadline6">@style/TextAppearance.App.Title</item>
+        <item name="textAppearanceBody1">@style/TextAppearance.App.Body</item>
+        <item name="textAppearanceBody2">@style/TextAppearance.App.Body</item>
+        <item name="textAppearanceCaption">@style/TextAppearance.App.Label</item>
+        <item name="textAppearanceButton">@style/TextAppearance.App.Label</item>
+        
         <!-- Primary Brand Colors (Dark Premium) -->
-        <item name="colorPrimary">@color/accent_warm_gray</item>
-        <item name="colorPrimaryVariant">@color/accent_silver</item>
+        <item name="colorPrimary">@color/glass_primary</item>
+        <item name="colorPrimaryVariant">@color/glass_primary_deep</item>
         <item name="colorOnPrimary">@color/text_primary</item>
 
         <!-- Secondary Colors -->
-        <item name="colorSecondary">@color/accent_silver</item>
-        <item name="colorSecondaryVariant">@color/accent_glow</item>
+        <item name="colorSecondary">@color/accent_blue</item>
+        <item name="colorSecondaryVariant">@color/accent_blue_deep</item>
         <item name="colorOnSecondary">@color/background_primary</item>
 
         <!-- Background Colors -->
-        <item name="android:colorBackground">@color/background_primary</item>
+        <item name="android:colorBackground">@color/glass_bg_end</item>
+        <item name="android:windowBackground">@drawable/bg_app_gradient</item>
         <item name="colorSurface">@color/card_background</item>
         <item name="colorOnSurface">@color/text_primary</item>
 
         <!-- Status Bar & Navigation Bar (Dark, Seamless) -->
-        <item name="android:statusBarColor">@color/background_primary</item>
-        <item name="android:navigationBarColor">@color/background_primary</item>
+        <item name="android:statusBarColor">@color/glass_bg_end</item>
+        <item name="android:navigationBarColor">@color/glass_bg_end</item>
         <item name="android:windowLightStatusBar">false</item>
         <item name="android:windowLightNavigationBar">false</item>
 
@@ -50,9 +67,11 @@
 
     <!-- Splash Screen Theme -->
     <style name="Theme.App.Starting" parent="Theme.Material3.DayNight.NoActionBar">
-        <item name="android:windowBackground">#1E1E1E</item>
-        <item name="android:statusBarColor">#1E1E1E</item>
-        <item name="android:navigationBarColor">#1E1E1E</item>
+        <item name="android:fontFamily">@font/neue_plak</item>
+        <item name="fontFamily">@font/neue_plak</item>
+        <item name="android:windowBackground">#3A3A3A</item>
+        <item name="android:statusBarColor">#262626</item>
+        <item name="android:navigationBarColor">#262626</item>
         <item name="android:windowLightStatusBar">false</item>
         <item name="android:windowLightNavigationBar">false</item>
         <item name="windowActionBar">false</item>
@@ -61,6 +80,8 @@
 
     <!-- Fullscreen Media Viewer Theme (AppCompat compatible) -->
     <style name="Theme.GlassesSDKSample.Fullscreen" parent="Theme.AppCompat.NoActionBar">
+        <item name="android:fontFamily">@font/neue_plak</item>
+        <item name="fontFamily">@font/neue_plak</item>
         <item name="android:windowBackground">#000000</item>
         <item name="android:statusBarColor">#000000</item>
         <item name="android:navigationBarColor">#000000</item>
@@ -70,6 +91,60 @@
         <item name="android:windowContentOverlay">@null</item>
         <item name="windowActionBar">false</item>
         <item name="windowNoTitle">true</item>
+    </style>
+
+    <!-- Text Appearance Styles with Neue Plak Font -->
+    <style name="TextAppearance.App" parent="TextAppearance.Material3.BodyMedium">
+        <item name="android:fontFamily">@font/neue_plak</item>
+        <item name="fontFamily">@font/neue_plak</item>
+    </style>
+
+    <style name="TextAppearance.App.Headline" parent="TextAppearance.Material3.HeadlineMedium">
+        <item name="android:fontFamily">@font/neue_plak</item>
+        <item name="fontFamily">@font/neue_plak</item>
+    </style>
+
+    <style name="TextAppearance.App.Title" parent="TextAppearance.Material3.TitleMedium">
+        <item name="android:fontFamily">@font/neue_plak</item>
+        <item name="fontFamily">@font/neue_plak</item>
+    </style>
+
+    <style name="TextAppearance.App.Body" parent="TextAppearance.Material3.BodyMedium">
+        <item name="android:fontFamily">@font/neue_plak</item>
+        <item name="fontFamily">@font/neue_plak</item>
+    </style>
+
+    <style name="TextAppearance.App.Label" parent="TextAppearance.Material3.LabelMedium">
+        <item name="android:fontFamily">@font/neue_plak</item>
+        <item name="fontFamily">@font/neue_plak</item>
+    </style>
+
+    <!-- Bottom Sheet Style (dark, rounded top corners) -->
+    <style name="BottomSheetStyle" parent="Theme.Material3.DayNight.BottomSheetDialog">
+        <item name="bottomSheetStyle">@style/BottomSheetModal</item>
+    </style>
+
+    <style name="BottomSheetModal" parent="Widget.Material3.BottomSheet.Modal">
+        <item name="backgroundTint">#1F1F1F</item>
+        <item name="shapeAppearance">@style/BottomSheetShapeAppearance</item>
+    </style>
+
+    <style name="BottomSheetShapeAppearance" parent="ShapeAppearance.Material3.LargeComponent">
+        <item name="cornerSizeTopLeft">24dp</item>
+        <item name="cornerSizeTopRight">24dp</item>
+        <item name="cornerSizeBottomLeft">0dp</item>
+        <item name="cornerSizeBottomRight">0dp</item>
+    </style>
+
+    <style name="ConnectingDialogStyle" parent="ThemeOverlay.Material3.Dialog.Alert">
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:backgroundDimEnabled">true</item>
+        <item name="android:windowAnimationStyle">@style/ConnectingDialogAnimation</item>
+    </style>
+
+    <style name="ConnectingDialogAnimation">
+        <item name="android:windowEnterAnimation">@anim/anim_connecting_dialog_enter</item>
+        <item name="android:windowExitAnimation">@anim/anim_connecting_dialog_exit</item>
     </style>
 
 </resources>

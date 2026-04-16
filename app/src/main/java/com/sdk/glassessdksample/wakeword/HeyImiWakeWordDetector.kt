@@ -1,6 +1,9 @@
 package com.sdk.glassessdksample.wakeword
 
-import ai.onnxruntime.*
+import ai.onnxruntime.OnnxTensor
+import ai.onnxruntime.OrtEnvironment
+import ai.onnxruntime.OrtSession
+import ai.onnxruntime.TensorInfo
 import android.content.Context
 import android.media.AudioFormat
 import android.media.AudioRecord
@@ -9,24 +12,30 @@ import android.media.MediaRecorder
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import org.jtransforms.fft.FloatFFT_1D
+import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
+import kotlin.math.PI
+import kotlin.math.abs
+import kotlin.math.cos
+import kotlin.math.exp
+import kotlin.math.ln
+import kotlin.math.max
+import kotlin.math.sqrt
 
 /**
- * HeyImiWakeWordDetector - Custom ONNX-based wake word detection
- * 
- * Replaces Picovoice Porcupine with custom "Hey IMI" ONNX model
- * 
- * Model Files Required (place in assets/models/):
- * - melspectrogram.onnx: Audio to melspectrogram converter
- * - embedding_model.onnx: Feature embedding generator  
- * - hey_imi_model.onnx: Wake word classifier (96% accurate)
- * 
- * @param context Application context
- * @param onWakeWordDetected Callback when "Hey IMI" is detected
+ * Single-model "Hey IMI" detector using custom_wakeword/imi_cnn.onnx.
+ *
+ * Pipeline is aligned with the model guide:
+ * - 16 kHz mono input
+ * - 1.5s rolling window (24,000 samples)
+ * - 100ms step
+ * - log-mel -> clip[-80,0] -> normalize to [-1,+1]
+ * - ONNX input shape: [1,1,40,150]
  */
 class HeyImiWakeWordDetector(
     private val context: Context,
@@ -34,957 +43,741 @@ class HeyImiWakeWordDetector(
 ) {
     companion object {
         private const val TAG = "HeyImiWakeWord"
-        
-        // Audio configuration - must match training data
-        const val SAMPLE_RATE = 16000
-        const val AUDIO_DURATION_MS = 1500  // 1.5 seconds
-        const val BUFFER_SIZE = 24000  // samples (1.5s * 16kHz)
-        
-        // Detection threshold - adjust based on testing
-        // Lower = more sensitive but more false positives
-        // Higher = less sensitive but fewer false positives
-        // 🔧 TUNED: 0.50f - BALANCED for precision boost
-        // Raised from 0.40f to reduce false positives while keeping 97% recall
-        const val DEFAULT_THRESHOLD = 0.60f
-        
-        // Minimum audio level required before checking classifier
-        // 🔧 TUNED: 20 - DISABLED
-        // We want to process ALL audio, even if quiet.
-        private const val MIN_AUDIO_LEVEL_FOR_DETECTION = 20
-        
-        // Cooldown after detection to prevent multiple triggers
-        const val DETECTION_COOLDOWN_MS = 2000L
-        
-        // Rolling buffer update interval (250ms chunks = 4000 samples)
-        const val CHUNK_SIZE = 4000
-        
-        // Rolling average window size (smooths out single-frame spikes)
-        // 🔧 INCREASED: 5 frames for better soft voice stability
-        private const val ROLLING_AVG_SIZE = 5
+
+        private const val MODEL_FP32 = "custom_wakeword/imi_cnn.onnx"
+        private const val MODEL_FP32_DATA = "custom_wakeword/imi_cnn.onnx.data"
+        private const val MODEL_INT8 = "custom_wakeword/imi_wakeword_int8.onnx"
+        private const val MODEL_INFO = "custom_wakeword/cnn_model_info.json"
+
+        const val SAMPLE_RATE = 16_000
+        private const val N_MELS = 40
+        private const val N_FFT = 512
+        private const val WIN_LEN = 400
+        private const val HOP_LEN = 160
+        private const val FMIN = 80.0
+        private const val FMAX = 7600.0
+        private const val N_TIME = 150
+        private const val TOP_DB = 80.0f
+
+        const val BUFFER_SIZE = N_TIME * HOP_LEN // 24,000 samples = 1.5s
+        const val CHUNK_SIZE = 1_600 // 100ms
+
+        // Detection defaults from integration guide.
+        const val DEFAULT_THRESHOLD = 0.42f
+        private const val DEFAULT_THRESHOLD_OFF_RATIO = 0.55f
+        private const val DEFAULT_SMOOTHING = 3
+        private const val DEFAULT_CONSEC = 2
+        private const val DEFAULT_COOLDOWN_MS = 1_500L
+        private const val DEFAULT_ENERGY_GATE = 0.005f
+        private const val DEFAULT_DELTA_TRIGGER = 0.0f
+        private const val DEFAULT_BASELINE_TAU_S = 10.0f
+        private const val DEFAULT_SPEECH_FLOOR = 0.02f
+        private const val SILENCE_GAP_CHUNKS = 5
+        private const val EXTERNAL_AUDIO_PRIORITY_MS = 1500L
     }
-    
-    // ONNX Runtime environment and sessions
+
     private var ortEnv: OrtEnvironment? = null
-    private var melspecSession: OrtSession? = null
-    private var embeddingSession: OrtSession? = null
-    private var classifierSession: OrtSession? = null
-    
-    // Model input/output names (detected at runtime)
-    private var melspecInputName = "audio_signal"  // Default, will be updated
-    private var melspecOutputName = "mel_spectrogram"
-    private var embeddingInputName = "input" 
-    private var embeddingOutputName = "output"
-    private var classifierInputName = "input"
-    private var classifierOutputName = "output"
-    
-    // Audio recording
+    private var session: OrtSession? = null
+    private var inputName = "mel_spectrogram"
+
     private var audioRecorder: AudioRecord? = null
-    private var isListening = false
     private var listeningThread: Thread? = null
-    
-    // Detection settings
-    private var threshold = DEFAULT_THRESHOLD
-    private var lastDetectionTime = 0L
-    
-    // Handler for main thread callbacks
+    @Volatile
+    private var isListening = false
+    private var activeAudioSource: Int = MediaRecorder.AudioSource.MIC
+    private var lastMonitorLogTs = 0L
+    private var framesSinceSpeech = SILENCE_GAP_CHUNKS
+    @Volatile
+    private var lastExternalAudioTs = 0L
+    private var lastExternalPriorityLogTs = 0L
+
     private val mainHandler = Handler(Looper.getMainLooper())
-    
-    // Chime player for wake acknowledgment
     private var chimePlayer: MediaPlayer? = null
-    
-    // Rolling audio buffer with thread safety
+
     private val rollingBuffer = ShortArray(BUFFER_SIZE)
-    
-    // Rolling score buffer for peak-aware smoothing (keeps peaks, reduces noise)
-    private val scoreWindow = ArrayDeque<Float>()
-    private val SCORE_WINDOW_SIZE = 4  // 🔧 Medium window - balances peak detection & noise rejection
-    private val bufferLock = Any()  // Thread-safe buffer access
-    
-    // Classifier expects 9 frames repeated (model trained with np.tile)
-    private val REQUIRED_EMBEDDING_FRAMES = 9
-    
-    /**
-     * Sigmoid activation - converts raw logits to probability [0, 1]
-     * Required because model uses BCEWithLogitsLoss (no sigmoid in model)
-     */
-    private fun sigmoid(x: Float): Float {
-        return (1.0f / (1.0f + kotlin.math.exp(-x)))
-    }
-    
-    /**
-     * Balanced smoothing: Keeps wake word peaks while rejecting random spikes
-     * Uses 50-50 mix to balance sensitivity and false positive prevention
-     */
-    private fun smoothScore(score: Float): Float {
-        if (scoreWindow.size >= SCORE_WINDOW_SIZE) scoreWindow.removeFirst()
-        scoreWindow.addLast(score)
-        
-        val peak = scoreWindow.maxOrNull() ?: score
-        val avg = scoreWindow.average().toFloat()
-        
-        // 🔧 AGGRESSIVE SMOOTHING: 80% peak + 20% avg
-        // We trust the peak value more. If the model says "YES" for even 1 frame, we listen.
-        return 0.8f * peak + 0.2f * avg
-    }
-    
-    /**
-     * Initialize ONNX models from assets
-     * Call this before start()
-     */
+    private val bufferLock = Any()
+
+    private var threshold = DEFAULT_THRESHOLD
+    private var thresholdOff = DEFAULT_THRESHOLD * DEFAULT_THRESHOLD_OFF_RATIO
+    private val smoothing = DEFAULT_SMOOTHING
+    private val consec = DEFAULT_CONSEC
+    private val cooldownMs = DEFAULT_COOLDOWN_MS
+    private val energyGate = DEFAULT_ENERGY_GATE
+    private val deltaTrigger = DEFAULT_DELTA_TRIGGER
+    private val speechFloor = DEFAULT_SPEECH_FLOOR
+
+    private val emaAlpha = 2.0f / (smoothing + 1.0f)
+    private val baselineAlpha = 1.0f / max(DEFAULT_BASELINE_TAU_S * 10.0f, 1.0f)
+
+    private var ema = 0.0f
+    private var ambientBaseline = 0.0f
+    private var streak = 0
+    private var lastFireTs = 0L
+
+    private val fft = FloatFFT_1D(N_FFT.toLong())
+    private val hannWindow = buildHannWindow()
+    private val melFilterBank = buildMelFilterBank()
+
     @Throws(Exception::class)
     fun initialize() {
         try {
-            Log.i(TAG, "🔄 Initializing Hey IMI Wake Word Detector...")
-            
-            // Create ONNX Runtime environment
             ortEnv = OrtEnvironment.getEnvironment()
-            
-            // Load all three models
-            val melspecModel = loadModelFromAssets("models/melspectrogram.onnx")
-            val embeddingModel = loadModelFromAssets("models/embedding_model.onnx")
-            val classifierModel = loadModelFromAssets("models/hey_imi_model.onnx")
-            
-            // Create sessions with optimized settings for real-time performance
-            val sessionOptions = OrtSession.SessionOptions().apply {
+
+            val options = OrtSession.SessionOptions().apply {
                 setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
-                setIntraOpNumThreads(4) // Use 4 threads for faster inference on multi-core devices
+                setIntraOpNumThreads(2)
             }
-            
-            melspecSession = ortEnv?.createSession(melspecModel, sessionOptions)
-            embeddingSession = ortEnv?.createSession(embeddingModel, sessionOptions)
-            classifierSession = ortEnv?.createSession(classifierModel, sessionOptions)
-            
-            // Detect and log actual input/output names from models
-            detectModelIONames()
-            
-            Log.i(TAG, "✅ All ONNX models loaded successfully")
-            Log.i(TAG, "   - Melspectrogram model: ready")
-            Log.i(TAG, "   - Embedding model: ready")
-            Log.i(TAG, "   - Classifier model: ready")
-            
-            // Pre-load chime sound
+
+            val modelUsed = try {
+                val modelFile = prepareFp32ModelFiles()
+                session = ortEnv?.createSession(modelFile.absolutePath, options)
+                MODEL_FP32
+            } catch (fp32Error: Exception) {
+                Log.w(TAG, "FP32 model init failed (${fp32Error.message}); falling back to INT8 model")
+                val int8Model = loadModelFromAssets(MODEL_INT8)
+                session = ortEnv?.createSession(int8Model, options)
+                MODEL_INT8
+            }
+
+            inputName = session?.inputNames?.firstOrNull() ?: "mel_spectrogram"
+            validateModelSignature()
+            applyThresholdFromMetadata()
+
             preloadChimeSound()
-            
+            Log.i(TAG, "Initialized wake-word model: $modelUsed input=$inputName")
         } catch (e: Exception) {
-            Log.e(TAG, "❌ Failed to initialize ONNX models: ${e.message}", e)
             cleanup()
             throw e
         }
     }
-    
-    /**
-     * Load ONNX model from assets folder
-     */
-    private fun loadModelFromAssets(assetPath: String): ByteArray {
-        return try {
-            context.assets.open(assetPath).use { inputStream ->
-                inputStream.readBytes().also {
-                    Log.d(TAG, "Loaded model: $assetPath (${it.size} bytes)")
-                }
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to load model from assets: $assetPath", e)
-            // Try alternative location - copied to files dir
-            val modelFile = File(context.filesDir, assetPath.substringAfterLast('/'))
-            if (modelFile.exists()) {
-                modelFile.readBytes()
-            } else {
-                throw Exception("Model not found: $assetPath. Please copy ONNX models to assets/models/")
-            }
-        }
-    }
-    
-    /**
-     * Detect and log input/output names from ONNX models
-     * This helps debug issues with incorrect tensor names
-     */
-    private fun detectModelIONames() {
-        try {
-            // Melspectrogram model
-            melspecSession?.let { session ->
-                val inputNames = session.inputNames.toList()
-                val outputNames = session.outputNames.toList()
-                Log.i(TAG, "📊 Melspec model - Inputs: $inputNames, Outputs: $outputNames")
-                
-                if (inputNames.isNotEmpty()) {
-                    melspecInputName = inputNames[0]
-                    Log.i(TAG, "   Using input name: $melspecInputName")
-                }
-                if (outputNames.isNotEmpty()) {
-                    melspecOutputName = outputNames[0]
-                    Log.i(TAG, "   Using output name: $melspecOutputName")
-                }
-                
-                // Log input info
-                session.inputInfo.forEach { (name, info) ->
-                    Log.i(TAG, "   Input '$name': ${info.info}")
-                }
-            }
-            
-            // Embedding model
-            embeddingSession?.let { session ->
-                val inputNames = session.inputNames.toList()
-                val outputNames = session.outputNames.toList()
-                Log.i(TAG, "📊 Embedding model - Inputs: $inputNames, Outputs: $outputNames")
-                
-                if (inputNames.isNotEmpty()) {
-                    embeddingInputName = inputNames[0]
-                }
-                if (outputNames.isNotEmpty()) {
-                    embeddingOutputName = outputNames[0]
-                }
-            }
-            
-            // Classifier model  
-            classifierSession?.let { session ->
-                val inputNames = session.inputNames.toList()
-                val outputNames = session.outputNames.toList()
-                Log.i(TAG, "📊 Classifier model - Inputs: $inputNames, Outputs: $outputNames")
-                
-                if (inputNames.isNotEmpty()) {
-                    classifierInputName = inputNames[0]
-                }
-                if (outputNames.isNotEmpty()) {
-                    classifierOutputName = outputNames[0]
-                }
-            }
-            
-        } catch (e: Exception) {
-            Log.e(TAG, "Error detecting model IO names: ${e.message}")
-        }
-    }
-    
-    /**
-     * Pre-load chime sound for instant playback on wake detection
-     */
-    private fun preloadChimeSound() {
-        try {
-            // Try to load chime.mp3 or chime.wav from assets
-            val chimeResId = context.resources.getIdentifier("chime", "raw", context.packageName)
-            if (chimeResId != 0) {
-                chimePlayer = MediaPlayer.create(context, chimeResId)
-                chimePlayer?.setVolume(1.0f, 1.0f)
-                Log.d(TAG, "✅ Chime sound pre-loaded from resources")
-            } else {
-                // Try loading from assets
-                try {
-                    val afd = context.assets.openFd("sounds/chime.mp3")
-                    chimePlayer = MediaPlayer().apply {
-                        setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
-                        prepare()
-                        setVolume(1.0f, 1.0f)
-                    }
-                    afd.close()
-                    Log.d(TAG, "✅ Chime sound pre-loaded from assets")
-                } catch (e: Exception) {
-                    Log.w(TAG, "No chime sound available, will use system beep")
-                }
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to pre-load chime: ${e.message}")
-        }
-    }
-    
-    /**
-     * Play the chime/acknowledgment sound
-     */
-    fun playChimeSound() {
-        try {
-            chimePlayer?.let { player ->
-                if (player.isPlaying) {
-                    player.seekTo(0)
-                } else {
-                    player.start()
-                }
-                Log.d(TAG, "🔔 Chime played!")
-            } ?: run {
-                // Fallback: system beep
-                android.media.ToneGenerator(android.media.AudioManager.STREAM_NOTIFICATION, 100)
-                    .startTone(android.media.ToneGenerator.TONE_PROP_BEEP, 200)
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to play chime: ${e.message}")
-        }
-    }
-    
-    /**
-     * Set detection threshold (0.0 to 1.0)
-     * @param value Lower = more sensitive, Higher = fewer false positives
-     */
+
     fun setThreshold(value: Float) {
-        threshold = value.coerceIn(0.1f, 0.9f)
-        Log.d(TAG, "Threshold set to: $threshold")
+        threshold = value.coerceIn(0.005f, 0.5f)
+        thresholdOff = threshold * DEFAULT_THRESHOLD_OFF_RATIO
+        Log.d(TAG, "Threshold set: threshold=$threshold thresholdOff=$thresholdOff")
     }
-    
-    /**
-     * Start listening for wake word
-     * Requires RECORD_AUDIO permission
-     */
+
+    fun getThreshold(): Float = threshold
+
     fun start() {
-        if (isListening) {
-            Log.w(TAG, "Already listening")
+        if (isListening) return
+        if (session == null || ortEnv == null) {
+            Log.e(TAG, "Call initialize() before start()")
             return
         }
-        
-        if (ortEnv == null || classifierSession == null) {
-            Log.e(TAG, "Models not initialized! Call initialize() first")
-            return
-        }
-        
+
         try {
-            // Initialize AudioRecord
             val minBufferSize = AudioRecord.getMinBufferSize(
                 SAMPLE_RATE,
                 AudioFormat.CHANNEL_IN_MONO,
                 AudioFormat.ENCODING_PCM_16BIT
             )
-            
-            audioRecorder = AudioRecord(
-                MediaRecorder.AudioSource.VOICE_RECOGNITION,  // Optimized for speech with noise cancellation
-                SAMPLE_RATE,
-                AudioFormat.CHANNEL_IN_MONO,
-                AudioFormat.ENCODING_PCM_16BIT,
-                maxOf(minBufferSize, BUFFER_SIZE * 2)
-            )
-            
-            if (audioRecorder?.state != AudioRecord.STATE_INITIALIZED) {
-                Log.e(TAG, "Failed to initialize AudioRecord")
+
+            audioRecorder = createInitializedRecorder(max(minBufferSize, CHUNK_SIZE * 4))
+            if (audioRecorder == null) {
+                Log.e(TAG, "AudioRecord init failed for all sources")
                 return
             }
-            
+
+            resetState()
+            synchronized(bufferLock) {
+                rollingBuffer.fill(0)
+            }
+            lastMonitorLogTs = 0L
+
             isListening = true
             audioRecorder?.startRecording()
-            
-            // Start listening thread
-            listeningThread = Thread {
-                processAudioLoop()
-            }.apply {
-                name = "HeyIMI-Listener"
-                start()
-            }
-            
-            Log.i(TAG, "🎤 Hey IMI listening started (threshold=$threshold)")
-            
+
+            listeningThread = Thread({ processAudioLoop() }, "HeyImiWakeWord-Loop").also { it.start() }
+            Log.i(
+                TAG,
+                "Wake config: threshold=$threshold thresholdOff=$thresholdOff smoothing=$smoothing consec=$consec cooldownMs=$cooldownMs energyGate=$energyGate speechFloor=$speechFloor deltaTrigger=$deltaTrigger"
+            )
+            Log.i(TAG, "Wake-word listening started (source=${audioSourceName(activeAudioSource)})")
         } catch (e: SecurityException) {
-            Log.e(TAG, "RECORD_AUDIO permission not granted", e)
+            Log.e(TAG, "RECORD_AUDIO missing", e)
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to start listening: ${e.message}", e)
+            Log.e(TAG, "start() failed: ${e.message}", e)
             stop()
         }
     }
-    
-    /**
-     * Stop listening for wake word
-     */
+
     fun stop() {
         isListening = false
-        
         try {
             listeningThread?.interrupt()
             listeningThread = null
-            
+
             audioRecorder?.stop()
             audioRecorder?.release()
             audioRecorder = null
-            
-            Log.i(TAG, "🛑 Hey IMI listening stopped")
-        } catch (e: Exception) {
-            Log.e(TAG, "Error stopping listener: ${e.message}")
+        } catch (_: Exception) {
         }
+        Log.i(TAG, "Wake-word listening stopped")
     }
-    
-    /**
-     * Clean up all resources
-     */
+
     fun cleanup() {
         stop()
-        
         try {
-            melspecSession?.close()
-            embeddingSession?.close()
-            classifierSession?.close()
+            session?.close()
             ortEnv?.close()
             chimePlayer?.release()
-            
-            melspecSession = null
-            embeddingSession = null
-            classifierSession = null
-            ortEnv = null
-            chimePlayer = null
-            
-            Log.i(TAG, "✅ Resources cleaned up")
-        } catch (e: Exception) {
-            Log.e(TAG, "Error during cleanup: ${e.message}")
+        } catch (_: Exception) {
         }
+        session = null
+        ortEnv = null
+        chimePlayer = null
     }
-    
-    /**
-     * Main audio processing loop - runs in background thread
-     */
-    private fun processAudioLoop() {
-        val audioChunk = ShortArray(CHUNK_SIZE)
-        
-        // Clear rolling buffers
-        rollingBuffer.fill(0)
-        scoreWindow.clear()
-        
-        Log.d(TAG, "🎧 Audio processing loop started")
-        
-        while (isListening && !Thread.currentThread().isInterrupted) {
-            try {
-                // Read audio chunk
-                val readSize = audioRecorder?.read(audioChunk, 0, CHUNK_SIZE) ?: 0
-                
-                if (readSize > 0) {
-                    // Update rolling buffer (shift left and append new data) - thread-safe
-                    synchronized(bufferLock) {
-                        System.arraycopy(rollingBuffer, readSize, rollingBuffer, 0, BUFFER_SIZE - readSize)
-                        System.arraycopy(audioChunk, 0, rollingBuffer, BUFFER_SIZE - readSize, readSize)
-                    }
-                    
-                    // 🔧 ANTI-GHOST: Check if audio has enough energy before running classifier
-                    // Find max amplitude in the chunk to detect if there's actual speech
-                    var maxAmp = 0
-                    for (sample in audioChunk) {
-                        val absVal = kotlin.math.abs(sample.toInt())
-                        if (absVal > maxAmp) maxAmp = absVal
-                    }
-                    
-                    // Skip classification if audio is basically silence (no speech)
-                    if (maxAmp < MIN_AUDIO_LEVEL_FOR_DETECTION) {
-                        // Too quiet - likely silence/background noise, skip classification
-                        continue
-                    }
-                    
-                    // Check for wake word
-                    val confidence = detectWakeWord(rollingBuffer)
-                    
-                    // 🔧 BALANCED SMOOTHING: 50% peak + 50% avg
-                    val finalScore = smoothScore(confidence)
-                    
-                    // Log periodically when confidence > 0.1 (helps debug)
-                    if (finalScore > 0.1f && audioLogCounter % 10 == 0) {
-                        Log.d(TAG, "📊 raw=$confidence smooth=$finalScore amp=$maxAmp")
-                    }
-                    
-                    // Check if detected and not in cooldown
-                    val now = System.currentTimeMillis()
-                    if (finalScore > threshold && (now - lastDetectionTime) > DETECTION_COOLDOWN_MS) {
-                        // 🔧 PRECISION BOOST: Require 3 frames > 0.45f (Stricter)
-                        // Raised from 2 frames > 0.35f to reduce false positives
-                        val consistentFrames = scoreWindow.count { it > 0.50f }
-                        if (consistentFrames < 3) {
-                            Log.d(TAG, "⚠️ Skip: Only $consistentFrames consistent frames (need 3+)")
-                            continue
-                        }
-                        
-                        lastDetectionTime = now
-                        
-                        Log.i(TAG, "🔥 Hey IMI DETECTED! smooth=$finalScore (raw=$confidence) [amp=$maxAmp] [consistent=$consistentFrames]")
-                        
-                        // Reset score buffer after detection
-                        scoreWindow.clear()
-                        
-                        // Play chime immediately
-                        mainHandler.post { playChimeSound() }
-                        
-                        // Stop listening (will be restarted by caller)
-                        isListening = false
-                        
-                        // Notify callback on main thread
-                        mainHandler.post {
-                            onWakeWordDetected(finalScore)
-                        }
-                        // 🔧 REMOVED: break - let loop exit naturally via isListening=false
-                    }
-                }
-            } catch (e: InterruptedException) {
-                Log.d(TAG, "Listening thread interrupted")
-                break
-            } catch (e: Exception) {
-                Log.e(TAG, "Error in audio processing: ${e.message}")
-                Thread.sleep(100) // Brief pause on error
-            }
-        }
-        
-        Log.d(TAG, "🎧 Audio processing loop ended")
-    }
-    
-    /**
-     * Detect wake word from audio buffer using ONNX pipeline:
-     * Audio → Melspectrogram → Embeddings → Classifier
-     * 
-     * @param audioBuffer 16-bit PCM audio samples (24000 samples = 1.5s at 16kHz)
-     * @return Confidence score 0.0 to 1.0
-     */
-    // AGC (Automatic Gain Control) constants
-    private val TARGET_LEVEL = 0.85f          // 🔧 HYPER: 85% target
-    private val MAX_GAIN = 60.0f              // 🔧 HYPER: 60x max gain (Detect even whispers)
-    private val MIN_GAIN = 1.0f               // Minimum gain (Never attenuate)
-    private val NOISE_GATE_THRESHOLD = 0.005f // 🔧 DISABLED: 0.005f (Virtually zero)
 
-    // Debug counter for periodic logging
-    private var audioLogCounter = 0
-    
-    /**
-     * Preprocess audio with AGC (Automatic Gain Control) + Noise Gate
-     * Flow: Raw Audio → Dynamic Gain (AGC) → Noise Gate → Clean Audio
-     * 
-     * AGC: Soft audio gets boosted more, loud audio stays same
-     * Noise Gate: Mutes (sets to 0) any signal below threshold
-     */
-    private fun preprocessAudio(audioBuffer: ShortArray): FloatArray {
-        val audioFloat = FloatArray(audioBuffer.size)
-        
-        // Step 1: Find maximum amplitude in the buffer
-        var maxAmplitude = 0f
-        for (i in audioBuffer.indices) {
-            val absValue = kotlin.math.abs(audioBuffer[i].toFloat())
-            if (absValue > maxAmplitude) {
-                maxAmplitude = absValue
-            }
-        }
-        
-        // Step 2: Calculate dynamic gain (AGC)
-        // Target is 70% of max volume (0.7 * 32768 = 22937)
-        val targetAmplitude = TARGET_LEVEL * 32768f
-        var dynamicGain = if (maxAmplitude > 0) {
-            (targetAmplitude / maxAmplitude).coerceIn(MIN_GAIN, MAX_GAIN)
-        } else {
-            1.0f  // Silence - no gain
-        }
-        
-        // Debug log every 20 frames (~5 seconds)
-        audioLogCounter++
-        if (audioLogCounter % 20 == 0) {
-            val maxAmpNormalized = maxAmplitude / 32768f
-            Log.d(TAG, "🎤 Audio: maxAmp=${String.format("%.4f", maxAmpNormalized)} (raw=${maxAmplitude.toInt()}), gain=${String.format("%.2f", dynamicGain)}x")
-        }
-        
-        // Step 3: Apply dynamic gain and noise gate
-        var gatedSamples = 0
-        for (i in audioBuffer.indices) {
-            // Convert to float [-1, 1] with dynamic gain
-            var sample = (audioBuffer[i].toFloat() / 32768f) * dynamicGain
-            
-            // Noise Gate - DISABLED AGAIN
-            // It was causing missed detections for soft voices.
-            // if (kotlin.math.abs(sample) < NOISE_GATE_THRESHOLD) {
-            //    sample = 0.0f
-            //    gatedSamples++
-            // }
-            
-            // Clip to valid range [-1, 1]
-            sample = sample.coerceIn(-1.0f, 1.0f)
-            
-            audioFloat[i] = sample
-        }
-        
-        // Log gated percentage periodically
-        if (audioLogCounter % 20 == 0) {
-            val gatedPercent = (gatedSamples.toFloat() / audioBuffer.size) * 100
-            Log.d(TAG, "🔇 Noise Gate: ${String.format("%.1f", gatedPercent)}% samples muted")
-        }
-        
-        return audioFloat
-    }
-    
-    private fun detectWakeWord(audioBuffer: ShortArray): Float {
-        return try {
-            // Step 1: Preprocess audio (Gain + Noise Gate)
-            // Flow: Mic → Gain Boost → Noise Gate → MelSpec → Model
-            val audioFloat = preprocessAudio(audioBuffer)
-            
-            // Step 2: Generate melspectrogram using dynamic input name
-            val melspecInput = OnnxTensor.createTensor(
-                ortEnv,
-                FloatBuffer.wrap(audioFloat),
-                longArrayOf(1, audioBuffer.size.toLong())
-            )
-            
-            val melspecOutput = melspecSession?.run(mapOf(melspecInputName to melspecInput))
-            val melspec4D = getMelspecOutput(melspecOutput)
-            melspecInput.close()
-            
-            if (melspec4D == null) {
-                Log.w(TAG, "Melspec output is null")
-                return 0f
-            }
-            
-            // Step 3: Reshape melspec for embedding model
-            // Melspec output: [1, 1, 147, 32] → Need: [1, 76, 32, 1]
-            // Take the last 76 time frames, transpose to [batch, time, mels, channel]
-            val reshapedForEmbedding = reshapeMelspecForEmbedding(melspec4D)
-            if (reshapedForEmbedding == null) {
-                Log.w(TAG, "Failed to reshape melspec for embedding")
-                return 0f
-            }
-            
-            // Step 4: Generate embeddings using dynamic input name
-            val embeddingInput = OnnxTensor.createTensor(ortEnv, reshapedForEmbedding)
-            val embeddingOutput = embeddingSession?.run(mapOf(embeddingInputName to embeddingInput))
-            val embeddings = getEmbeddingsOutput(embeddingOutput)
-            embeddingInput.close()
-            embeddingOutput?.close()
-            
-            if (embeddings == null) {
-                Log.w(TAG, "Embeddings output is null")
-                melspecOutput?.close()
-                return 0f
-            }
-            
-            melspecOutput?.close()
-            
-            // Step 5: Buffer embeddings - classifier needs 9 frames
-            val confidence = bufferAndClassify(embeddings)
-            
-            confidence
-            
-        } catch (e: Exception) {
-            Log.e(TAG, "Error in detectWakeWord: ${e.message}")
-            0f
-        }
-    }
-    
-    /**
-     * Run classifier with current embedding repeated 9 times
-     * (Model was trained with 9 identical embedding frames, not sliding window)
-     * Classifier expects input shape: [1, 9, 96]
-     */
-    private fun bufferAndClassify(embedding: Array<Array<FloatArray>>): Float {
-        return try {
-            // Create 3D tensor: [1, 9, feature_dim] - classifier expects 3D
-            // Embedding output is [1, 1, 1, 96] - feature dim is in the LAST dimension
-            val batchSize = 1
-            val numFrames = REQUIRED_EMBEDDING_FRAMES
-            val featureDim = embedding[0][0].size  // 96 for this model
-            
-            // Extract the 96-dim embedding vector from [1, 1, 1, 96] shaped tensor
-            val embeddingVector = FloatArray(featureDim) { featIdx ->
-                embedding[0][0][featIdx]
-            }
-            
-            // IMPORTANT: Model was trained with 9 IDENTICAL frames (np.tile)
-            // So we repeat the same embedding 9 times to match training
-            val classifierInputArray = Array(batchSize) {
-                Array(numFrames) { _ ->
-                    embeddingVector.copyOf()  // Same embedding repeated 9 times
-                }
-            }
-            
-            if (BuildConfig.DEBUG) {
-                Log.d(TAG, "Classifier input shape: [1, $numFrames, $featureDim], embedding sum: ${embeddingVector.sum()}")
-            }
-            
-            // Run classifier
-            val classifierInput = OnnxTensor.createTensor(ortEnv, classifierInputArray)
-            if (BuildConfig.DEBUG) {
-                Log.d(TAG, "Classifier tensor shape: ${classifierInput.info.shape.contentToString()}")
-            }
-            val classifierOutput = classifierSession?.run(mapOf(classifierInputName to classifierInput))
-            val confidence = getClassifierOutput(classifierOutput)
-            
-            classifierInput.close()
-            classifierOutput?.close()
-            
-            confidence
-            
-        } catch (e: Exception) {
-            Log.e(TAG, "Error in classifier: ${e.message}")
-            0f
-        }
-    }
-    
-    /**
-     * Reshape melspec from [batch, channels, time, mels] to [batch, 76, 32, 1]
-     * The embedding model expects exactly 76 time frames with 32 mel bins
-     */
-    private fun reshapeMelspecForEmbedding(melspec4D: Array<Array<Array<FloatArray>>>): Array<Array<Array<FloatArray>>>? {
+    fun isListening(): Boolean = isListening
+
+    fun playChimeSound() {
         try {
-            // Input shape: [1, 1, 147, 32] - [batch, channels, time_frames, mel_bins]
-            val batch = melspec4D.size           // 1
-            val channels = melspec4D[0].size     // 1
-            val timeFrames = melspec4D[0][0].size // 147
-            val melBins = melspec4D[0][0][0].size // 32
-            
-            if (BuildConfig.DEBUG) {
-                Log.d(TAG, "Reshaping melspec: [$batch, $channels, $timeFrames, $melBins] → [1, 76, 32, 1]")
-            }
-            
-            // Target: [1, 76, 32, 1] - [batch, time, mels, channel]
-            val targetTimeFrames = 76
-            val targetMelBins = 32
-            
-            // Take the last 76 frames (or pad if less)
-            val startFrame = if (timeFrames >= targetTimeFrames) {
-                timeFrames - targetTimeFrames
-            } else {
-                0
-            }
-            
-            // Create output array: [1, 76, 32, 1]
-            val output = Array(1) { Array(targetTimeFrames) { Array(targetMelBins) { FloatArray(1) } } }
-            
-            for (t in 0 until targetTimeFrames) {
-                val srcT = startFrame + t
-                if (srcT < timeFrames) {
-                    for (m in 0 until minOf(melBins, targetMelBins)) {
-                        // Transpose: input[batch][channel][time][mel] → output[batch][time][mel][channel]
-                        output[0][t][m][0] = melspec4D[0][0][srcT][m]
-                    }
-                }
-                // If srcT >= timeFrames, values remain 0 (padding)
-            }
-            
-            if (BuildConfig.DEBUG) {
-                Log.d(TAG, "Reshaped melspec to [1, $targetTimeFrames, $targetMelBins, 1]")
-            }
-            return output
-            
-        } catch (e: Exception) {
-            Log.e(TAG, "Error reshaping melspec: ${e.message}", e)
-            return null
-        }
-    }
-    
-    /**
-     * Extract melspectrogram output from ONNX result
-     * Handles multiple possible tensor formats including 4D tensors
-     */
-    private fun getMelspecOutput(result: OrtSession.Result?): Array<Array<Array<FloatArray>>>? {
-        if (result == null) {
-            Log.e(TAG, "Melspec result is null")
-            return null
-        }
-        
-        return try {
-            val tensor = result.get(0) ?: run {
-                Log.e(TAG, "Melspec tensor at index 0 is null")
-                return null
-            }
-            
-            val value = tensor.value
-            Log.d(TAG, "Melspec output type: ${value?.javaClass?.name}")
-            
-            when (value) {
-                is Array<*> -> {
-                    // Check for 4D array: [batch, channels, n_mels, time] or similar
-                    if (value.isNotEmpty() && value[0] is Array<*>) {
-                        val inner1 = value[0] as? Array<*>
-                        if (inner1 != null && inner1.isNotEmpty() && inner1[0] is Array<*>) {
-                            val inner2 = inner1[0] as? Array<*>
-                            if (inner2 != null && inner2.isNotEmpty() && inner2[0] is FloatArray) {
-                                // It's a 4D array: Array<Array<Array<FloatArray>>>
-                                @Suppress("UNCHECKED_CAST")
-                                val result4d = value as? Array<Array<Array<FloatArray>>>
-                                if (result4d != null) {
-                                    if (BuildConfig.DEBUG) {
-                                        Log.d(TAG, "Melspec 4D shape: [${result4d.size}, ${result4d[0].size}, ${result4d[0][0].size}, ${result4d[0][0][0].size}]")
-                                    }
-                                    return result4d
-                                }
-                            } else if (inner2 != null && inner2.isNotEmpty() && inner2[0] is Float) {
-                                // It's a 3D array: Array<Array<FloatArray>>
-                                @Suppress("UNCHECKED_CAST")
-                                val result3d = value as? Array<Array<FloatArray>>
-                                if (result3d != null) {
-                                    if (BuildConfig.DEBUG) {
-                                        Log.d(TAG, "Melspec 3D shape: [${result3d.size}, ${result3d[0].size}, ${result3d[0][0].size}], wrapping to 4D")
-                                    }
-                                    return arrayOf(result3d)
-                                }
-                            }
-                        } else if (inner1 != null && inner1.isNotEmpty() && inner1[0] is Float) {
-                            // It's a 2D array: Array<FloatArray>
-                            @Suppress("UNCHECKED_CAST")
-                            val result2d = value as? Array<FloatArray>
-                            if (result2d != null) {
-                                Log.d(TAG, "Melspec 2D shape: [${result2d.size}, ${result2d[0].size}], wrapping to 4D")
-                                return arrayOf(arrayOf(result2d))
-                            }
-                        }
-                    }
-                    Log.e(TAG, "Unknown melspec array structure")
-                    null
-                }
-                else -> {
-                    Log.e(TAG, "Unexpected melspec type: ${value?.javaClass?.name}")
-                    null
-                }
+            chimePlayer?.let { p ->
+                if (p.isPlaying) p.seekTo(0) else p.start()
+            } ?: run {
+                android.media.ToneGenerator(android.media.AudioManager.STREAM_NOTIFICATION, 100)
+                    .startTone(android.media.ToneGenerator.TONE_PROP_BEEP, 200)
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error extracting melspec: ${e.message}", e)
-            null
+            Log.w(TAG, "Chime play failed: ${e.message}")
         }
     }
-    
-    /**
-     * Extract embeddings output from ONNX result
-     * Handles multiple possible tensor formats including 4D tensors
-     */
-    private fun getEmbeddingsOutput(result: OrtSession.Result?): Array<Array<FloatArray>>? {
-        if (result == null) {
-            Log.e(TAG, "Embeddings result is null")
-            return null
-        }
-        
-        return try {
-            val tensor = result.get(0) ?: return null
-            val value = tensor.value
-            Log.d(TAG, "Embeddings output type: ${value?.javaClass?.name}")
-            
-            when (value) {
-                is Array<*> -> {
-                    // Check for 4D: squeeze to 3D
-                    if (value.isNotEmpty() && value[0] is Array<*>) {
-                        val inner1 = value[0] as? Array<*>
-                        if (inner1 != null && inner1.isNotEmpty() && inner1[0] is Array<*>) {
-                            val inner2 = inner1[0] as? Array<*>
-                            if (inner2 != null && inner2.isNotEmpty() && inner2[0] is FloatArray) {
-                                // 4D array - take first batch
-                                @Suppress("UNCHECKED_CAST")
-                                val result4d = value as? Array<Array<Array<FloatArray>>>
-                                if (result4d != null) {
-                                    Log.d(TAG, "Embeddings 4D, taking first batch")
-                                    return result4d[0]
-                                }
-                            } else if (inner2 != null && inner2.isNotEmpty() && inner2[0] is Float) {
-                                // 3D array
-                                @Suppress("UNCHECKED_CAST")
-                                return value as? Array<Array<FloatArray>>
-                            }
-                        } else if (inner1 != null && inner1.isNotEmpty() && inner1[0] is Float) {
-                            // 2D array
-                            @Suppress("UNCHECKED_CAST")
-                            val result2d = value as? Array<FloatArray>
-                            if (result2d != null) {
-                                return arrayOf(result2d)
-                            }
-                        }
-                    }
-                    null
-                }
-                else -> null
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error extracting embeddings: ${e.message}")
-            null
-        }
-    }
-    
-    /**
-     * Extract classifier confidence from ONNX result
-     * Handles multiple output formats
-     */
-    private fun getClassifierOutput(result: OrtSession.Result?): Float {
-        if (result == null) return 0f
 
-        return try {
-            val tensor = result.get(0) ?: return 0f
-            val value = tensor.value
-
-            val rawLogit: Float = when (value) {
-                // 2D array: [[logit]]
-                is Array<*> -> {
-                    @Suppress("UNCHECKED_CAST")
-                    val arr2d = value as? Array<FloatArray>
-                    arr2d?.getOrNull(0)?.getOrNull(0) ?: 0f
-                }
-                // 1D array: [logit]
-                is FloatArray -> value.getOrNull(0) ?: 0f
-                // Single float
-                is Float -> value
-                else -> 0f
-            }
-
-            // 🔥 APPLY SIGMOID: Convert raw logit → probability [0, 1]
-            // Model uses BCEWithLogitsLoss → no sigmoid in model → must apply here
-            val prob = sigmoid(rawLogit)
-
-            Log.d(TAG, "Classifier raw=$rawLogit → prob=${"%.3f".format(prob)}")
-
-            prob
-
-        } catch (e: Exception) {
-            Log.e(TAG, "Error extracting classifier output: ${e.message}")
-            0f
-        }
-    }
-    
-    /**
-     * Process audio from external source (e.g., BLE Glass mic)
-     * Call this with 16kHz mono 16-bit PCM audio data
-     * 
-     * @param pcmData Raw PCM audio bytes
-     */
     fun processExternalAudio(pcmData: ByteArray) {
         if (!isListening) return
-        
+
         try {
-            // Convert bytes to short array
+            lastExternalAudioTs = System.currentTimeMillis()
             val shortBuffer = ByteBuffer.wrap(pcmData)
                 .order(ByteOrder.LITTLE_ENDIAN)
                 .asShortBuffer()
-            
             val samples = ShortArray(shortBuffer.remaining())
             shortBuffer.get(samples)
-            
-            // Add to rolling buffer with thread safety
+
             synchronized(bufferLock) {
                 val copySize = minOf(samples.size, BUFFER_SIZE)
                 System.arraycopy(rollingBuffer, copySize, rollingBuffer, 0, BUFFER_SIZE - copySize)
-                System.arraycopy(samples, 0, rollingBuffer, BUFFER_SIZE - copySize, copySize)
-                
-                // 🔧 AUDIO GATE: Check if audio has enough energy (same as internal mic)
-                var maxAmp = 0
-                for (sample in samples) {
-                    val absVal = kotlin.math.abs(sample.toInt())
-                    if (absVal > maxAmp) maxAmp = absVal
-                }
-                if (maxAmp < MIN_AUDIO_LEVEL_FOR_DETECTION) {
-                    return  // Too quiet, skip classification
-                }
-                
-                // Check for wake word
-                val confidence = detectWakeWord(rollingBuffer)
-                
-                // 🔧 SMOOTHING: Same as internal mic
-                val finalScore = smoothScore(confidence)
-                
-                val now = System.currentTimeMillis()
-                
-                if (finalScore > threshold && (now - lastDetectionTime) > DETECTION_COOLDOWN_MS) {
-                    // 🔧 CONSISTENCY CHECK: Require 3 frames > 0.43f (tuned)
-                    val consistentFrames = scoreWindow.count { it > 0.43f }
-                    if (consistentFrames < 3) {
-                        return  // Not consistent enough, skip
-                    }
-                    
-                    lastDetectionTime = now
-                    scoreWindow.clear()  // Reset after detection
-                    
-                    Log.i(TAG, "🔥 Hey IMI detected from Glass! smooth=$finalScore (raw=$confidence) [consistent=$consistentFrames]")
-                    
-                    isListening = false
-                    
-                    mainHandler.post {
-                        playChimeSound()
-                        onWakeWordDetected(finalScore)
-                    }
-                }
+                System.arraycopy(samples, samples.size - copySize, rollingBuffer, BUFFER_SIZE - copySize, copySize)
             }
+
+            evaluateCurrentWindow(samples)
         } catch (e: Exception) {
-            Log.e(TAG, "Error processing external audio: ${e.message}")
+            Log.e(TAG, "processExternalAudio failed: ${e.message}")
         }
     }
-    
-    /**
-     * Check if detector is currently listening
-     */
-    fun isListening(): Boolean = isListening
-    
-    /**
-     * Get current detection threshold
-     */
-    fun getThreshold(): Float = threshold
+
+    private fun processAudioLoop() {
+        val chunk = ShortArray(CHUNK_SIZE)
+        var emptyReadCount = 0
+
+        while (isListening && !Thread.currentThread().isInterrupted) {
+            try {
+                val read = audioRecorder?.read(chunk, 0, chunk.size) ?: 0
+                if (read <= 0) {
+                    emptyReadCount += 1
+                    if (emptyReadCount % 30 == 0) {
+                        Log.w(
+                            TAG,
+                            "Wake audio read returned $read repeatedly (count=$emptyReadCount source=${audioSourceName(activeAudioSource)})"
+                        )
+                    }
+                    continue
+                }
+
+                if (emptyReadCount >= 30) {
+                    Log.i(TAG, "Wake audio stream recovered after $emptyReadCount empty reads")
+                }
+                emptyReadCount = 0
+
+                // External PCM (e.g., glasses mic) takes temporary priority.
+                // Avoid mixing asynchronous internal mic frames with external frames.
+                if ((System.currentTimeMillis() - lastExternalAudioTs) < EXTERNAL_AUDIO_PRIORITY_MS) {
+                    val now = System.currentTimeMillis()
+                    if (now - lastExternalPriorityLogTs >= 3000L) {
+                        Log.d(TAG, "External PCM priority active; skipping internal mic chunk processing")
+                        lastExternalPriorityLogTs = now
+                    }
+                    continue
+                }
+
+                val chunkRms = computeRms(chunk, read)
+                val isSpeech = chunkRms >= speechFloor
+                if (isSpeech) {
+                    framesSinceSpeech = 0
+                } else {
+                    framesSinceSpeech = kotlin.math.min(framesSinceSpeech + 1, SILENCE_GAP_CHUNKS + 1)
+                }
+
+                synchronized(bufferLock) {
+                    System.arraycopy(rollingBuffer, read, rollingBuffer, 0, BUFFER_SIZE - read)
+
+                    when {
+                        isSpeech -> {
+                            System.arraycopy(chunk, 0, rollingBuffer, BUFFER_SIZE - read, read)
+                        }
+                        framesSinceSpeech == SILENCE_GAP_CHUNKS -> {
+                            // After sustained silence, wipe full window to mirror terminal runtime behavior.
+                            rollingBuffer.fill(0)
+                        }
+                        framesSinceSpeech > SILENCE_GAP_CHUNKS -> {
+                            rollingBuffer.fill(0.toShort(), BUFFER_SIZE - read, BUFFER_SIZE)
+                        }
+                        else -> {
+                            // Keep short inter-word gaps as real audio to avoid over-resetting buffer state.
+                            System.arraycopy(chunk, 0, rollingBuffer, BUFFER_SIZE - read, read)
+                        }
+                    }
+                }
+
+                evaluateCurrentWindow(chunk, read, chunkRms)
+            } catch (_: InterruptedException) {
+                break
+            } catch (e: Exception) {
+                Log.e(TAG, "Audio loop error: ${e.message}")
+            }
+        }
+    }
+
+    private fun evaluateCurrentWindow(chunk: ShortArray, readSize: Int = chunk.size, rms: Float = computeRms(chunk, readSize)) {
+        val now = System.currentTimeMillis()
+
+        if (rms < energyGate) {
+            ema *= (1.0f - emaAlpha)
+            if (now - lastMonitorLogTs >= 3000L) {
+                Log.d(
+                    TAG,
+                    "Wake monitor: rms=${"%.5f".format(rms)} raw=0.000 smooth=${"%.5f".format(ema)} threshold=${"%.3f".format(threshold)} source=${audioSourceName(activeAudioSource)} speechFloor=${"%.3f".format(speechFloor)}"
+                )
+                lastMonitorLogTs = now
+            }
+            return
+        }
+
+        val windowCopy = synchronized(bufferLock) { rollingBuffer.copyOf() }
+        val rawScore = infer(windowCopy)
+
+        ema = emaAlpha * rawScore + (1.0f - emaAlpha) * ema
+        val smooth = ema
+
+        ambientBaseline = (1.0f - baselineAlpha) * ambientBaseline + baselineAlpha * smooth
+        val delta = smooth - ambientBaseline
+
+        if (now - lastMonitorLogTs >= 3000L) {
+            Log.d(
+                TAG,
+                "Wake monitor: rms=${"%.5f".format(rms)} raw=${"%.5f".format(rawScore)} smooth=${"%.5f".format(smooth)} base=${"%.5f".format(ambientBaseline)} delta=${"%.5f".format(delta)} streak=$streak threshold=${"%.3f".format(threshold)} source=${audioSourceName(activeAudioSource)}"
+            )
+            lastMonitorLogTs = now
+        }
+
+        if ((now - lastFireTs) < cooldownMs) {
+            streak = 0
+            return
+        }
+
+        val deltaHit = deltaTrigger > 0.0f && delta >= deltaTrigger && smooth > thresholdOff
+        val isHit = smooth >= threshold || deltaHit
+
+        if (isHit) {
+            streak += 1
+        } else if (smooth < thresholdOff) {
+            streak = 0
+        }
+
+        if (streak >= consec) {
+            streak = 0
+            lastFireTs = now
+            Log.i(TAG, "Hey IMI detected: raw=$rawScore smooth=$smooth delta=$delta")
+            isListening = false
+            mainHandler.post {
+                playChimeSound()
+                onWakeWordDetected(smooth)
+            }
+        }
+    }
+
+    private fun infer(audioShort: ShortArray): Float {
+        return try {
+            val audioFloat = FloatArray(audioShort.size)
+            for (i in audioShort.indices) {
+                audioFloat[i] = (audioShort[i].toFloat() / 32768.0f).coerceIn(-1.0f, 1.0f)
+            }
+
+            val inputData = audioToMelInput(audioFloat)
+            val tensor = OnnxTensor.createTensor(
+                ortEnv,
+                FloatBuffer.wrap(inputData),
+                longArrayOf(1, 1, N_MELS.toLong(), N_TIME.toLong())
+            )
+            val output = session?.run(mapOf(inputName to tensor))
+            val score = extractScore(output)
+
+            tensor.close()
+            output?.close()
+            score
+        } catch (e: Exception) {
+            Log.e(TAG, "Inference failed: ${e.message}")
+            0.0f
+        }
+    }
+
+    private fun audioToMelInput(audio: FloatArray): FloatArray {
+        val clipped = if (audio.size >= BUFFER_SIZE) {
+            audio.copyOfRange(audio.size - BUFFER_SIZE, audio.size)
+        } else {
+            FloatArray(BUFFER_SIZE).also { dst ->
+                System.arraycopy(audio, 0, dst, 0, audio.size)
+            }
+        }
+
+        val spec = computePowerSpectrogram(clipped) // [nFrames][nFftBins]
+        val mel = Array(N_MELS) { FloatArray(spec.size) }
+
+        for (t in spec.indices) {
+            val frame = spec[t]
+            for (m in 0 until N_MELS) {
+                var acc = 0.0f
+                val filter = melFilterBank[m]
+                for (k in filter.indices) {
+                    val w = filter[k]
+                    if (w > 0.0f) {
+                        acc += frame[k] * w
+                    }
+                }
+                val db = powerToDb(acc)
+                val clippedDb = db.coerceIn(-TOP_DB, 0.0f)
+                mel[m][t] = (clippedDb / TOP_DB) * 2.0f + 1.0f
+            }
+        }
+
+        val out = FloatArray(N_MELS * N_TIME)
+        for (m in 0 until N_MELS) {
+            for (t in 0 until N_TIME) {
+                val v = if (t < mel[m].size) mel[m][t] else -1.0f
+                out[m * N_TIME + t] = v
+            }
+        }
+        return out
+    }
+
+    private fun computePowerSpectrogram(audio: FloatArray): Array<FloatArray> {
+        val pad = N_FFT / 2
+        val padded = FloatArray(audio.size + pad * 2)
+        System.arraycopy(audio, 0, padded, pad, audio.size)
+
+        val frames = 1 + (padded.size - N_FFT) / HOP_LEN
+        val nBins = N_FFT / 2 + 1
+        val out = Array(frames) { FloatArray(nBins) }
+
+        val fftInput = FloatArray(N_FFT * 2)
+
+        for (frameIdx in 0 until frames) {
+            val start = frameIdx * HOP_LEN
+            fftInput.fill(0.0f)
+
+            for (i in 0 until N_FFT) {
+                fftInput[i] = padded[start + i] * hannWindow[i]
+            }
+
+            fft.realForwardFull(fftInput)
+
+            for (k in 0 until nBins) {
+                val re = fftInput[2 * k]
+                val im = fftInput[2 * k + 1]
+                out[frameIdx][k] = re * re + im * im
+            }
+        }
+
+        return out
+    }
+
+    private fun buildHannWindow(): FloatArray {
+        val window = FloatArray(N_FFT)
+        val offset = (N_FFT - WIN_LEN) / 2
+        for (i in 0 until WIN_LEN) {
+            val v = 0.5f - 0.5f * cos((2.0 * PI * i / (WIN_LEN - 1)).toFloat())
+            window[offset + i] = v
+        }
+        return window
+    }
+
+    private fun buildMelFilterBank(): Array<FloatArray> {
+        val nBins = N_FFT / 2 + 1
+        val binsHz = FloatArray(nBins) { i ->
+            i * SAMPLE_RATE.toFloat() / N_FFT.toFloat()
+        }
+
+        // Match librosa.feature.melspectrogram defaults used by the terminal script:
+        // - htk = false (Slaney mel scale)
+        // - norm = "slaney"
+        val hzPoints = librosaMelFrequencies(N_MELS + 2, FMIN.toFloat(), FMAX.toFloat())
+        val fdiff = FloatArray(hzPoints.size - 1) { i -> hzPoints[i + 1] - hzPoints[i] }
+
+        val filterbank = Array(N_MELS) { FloatArray(nBins) }
+        for (m in 0 until N_MELS) {
+            val lowerDen = max(fdiff[m], 1e-8f)
+            val upperDen = max(fdiff[m + 1], 1e-8f)
+
+            for (k in 0 until nBins) {
+                val hz = binsHz[k]
+                val lower = (hz - hzPoints[m]) / lowerDen
+                val upper = (hzPoints[m + 2] - hz) / upperDen
+                val w = kotlin.math.min(lower, upper).coerceAtLeast(0.0f)
+                filterbank[m][k] = w
+            }
+
+            val slaneyDen = hzPoints[m + 2] - hzPoints[m]
+            val slaneyNorm = if (slaneyDen > 1e-8f) 2.0f / slaneyDen else 1.0f
+            for (k in 0 until nBins) {
+                filterbank[m][k] *= slaneyNorm
+            }
+        }
+
+        return filterbank
+    }
+
+    private fun hzToMelSlaney(hz: Float): Float {
+        val fSp = 200.0f / 3.0f
+        val minLogHz = 1000.0f
+        val minLogMel = minLogHz / fSp
+        val logStep = (ln(6.4) / 27.0).toFloat()
+
+        return if (hz >= minLogHz) {
+            minLogMel + (ln((hz / minLogHz).toDouble()).toFloat() / logStep)
+        } else {
+            hz / fSp
+        }
+    }
+
+    private fun melToHzSlaney(mel: Float): Float {
+        val fSp = 200.0f / 3.0f
+        val minLogHz = 1000.0f
+        val minLogMel = minLogHz / fSp
+        val logStep = (ln(6.4) / 27.0).toFloat()
+
+        return if (mel >= minLogMel) {
+            minLogHz * exp((mel - minLogMel) * logStep)
+        } else {
+            mel * fSp
+        }
+    }
+
+    private fun librosaMelFrequencies(nMels: Int, fMinHz: Float, fMaxHz: Float): FloatArray {
+        val minMel = hzToMelSlaney(fMinHz)
+        val maxMel = hzToMelSlaney(fMaxHz)
+        val frequencies = FloatArray(nMels)
+
+        if (nMels <= 1) {
+            if (nMels == 1) frequencies[0] = melToHzSlaney(minMel)
+            return frequencies
+        }
+
+        val step = (maxMel - minMel) / (nMels - 1).toFloat()
+        for (i in 0 until nMels) {
+            frequencies[i] = melToHzSlaney(minMel + step * i)
+        }
+        return frequencies
+    }
+
+    private fun powerToDb(power: Float): Float {
+        val p = max(power.toDouble(), 1e-10)
+        return (10.0 * ln(p) / ln(10.0)).toFloat()
+    }
+
+    private fun extractScore(result: OrtSession.Result?): Float {
+        if (result == null) return 0.0f
+        return try {
+            val value = result[0].value
+            extractFirstNumeric(value) ?: 0.0f
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to read score: ${e.message}")
+            0.0f
+        }
+    }
+
+    private fun extractFirstNumeric(value: Any?): Float? {
+        return when (value) {
+            is Number -> value.toFloat()
+            is FloatArray -> value.firstOrNull()
+            is DoubleArray -> value.firstOrNull()?.toFloat()
+            is IntArray -> value.firstOrNull()?.toFloat()
+            is Array<*> -> value.asSequence().mapNotNull { extractFirstNumeric(it) }.firstOrNull()
+            else -> null
+        }
+    }
+
+    private fun computeRms(chunk: ShortArray, size: Int): Float {
+        if (size <= 0) return 0.0f
+        var sum = 0.0
+        for (i in 0 until size) {
+            val v = chunk[i].toDouble() / 32768.0
+            sum += v * v
+        }
+        return sqrt(sum / size).toFloat()
+    }
+
+    private fun resetState() {
+        ema = 0.0f
+        ambientBaseline = 0.0f
+        streak = 0
+        lastFireTs = 0L
+        framesSinceSpeech = SILENCE_GAP_CHUNKS
+        lastExternalAudioTs = 0L
+        lastExternalPriorityLogTs = 0L
+    }
+
+    private fun createInitializedRecorder(bufferSize: Int): AudioRecord? {
+        val sources = intArrayOf(
+            MediaRecorder.AudioSource.MIC,
+            MediaRecorder.AudioSource.VOICE_RECOGNITION
+        )
+
+        for (source in sources) {
+            try {
+                val recorder = AudioRecord(
+                    source,
+                    SAMPLE_RATE,
+                    AudioFormat.CHANNEL_IN_MONO,
+                    AudioFormat.ENCODING_PCM_16BIT,
+                    bufferSize
+                )
+
+                if (recorder.state == AudioRecord.STATE_INITIALIZED) {
+                    activeAudioSource = source
+                    Log.i(TAG, "AudioRecord initialized with source=${audioSourceName(source)}")
+                    return recorder
+                }
+
+                recorder.release()
+            } catch (e: Exception) {
+                Log.w(TAG, "AudioRecord init failed for source=${audioSourceName(source)} (${e.message})")
+            }
+        }
+
+        return null
+    }
+
+    private fun audioSourceName(source: Int): String {
+        return when (source) {
+            MediaRecorder.AudioSource.MIC -> "MIC"
+            MediaRecorder.AudioSource.VOICE_RECOGNITION -> "VOICE_RECOGNITION"
+            else -> source.toString()
+        }
+    }
+
+    private fun preloadChimeSound() {
+        try {
+            val chimeResId = context.resources.getIdentifier("chime", "raw", context.packageName)
+            if (chimeResId != 0) {
+                chimePlayer = MediaPlayer.create(context, chimeResId)?.apply { setVolume(1f, 1f) }
+                return
+            }
+
+            try {
+                val afd = context.assets.openFd("sounds/chime.mp3")
+                chimePlayer = MediaPlayer().apply {
+                    setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
+                    prepare()
+                    setVolume(1f, 1f)
+                }
+                afd.close()
+            } catch (_: Exception) {
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Chime preload failed: ${e.message}")
+        }
+    }
+
+    private fun loadModelFromAssets(assetPath: String): ByteArray {
+        return context.assets.open(assetPath).use { it.readBytes() }
+    }
+
+    private fun validateModelSignature() {
+        val sessionRef = session ?: return
+        val info = sessionRef.inputInfo[inputName]?.info
+        if (info !is TensorInfo) {
+            Log.w(TAG, "Unable to validate model signature; input info is not TensorInfo")
+            return
+        }
+
+        val shape = info.shape
+        val expected = longArrayOf(1, 1, N_MELS.toLong(), N_TIME.toLong())
+        if (shape.size != expected.size) {
+            throw IllegalStateException(
+                "Unexpected wake model input rank ${shape.size}; expected ${expected.size}. " +
+                    "Actual shape=${shape.joinToString(prefix = "[", postfix = "]")}, expected=${expected.joinToString(prefix = "[", postfix = "]")}."
+            )
+        }
+
+        val mismatches = mutableListOf<String>()
+        for (i in expected.indices) {
+            val actualDim = shape[i]
+            val expectedDim = expected[i]
+
+            // ONNX dynamic dimensions are commonly represented as -1.
+            // Treat any non-positive value as dynamic and therefore compatible.
+            val dynamicDim = actualDim <= 0L
+            if (!dynamicDim && actualDim != expectedDim) {
+                mismatches.add("dim[$i]=$actualDim (expected $expectedDim)")
+            }
+        }
+
+        if (mismatches.isNotEmpty()) {
+            throw IllegalStateException(
+                "Unexpected wake model input shape ${shape.joinToString(prefix = "[", postfix = "]")}; " +
+                    "expected ${expected.joinToString(prefix = "[", postfix = "]")}. Mismatches: ${mismatches.joinToString()}"
+            )
+        }
+
+        val dynamicDims = shape.indices.mapNotNull { index -> if (shape[index] <= 0L) index else null }
+        val dynamicSuffix = if (dynamicDims.isNotEmpty()) {
+            " (dynamic dims=${dynamicDims.joinToString(prefix = "[", postfix = "]")})"
+        } else {
+            ""
+        }
+
+        Log.i(TAG, "Wake model signature validated: input=$inputName shape=${shape.joinToString(prefix = "[", postfix = "]")}$dynamicSuffix")
+    }
+
+    private fun applyThresholdFromMetadata() {
+        try {
+            val rawJson = context.assets.open(MODEL_INFO).bufferedReader().use { it.readText() }
+            val meta = JSONObject(rawJson)
+            if (!meta.has("threshold")) return
+
+            val value = meta.getDouble("threshold").toFloat().coerceIn(0.005f, 0.5f)
+            threshold = value
+            thresholdOff = threshold * DEFAULT_THRESHOLD_OFF_RATIO
+            Log.i(TAG, "Applied threshold from metadata: threshold=$threshold thresholdOff=$thresholdOff")
+        } catch (e: Exception) {
+            Log.d(TAG, "Threshold metadata not applied (${e.message}); using default threshold=$threshold")
+        }
+    }
+
+    private fun prepareFp32ModelFiles(): File {
+        val modelFile = copyAssetToModelCache(MODEL_FP32)
+        copyAssetToModelCache(MODEL_FP32_DATA)
+        return modelFile
+    }
+
+    private fun copyAssetToModelCache(assetPath: String): File {
+        val modelsDir = File(context.filesDir, "wakeword_models")
+        if (!modelsDir.exists()) {
+            modelsDir.mkdirs()
+        }
+
+        val fileName = assetPath.substringAfterLast('/')
+        val outFile = File(modelsDir, fileName)
+
+        // Always refresh cached model file from assets so git-pulled model updates
+        // are picked up without requiring the user to clear app data.
+        context.assets.open(assetPath).use { input ->
+            FileOutputStream(outFile, false).use { output ->
+                input.copyTo(output)
+                output.fd.sync()
+            }
+        }
+        return outFile
+    }
 }

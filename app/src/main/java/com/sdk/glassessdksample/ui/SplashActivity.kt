@@ -29,18 +29,40 @@ class SplashActivity : AppCompatActivity() {
             e.printStackTrace()
         }
         
-        // Check if onboarding has been completed
+        // Check authentication and onboarding status
         val sharedPreferences = getSharedPreferences("IMI_PREFS", MODE_PRIVATE)
-        val hasCompletedOnboarding = sharedPreferences.getBoolean("onboarding_completed", false)
+        
+        // Temporarily bypass login for testing - set to true to skip auth
+        val skipAuth = false // Change to false to enable login flow
+        
+        val isLoggedIn = sharedPreferences.getBoolean("is_logged_in", false) || skipAuth
+        val hasCompletedOnboarding = sharedPreferences.getBoolean("onboarding_completed", false) || skipAuth
         
         Handler(Looper.getMainLooper()).postDelayed({
-            val intent = if (hasCompletedOnboarding) {
-                Intent(this, com.sdk.glassessdksample.MainActivity::class.java)
-            } else {
-                Intent(this, OnboardingActivity::class.java)
+            try {
+                val intent = when {
+                    !isLoggedIn -> {
+                        // User not logged in, go to login screen
+                        Intent(this, com.sdk.glassessdksample.LoginActivity::class.java)
+                    }
+                    !hasCompletedOnboarding -> {
+                        // User logged in but hasn't completed onboarding
+                        Intent(this, OnboardingActivity::class.java)
+                    }
+                    else -> {
+                        // User logged in and completed onboarding, go to main screen
+                        Intent(this, com.sdk.glassessdksample.MainActivity::class.java)
+                    }
+                }
+                startActivity(intent)
+                finish()
+            } catch (e: Exception) {
+                e.printStackTrace()
+                // Fallback to MainActivity if something fails
+                val fallbackIntent = Intent(this, com.sdk.glassessdksample.MainActivity::class.java)
+                startActivity(fallbackIntent)
+                finish()
             }
-            startActivity(intent)
-            finish()
         }, SPLASH_DISPLAY_LENGTH)
     }
 }

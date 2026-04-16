@@ -9,8 +9,8 @@
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" tools:ignore="ScopedStorage" />
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" tools:ignore="ScopedStorage" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" tools:ignore="ScopedStorage" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" tools:ignore="ScopedStorage" />
 
     <!-- LOCATION -->
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
@@ -20,13 +20,11 @@
     <uses-permission android:name="android.permission.INTERNET" />
 
     <!-- BLUETOOTH -->
-    <uses-permission android:name="android.permission.BLUETOOTH" />
-    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
-    <uses-permission android:name="android.permission.BLUETOOTH_PRIVILEGED" 
-                 tools:ignore="ProtectedPermissions" />
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" />
 
     <!-- AUDIO -->
@@ -37,22 +35,14 @@
     <!-- CAMERA -->
     <uses-permission android:name="android.permission.CAMERA" />
 
-    <!-- FOREGROUND SERVICES -->
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
-
     <!-- NOTIFICATIONS -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <uses-permission android:name="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE" />
+
+    <!-- ACCESSIBILITY -->
 
     <!-- CONTACTS / CALLS -->
     <uses-permission android:name="android.permission.READ_CONTACTS" />
     <uses-permission android:name="android.permission.CALL_PHONE" />
-
-    <!-- SYSTEM UI Overlay -->
-    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
     <!-- WIFI -->
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
@@ -97,6 +87,19 @@
             </intent-filter>
         </activity>
 
+        <!-- AUTHENTICATION SCREENS -->
+        <activity
+            android:name=".LoginActivity"
+            android:exported="false" />
+        
+        <activity
+            android:name=".SignUpActivity"
+            android:exported="false" />
+        
+        <activity
+            android:name=".VerifyCodeActivity"
+            android:exported="false" />
+
         <!-- ONBOARDING SCREEN -->
         <activity
             android:name=".ui.OnboardingActivity"
@@ -107,8 +110,50 @@
             android:name=".MainActivity"
             android:exported="true" />
 
+        <!-- TOP-LEVEL CAMERA TAB -->
+        <activity
+            android:name=".CameraActivity"
+            android:exported="false"
+            android:label="Camera" />
+
+        <!-- TOP-LEVEL SETTINGS TAB -->
+        <activity
+            android:name=".SettingsActivity"
+            android:exported="false"
+            android:label="Settings" />
+
+        <!-- BATTERY STATUS SCREEN -->
+        <activity
+            android:name=".BatteryActivity"
+            android:exported="false"
+            android:label="Battery" />
+
+        <!-- TOP-LEVEL MORE TAB -->
+        <activity
+            android:name=".MoreActivity"
+            android:exported="false"
+            android:label="More" />
+
         <!-- BIND DEVICE -->
         <activity android:name=".ui.DeviceBindActivity" />
+
+        <!-- USER MEMORY SETTINGS -->
+        <activity 
+            android:name=".ui.UserMemoryActivity"
+            android:exported="false"
+            android:label="AI Memory Settings" />
+
+        <!-- 15-QUESTION PROFILE BUILDER -->
+        <activity
+            android:name=".ui.LetUsKnowYouActivity"
+            android:exported="false"
+            android:label="Let Us Know You" />
+
+        <!-- PROFILE SCREEN -->
+        <activity 
+            android:name=".ProfileActivity"
+            android:exported="false"
+            android:label="Profile" />
 
         <!-- GEMINI LIVE CONVERSATION -->
         <activity 
@@ -123,6 +168,41 @@
             android:launchMode="singleTop"
             android:label="Vision Chat" />
 
+        <!-- CHAT - AI CONVERSATION WITH DRAWER -->
+        <activity 
+            android:name=".ui.ChatActivity"
+            android:exported="false"
+            android:label="Chat" />
+
+        <!-- CONVERSATION HISTORY - ALL USER/AI MESSAGES -->
+        <activity
+            android:name=".ui.ConversationHistoryActivity"
+            android:exported="false"
+            android:label="Conversation History" />
+
+        <!-- USER AI SUMMARY - PROFILE SNAPSHOT FROM CONVERSATION + MEMORY -->
+        <activity
+            android:name=".ui.UserProfileSummaryActivity"
+            android:exported="false"
+            android:label="User AI Summary" />
+
+        <!-- QUICK NOTES - USER NOTES AND AI REMINDERS -->
+        <activity 
+            android:name=".ui.QuickNotesActivity"
+            android:exported="false"
+            android:label="Quick Notes" />
+            
+        <!-- MEETING MINUTES - SPEECH-TO-TEXT AND SUMMARIZATION -->
+        <activity
+            android:name=".ui.MeetingMinutesActivity"
+            android:exported="false"
+            android:label="Meeting Minutes" />
+            
+        <activity
+            android:name=".ui.ActiveMeetingActivity"
+            android:exported="false"
+            android:label="Recording Meeting" />
+
             <!-- BLE PCM TEST ACTIVITY -->
             <activity
                 android:name=".ui.BlePcmTestActivity"
@@ -135,12 +215,24 @@
                 android:exported="false"
                 android:label="Glass Media Gallery" />
 
+            <!-- LIVE GALLERY – locally captured photos from glasses -->
+            <activity
+                android:name=".ui.gallery.LiveGalleryActivity"
+                android:exported="false"
+                android:label="Live Gallery" />
+
             <!-- IMAGE VIEWER - Full screen in-app image viewer -->
             <activity
                 android:name=".ui.gallery.ImageViewerActivity"
                 android:exported="false"
                 android:theme="@style/Theme.GlassesSDKSample.Fullscreen"
                 android:label="Image Viewer" />
+
+            <!-- IMAGE DESCRIPTION VAULT – hidden page (long-press photo count in LiveGallery) -->
+            <activity
+                android:name=".ui.gallery.ImageDescriptionVaultActivity"
+                android:exported="false"
+                android:label="Descriptions Vault" />
 
             <!-- VIDEO PLAYER - Full screen in-app video player -->
             <activity
@@ -164,8 +256,30 @@
             <!-- BACKGROUND LISTENING SERVICE -->
             <service
                 android:name=".ListeningService"
-                android:exported="false"
-                android:foregroundServiceType="microphone" />
+                android:exported="false" />
+
+            <!-- NOTIFICATION LISTENER SERVICE -->
+            <service
+                android:name=".NotificationListener"
+                android:exported="true"
+                android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+                <intent-filter>
+                    <action android:name="android.service.notification.NotificationListenerService" />
+                </intent-filter>
+            </service>
+
+            <!-- WHATSAPP AUTO-SEND ACCESSIBILITY SERVICE -->
+            <service
+                android:name=".WhatsAppAutoSendService"
+                android:exported="true"
+                android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+                <intent-filter>
+                    <action android:name="android.accessibilityservice.AccessibilityService" />
+                </intent-filter>
+                <meta-data
+                    android:name="android.accessibilityservice"
+                    android:resource="@xml/accessibility_service_config" />
+            </service>
 
     </application>
 
