@@ -1,196 +1,116 @@
 <?xml version="1.0" encoding="utf-8"?>
-<androidx.cardview.widget.CardView xmlns:android="http://schemas.android.com/apk/res/android"
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:id="@+id/card_meeting"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:layout_marginHorizontal="4dp"
-    android:layout_marginBottom="16dp"
+    android:layout_marginVertical="8dp"
+    android:background="@drawable/mm_card_bg"
     android:clickable="true"
     android:focusable="true"
-    android:foreground="@drawable/card_ripple"
-    app:cardBackgroundColor="#252525"
-    app:cardCornerRadius="16dp"
-    app:cardElevation="6dp">
+    android:orientation="vertical"
+    android:padding="16dp">
 
+    <!-- Top row: title + overflow menu -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="vertical">
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
 
-        <!-- Header Section with Gradient -->
-        <LinearLayout
-            android:layout_width="match_parent"
+        <TextView
+            android:id="@+id/tv_meeting_title"
+            android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:background="@drawable/card_header_gradient"
-            android:gravity="center_vertical"
-            android:orientation="horizontal"
-            android:padding="16dp">
+            android:layout_weight="1"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:text="Discussion of AR technology"
+            android:textColor="#FFFFFF"
+            android:textSize="16sp"
+            android:textStyle="bold" />
 
-            <!-- Icon -->
-            <TextView
-                android:layout_width="40dp"
-                android:layout_height="40dp"
-                android:background="@drawable/card_icon_bg"
-                android:gravity="center"
-                android:text="📋"
-                android:textSize="22sp" />
-
-            <!-- Meeting Title -->
-            <TextView
-                android:id="@+id/tv_meeting_title"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="12dp"
-                android:layout_weight="1"
-                android:ellipsize="end"
-                android:maxLines="2"
-                android:text="Team Sync Meeting"
-                android:textColor="#FFFFFF"
-                android:textSize="17sp"
-                android:textStyle="bold" />
-
-        </LinearLayout>
-
-        <!-- Content Section -->
-        <LinearLayout
-            android:layout_width="match_parent"
+        <TextView
+            android:id="@+id/btn_meeting_menu"
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:orientation="vertical"
-            android:padding="16dp">
-
-            <!-- Date & Duration -->
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal">
-
-            <!-- Date Info -->
-                <LinearLayout
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:gravity="center_vertical"
-                    android:orientation="horizontal">
-
-                    <TextView
-                        android:layout_width="24dp"
-                        android:layout_height="24dp"
-                        android:gravity="center"
-                        android:text="📅"
-                        android:textSize="14sp" />
-
-                    <TextView
-                        android:id="@+id/tv_meeting_date"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:layout_marginStart="6dp"
-                        android:text="Jan 01, 2024"
-                        android:textColor="#B0B0B0"
-                        android:textSize="13sp" />
-
-                </LinearLayout>
-
-                <!-- Duration Info -->
-                <LinearLayout
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:gravity="center_vertical"
-                    android:orientation="horizontal">
-
-                    <TextView
-                        android:layout_width="24dp"
-                        android:layout_height="24dp"
-                        android:gravity="center"
-                        android:text="⏱️"
-                        android:textSize="14sp" />
-
-                    <TextView
-                        android:id="@+id/tv_meeting_duration"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:layout_marginStart="6dp"
-                        android:text="15m 30s"
-                        android:textColor="#B0B0B0"
-                        android:textSize="13sp" />
-
-                </LinearLayout>
-
-            </LinearLayout>
-
-            <!-- Summary Preview -->
-            <TextView
-                android:id="@+id/tv_summary_preview"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
-                android:ellipsize="end"
-                android:lineSpacingExtra="2dp"
-                android:maxLines="3"
-                android:text="Meeting summary preview..."
-                android:textColor="#D0D0D0"
-                android:textSize="14sp" />
-
-            <!-- Bottom Section: Word Count & Actions -->
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
-                android:gravity="center_vertical"
-                android:orientation="horizontal">
-
-                <!-- Word Count Badge -->
-                <TextView
-                    android:id="@+id/tv_word_count"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_gravity="center_vertical"
-                    android:layout_weight="1"
-                    android:background="@drawable/word_count_badge"
-                    android:drawablePadding="4dp"
-                    android:gravity="center_vertical"
-                    android:paddingHorizontal="10dp"
-                    android:paddingVertical="6dp"
-                    android:text="📝 450 words"
-                    android:textColor="#00D9FF"
-                    android:textSize="11sp"
-                    android:textStyle="bold" />
-
-                <!-- Action Buttons -->
-                <TextView
-                    android:id="@+id/btn_view_meeting"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginStart="12dp"
-                    android:background="@drawable/button_view_ripple"
-                    android:clickable="true"
-                    android:focusable="true"
-                    android:paddingHorizontal="16dp"
-                    android:paddingVertical="8dp"
-                    android:text="View"
-                    android:textColor="#FFFFFF"
-                    android:textSize="13sp"
-                    android:textStyle="bold" />
-
-                <TextView
-                    android:id="@+id/btn_delete_meeting"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginStart="8dp"
-                    android:background="@drawable/button_delete_ripple"
-                    android:clickable="true"
-                    android:focusable="true"
-                    android:paddingHorizontal="16dp"
-                    android:paddingVertical="8dp"
-                    android:text="Delete"
-                    android:textColor="#FFFFFF"
-                    android:textSize="13sp"
-                    android:textStyle="bold" />
-
-            </LinearLayout>
-
-        </LinearLayout>
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:clickable="true"
+            android:focusable="true"
+            android:paddingHorizontal="8dp"
+            android:text="•••"
+            android:textColor="#FF8C3A"
+            android:textSize="16sp"
+            android:textStyle="bold" />
 
     </LinearLayout>
 
-</androidx.cardview.widget.CardView>
+    <!-- Time row: clock icon + time range -->
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <ImageView
+            android:layout_width="14dp"
+            android:layout_height="14dp"
+            android:contentDescription="Time"
+            android:src="@drawable/ic_clock"
+            app:tint="#AAAAAA" />
+
+        <TextView
+            android:id="@+id/tv_meeting_date"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="6dp"
+            android:text="9:00 - 10:00 AM"
+            android:textColor="#AAAAAA"
+            android:textSize="13sp" />
+
+    </LinearLayout>
+
+    <!-- Transcript button aligned to the right -->
+    <TextView
+        android:id="@+id/btn_view_meeting"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="end"
+        android:layout_marginTop="12dp"
+        android:background="@drawable/mm_btn_orange"
+        android:clickable="true"
+        android:focusable="true"
+        android:paddingHorizontal="22dp"
+        android:paddingVertical="9dp"
+        android:text="Transcript"
+        android:textColor="#FFFFFF"
+        android:textSize="13sp"
+        android:textStyle="bold" />
+
+    <!-- Hidden views kept for adapter compatibility -->
+    <TextView
+        android:id="@+id/tv_meeting_duration"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:visibility="gone" />
+
+    <TextView
+        android:id="@+id/tv_summary_preview"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:visibility="gone" />
+
+    <TextView
+        android:id="@+id/tv_word_count"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:visibility="gone" />
+
+    <TextView
+        android:id="@+id/btn_delete_meeting"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:visibility="gone" />
+
+</LinearLayout>

@@ -1,391 +1,178 @@
 package com.sdk.glassessdksample.ui
 
-import android.Manifest
-import android.app.AlertDialog
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
-import android.graphics.BitmapFactory
-import android.net.Uri
 import android.os.Bundle
-import android.os.Environment
-import android.provider.MediaStore
-import android.util.Log
+import android.text.Editable
+import android.text.TextWatcher
 import android.view.View
-import android.widget.Button
+import android.widget.EditText
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
-import androidx.cardview.widget.CardView
-import androidx.core.content.ContextCompat
-import androidx.core.content.FileProvider
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
-import com.google.android.material.floatingactionbutton.FloatingActionButton
 import com.sdk.glassessdksample.R
-import java.io.File
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 /**
- * Quick Notes Activity - Display and manage user notes and AI reminders
- * Supports text notes with optional photo attachments
+ * Quick Notes - lists user notes grouped by month with two tabs:
+ *  - AI Written:   notes created by the AI, shown as rich cards
+ *  - Self-Written: notes created by the user, grouped by month
+ *
+ * Tapping the compose button (or a note) opens the full-screen [NoteEditorActivity].
  */
 class QuickNotesActivity : AppCompatActivity() {
 
     private lateinit var notesManager: QuickNotesManager
     private lateinit var notesAdapter: QuickNotesAdapter
     private lateinit var rvNotes: RecyclerView
-    private lateinit var fabAddNote: FloatingActionButton
     private lateinit var layoutEmptyState: LinearLayout
-    
-    private val TAG = "QuickNotesActivity"
-    
-    // Camera capture state
-    private var currentPhotoPath: String? = null
-    private var pendingImagePath: String? = null
-    private var activeDialog: AlertDialog? = null
-    
-    // Camera launcher
-    private val takePictureLauncher = registerForActivityResult(
-        ActivityResultContracts.TakePicture()
-    ) { success ->
-        if (success && currentPhotoPath != null) {
-            Log.d(TAG, "Photo captured: $currentPhotoPath")
-            pendingImagePath = currentPhotoPath
-            updateDialogImagePreview()
-        } else {
-            Log.d(TAG, "Photo capture cancelled or failed")
-        }
-    }
-    
-    // Gallery picker launcher
-    private val pickImageLauncher = registerForActivityResult(
-        ActivityResultContracts.GetContent()
-    ) { uri: Uri? ->
-        if (uri != null) {
-            Log.d(TAG, "Image picked from gallery: $uri")
-            // Copy the image to our internal storage
-            try {
-                val inputStream = contentResolver.openInputStream(uri)
-                val bitmap = BitmapFactory.decodeStream(inputStream)
-                inputStream?.close()
-                if (bitmap != null) {
-                    val tempId = System.currentTimeMillis().toString()
-                    val savedPath = notesManager.saveNoteImage(bitmap, tempId)
-                    pendingImagePath = savedPath
-                    updateDialogImagePreview()
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to load gallery image: ${e.message}", e)
-                Toast.makeText(this, "Failed to load image", Toast.LENGTH_SHORT).show()
-            }
-        }
-    }
-    
-    // Camera permission launcher
-    private val cameraPermissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        if (granted) {
-            launchCamera()
-        } else {
-            Toast.makeText(this, "Camera permission required to take photos", Toast.LENGTH_SHORT).show()
-        }
-    }
+    private lateinit var tabAi: TextView
+    private lateinit var tabSelf: TextView
+    private lateinit var tvAiIntro: TextView
+    private lateinit var etSearch: EditText
+
+    private var showingAi = false
+    private var searchQuery = ""
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_quick_notes)
 
         notesManager = QuickNotesManager(this)
-        setupToolbar()
         setupUI()
-        loadNotes()
-    }
-
-    private fun setupToolbar() {
-        val toolbar = findViewById<androidx.appcompat.widget.Toolbar>(R.id.toolbar)
-        setSupportActionBar(toolbar)
-        supportActionBar?.setDisplayHomeAsUpEnabled(true)
-        toolbar.setNavigationOnClickListener { finish() }
+        refreshList()
     }
 
     private fun setupUI() {
         rvNotes = findViewById(R.id.rv_notes)
-        fabAddNote = findViewById(R.id.fab_add_note)
         layoutEmptyState = findViewById(R.id.layout_empty_state)
+        tabAi = findViewById(R.id.tab_ai)
+        tabSelf = findViewById(R.id.tab_self)
+        tvAiIntro = findViewById(R.id.tv_ai_intro)
+        etSearch = findViewById(R.id.et_search)
 
-        // Setup RecyclerView
+        findViewById<ImageView>(R.id.btn_back).setOnClickListener { finish() }
+
         notesAdapter = QuickNotesAdapter(
-            notes = emptyList(),
-            onEdit = { note -> showEditNoteDialog(note) },
-            onDelete = { note -> confirmDeleteNote(note) },
-            onClick = { note -> showNoteDetails(note) }
+            items = emptyList(),
+            onClick = { note -> openEditor(note) },
+            onEdit = { note -> openEditor(note) },
+            onCopy = { note -> copyNote(note) }
         )
-        
         rvNotes.apply {
             layoutManager = LinearLayoutManager(this@QuickNotesActivity)
             adapter = notesAdapter
         }
 
-        // FAB to add new note
-        fabAddNote.setOnClickListener {
-            showEditNoteDialog(null)
-        }
+        tabAi.setOnClickListener { selectTab(ai = true) }
+        tabSelf.setOnClickListener { selectTab(ai = false) }
+
+        findViewById<ImageView>(R.id.btn_compose).setOnClickListener { openEditor(null) }
+
+        etSearch.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun afterTextChanged(s: Editable?) {
+                searchQuery = s?.toString()?.trim().orEmpty()
+                refreshList()
+            }
+        })
+
+        applyTabStyles()
     }
 
-    private fun loadNotes() {
-        val notes = notesManager.getAllNotes()
-        notesAdapter.updateNotes(notes)
-        
-        // Show/hide empty state
-        if (notes.isEmpty()) {
-            layoutEmptyState.visibility = View.VISIBLE
-            rvNotes.visibility = View.GONE
+    private fun selectTab(ai: Boolean) {
+        if (showingAi == ai) return
+        showingAi = ai
+        applyTabStyles()
+        refreshList()
+    }
+
+    private fun applyTabStyles() {
+        if (showingAi) {
+            tabAi.setBackgroundResource(R.drawable.qn_tab_active)
+            tabAi.setTextColor(0xFFFFFFFF.toInt())
+            tabSelf.setBackgroundResource(R.drawable.qn_tab_inactive)
+            tabSelf.setTextColor(0xFFDDDDDD.toInt())
         } else {
-            layoutEmptyState.visibility = View.GONE
-            rvNotes.visibility = View.VISIBLE
+            tabSelf.setBackgroundResource(R.drawable.qn_tab_active)
+            tabSelf.setTextColor(0xFFFFFFFF.toInt())
+            tabAi.setBackgroundResource(R.drawable.qn_tab_inactive)
+            tabAi.setTextColor(0xFFDDDDDD.toInt())
         }
+        tvAiIntro.visibility = if (showingAi) View.VISIBLE else View.GONE
     }
-    
-    /**
-     * Create a temporary file for camera capture
-     */
-    private fun createImageFile(): File {
-        val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
-        val storageDir = getExternalFilesDir(Environment.DIRECTORY_PICTURES)
-        return File.createTempFile("NOTE_${timeStamp}_", ".jpg", storageDir)
-    }
-    
-    /**
-     * Launch the camera to take a photo
-     */
-    private fun launchCamera() {
-        try {
-            val photoFile = createImageFile()
-            currentPhotoPath = photoFile.absolutePath
-            val photoUri = FileProvider.getUriForFile(
-                this,
-                "${applicationContext.packageName}.fileprovider",
-                photoFile
-            )
-            takePictureLauncher.launch(photoUri)
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to launch camera: ${e.message}", e)
-            Toast.makeText(this, "Failed to open camera", Toast.LENGTH_SHORT).show()
-        }
-    }
-    
-    /**
-     * Request camera permission and launch camera
-     */
-    private fun requestCameraAndCapture() {
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) 
-            == PackageManager.PERMISSION_GRANTED) {
-            launchCamera()
+
+    private fun refreshList() {
+        val all = notesManager.getAllNotes()
+        val source = if (showingAi) {
+            all.filter { it.createdBy == QuickNote.CreatedBy.AI }
         } else {
-            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+            all.filter { it.createdBy == QuickNote.CreatedBy.USER }
         }
-    }
-    
-    /**
-     * Update the image preview in the currently active edit dialog
-     */
-    private fun updateDialogImagePreview() {
-        val dialog = activeDialog ?: return
-        val cardPreview = dialog.findViewById<CardView>(R.id.card_image_preview) ?: return
-        val ivPreview = dialog.findViewById<ImageView>(R.id.iv_note_image_preview) ?: return
-        val layoutAttach = dialog.findViewById<LinearLayout>(R.id.layout_attach_photo) ?: return
-        
-        if (pendingImagePath != null) {
-            try {
-                val bitmap = BitmapFactory.decodeFile(pendingImagePath)
-                if (bitmap != null) {
-                    ivPreview.setImageBitmap(bitmap)
-                    cardPreview.visibility = View.VISIBLE
-                    layoutAttach.visibility = View.GONE
-                    return
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to load preview: ${e.message}")
-            }
+
+        val filtered = if (searchQuery.isEmpty()) source else source.filter {
+            it.title.contains(searchQuery, ignoreCase = true) ||
+                it.content.contains(searchQuery, ignoreCase = true)
         }
-        // No image - show attach buttons
-        cardPreview.visibility = View.GONE
-        layoutAttach.visibility = View.VISIBLE
+
+        val items = if (showingAi) buildAiItems(filtered) else buildSelfItems(filtered)
+        notesAdapter.updateItems(items)
+
+        val empty = items.isEmpty()
+        layoutEmptyState.visibility = if (empty) View.VISIBLE else View.GONE
+        rvNotes.visibility = if (empty) View.GONE else View.VISIBLE
     }
 
-    private fun showEditNoteDialog(existingNote: QuickNote?) {
-        // Reset pending image
-        pendingImagePath = existingNote?.imagePath
-        
-        val dialogView = layoutInflater.inflate(R.layout.dialog_edit_note, null)
-        val etTitle = dialogView.findViewById<android.widget.EditText>(R.id.et_note_title)
-        val etContent = dialogView.findViewById<android.widget.EditText>(R.id.et_note_content)
-        val tvDialogTitle = dialogView.findViewById<TextView>(R.id.tv_dialog_title)
-        val btnCancel = dialogView.findViewById<Button>(R.id.btn_cancel)
-        val btnSave = dialogView.findViewById<Button>(R.id.btn_save)
-        val btnTakePhoto = dialogView.findViewById<TextView>(R.id.btn_take_photo)
-        val btnPickGallery = dialogView.findViewById<TextView>(R.id.btn_pick_gallery)
-        val cardImagePreview = dialogView.findViewById<CardView>(R.id.card_image_preview)
-        val ivImagePreview = dialogView.findViewById<ImageView>(R.id.iv_note_image_preview)
-        val btnRemoveImage = dialogView.findViewById<ImageView>(R.id.btn_remove_image)
-        val layoutAttachPhoto = dialogView.findViewById<LinearLayout>(R.id.layout_attach_photo)
+    /** AI tab: one rich card per note, newest first. */
+    private fun buildAiItems(notes: List<QuickNote>): List<QuickNotesAdapter.ListItem> =
+        notes.sortedByDescending { it.timestamp }
+            .map { QuickNotesAdapter.ListItem.AiNote(it) }
 
-        // Pre-fill if editing
-        if (existingNote != null) {
-            tvDialogTitle.text = "Edit Note"
-            etTitle.setText(existingNote.title)
-            etContent.setText(existingNote.content)
-            
-            // Show existing image if any
-            if (existingNote.hasImage()) {
-                try {
-                    val bitmap = BitmapFactory.decodeFile(existingNote.imagePath)
-                    if (bitmap != null) {
-                        ivImagePreview.setImageBitmap(bitmap)
-                        cardImagePreview.visibility = View.VISIBLE
-                        layoutAttachPhoto.visibility = View.GONE
-                    }
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed to load existing image: ${e.message}")
+    /** Self tab: month headers followed by the notes in that month. */
+    private fun buildSelfItems(notes: List<QuickNote>): List<QuickNotesAdapter.ListItem> {
+        val items = mutableListOf<QuickNotesAdapter.ListItem>()
+        notes.sortedByDescending { it.timestamp }
+            .groupBy { it.getMonthKey() }
+            .toSortedMap(compareByDescending { it })
+            .forEach { (_, monthNotes) ->
+                items.add(QuickNotesAdapter.ListItem.MonthHeader(monthNotes.first().getMonthLabel()))
+                monthNotes.forEachIndexed { index, note ->
+                    items.add(
+                        QuickNotesAdapter.ListItem.SelfNote(
+                            note = note,
+                            isLastInGroup = index == monthNotes.lastIndex
+                        )
+                    )
                 }
             }
-        } else {
-            tvDialogTitle.text = "New Note"
-        }
-
-        val dialog = AlertDialog.Builder(this)
-            .setView(dialogView)
-            .create()
-        
-        activeDialog = dialog
-        
-        // Take photo button
-        btnTakePhoto.setOnClickListener {
-            requestCameraAndCapture()
-        }
-        
-        // Pick from gallery button
-        btnPickGallery.setOnClickListener {
-            pickImageLauncher.launch("image/*")
-        }
-        
-        // Remove image button
-        btnRemoveImage.setOnClickListener {
-            pendingImagePath = null
-            cardImagePreview.visibility = View.GONE
-            layoutAttachPhoto.visibility = View.VISIBLE
-        }
-
-        btnCancel.setOnClickListener { 
-            activeDialog = null
-            dialog.dismiss() 
-        }
-        
-        btnSave.setOnClickListener {
-            val title = etTitle.text.toString().trim()
-            val content = etContent.text.toString().trim()
-
-            when {
-                title.isEmpty() -> {
-                    Toast.makeText(this, "Please enter a title", Toast.LENGTH_SHORT).show()
-                }
-                content.isEmpty() && pendingImagePath == null -> {
-                    Toast.makeText(this, "Please enter some content or attach a photo", Toast.LENGTH_SHORT).show()
-                }
-                else -> {
-                    val finalContent = if (content.isEmpty()) "Photo note" else content
-                    
-                    if (existingNote != null) {
-                        // Update existing note with image
-                        notesManager.updateNoteWithImage(existingNote.id, title, finalContent, pendingImagePath)
-                        Toast.makeText(this, "Note updated", Toast.LENGTH_SHORT).show()
-                    } else {
-                        // Create new note with optional image
-                        notesManager.createNoteWithImage(title, finalContent, pendingImagePath, QuickNote.CreatedBy.USER)
-                        Toast.makeText(this, "Note created", Toast.LENGTH_SHORT).show()
-                    }
-                    loadNotes()
-                    activeDialog = null
-                    dialog.dismiss()
-                }
-            }
-        }
-        
-        dialog.setOnDismissListener { activeDialog = null }
-        dialog.show()
+        return items
     }
 
-    private fun confirmDeleteNote(note: QuickNote) {
-        AlertDialog.Builder(this)
-            .setTitle("Delete Note")
-            .setMessage("Are you sure you want to delete \"${note.title}\"?")
-            .setPositiveButton("Delete") { _, _ ->
-                notesManager.deleteNote(note.id)
-                Toast.makeText(this, "Note deleted", Toast.LENGTH_SHORT).show()
-                loadNotes()
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
+    private fun openEditor(note: QuickNote?) {
+        val intent = Intent(this, NoteEditorActivity::class.java)
+        if (note != null) {
+            intent.putExtra(NoteEditorActivity.EXTRA_NOTE_ID, note.id)
+            intent.putExtra(NoteEditorActivity.EXTRA_NOTE_TITLE, note.title)
+            intent.putExtra(NoteEditorActivity.EXTRA_NOTE_CONTENT, note.content)
+        }
+        startActivity(intent)
     }
 
-    private fun showNoteDetails(note: QuickNote) {
-        val dialogView = layoutInflater.inflate(R.layout.dialog_note_detail, null)
-        val tvTitle = dialogView.findViewById<TextView>(R.id.tv_detail_title)
-        val tvContent = dialogView.findViewById<TextView>(R.id.tv_detail_content)
-        val tvTimestamp = dialogView.findViewById<TextView>(R.id.tv_detail_timestamp)
-        val tvSource = dialogView.findViewById<TextView>(R.id.tv_detail_source)
-        val cardImage = dialogView.findViewById<CardView>(R.id.card_detail_image)
-        val ivImage = dialogView.findViewById<ImageView>(R.id.iv_detail_image)
-        val btnClose = dialogView.findViewById<Button>(R.id.btn_detail_close)
-        val btnEdit = dialogView.findViewById<Button>(R.id.btn_detail_edit)
-        
-        tvTitle.text = note.title
-        tvContent.text = note.content
-        tvTimestamp.text = note.getFormattedTimestamp()
-        tvSource.text = if (note.createdBy == QuickNote.CreatedBy.AI) "Created by AI" else ""
-        tvSource.visibility = if (note.createdBy == QuickNote.CreatedBy.AI) View.VISIBLE else View.GONE
-        
-        // Show image if available
-        if (note.hasImage()) {
-            val imageFile = File(note.imagePath!!)
-            if (imageFile.exists()) {
-                try {
-                    val bitmap = BitmapFactory.decodeFile(note.imagePath)
-                    if (bitmap != null) {
-                        ivImage.setImageBitmap(bitmap)
-                        cardImage.visibility = View.VISIBLE
-                    }
-                } catch (e: Exception) {
-                    cardImage.visibility = View.GONE
-                }
-            } else {
-                cardImage.visibility = View.GONE
-            }
-        } else {
-            cardImage.visibility = View.GONE
-        }
-        
-        val dialog = AlertDialog.Builder(this)
-            .setView(dialogView)
-            .create()
-        
-        btnClose.setOnClickListener { dialog.dismiss() }
-        btnEdit.setOnClickListener {
-            dialog.dismiss()
-            showEditNoteDialog(note)
-        }
-        
-        dialog.show()
+    private fun copyNote(note: QuickNote) {
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        val text = if (note.title.isBlank()) note.content else "${note.title}\n\n${note.content}"
+        clipboard.setPrimaryClip(ClipData.newPlainText(note.title, text))
+        Toast.makeText(this, "Copied to clipboard", Toast.LENGTH_SHORT).show()
     }
 
     override fun onResume() {
         super.onResume()
-        loadNotes() // Refresh notes when returning to this screen
+        refreshList()
     }
 }

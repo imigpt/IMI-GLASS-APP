@@ -1,146 +1,73 @@
 <?xml version="1.0" encoding="utf-8"?>
-<androidx.cardview.widget.CardView xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:app="http://schemas.android.com/apk/res-auto"
+<!-- Self-Written note row: title + date inside a grouped month card -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/card_note"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:layout_marginBottom="12dp"
-    app:cardBackgroundColor="#2A2A2A"
-    app:cardCornerRadius="12dp"
-    app:cardElevation="4dp">
+    android:background="@drawable/qn_row_card"
+    android:clickable="true"
+    android:focusable="true"
+    android:orientation="vertical">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:padding="16dp">
+        android:paddingHorizontal="18dp"
+        android:paddingVertical="14dp">
 
-        <!-- Note Image Thumbnail (shown only if image attached) -->
-        <androidx.cardview.widget.CardView
-            android:id="@+id/card_note_image"
-            android:layout_width="match_parent"
-            android:layout_height="150dp"
-            android:layout_marginBottom="12dp"
-            android:visibility="gone"
-            app:cardCornerRadius="8dp"
-            app:cardElevation="0dp">
-
-            <ImageView
-                android:id="@+id/iv_note_thumbnail"
-                android:layout_width="match_parent"
-                android:layout_height="match_parent"
-                android:scaleType="centerCrop"
-                android:contentDescription="Note photo" />
-
-            <!-- Photo indicator badge -->
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_gravity="bottom|start"
-                android:layout_margin="8dp"
-                android:background="#80000000"
-                android:paddingHorizontal="6dp"
-                android:paddingVertical="2dp"
-                android:text="📷 Photo"
-                android:textColor="#FFFFFF"
-                android:textSize="10sp" />
-
-        </androidx.cardview.widget.CardView>
-
-        <!-- Note Title -->
         <TextView
             android:id="@+id/tv_note_title"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:ellipsize="end"
-            android:maxLines="2"
-            android:text="Note Title"
+            android:maxLines="1"
+            android:text="Jaipur – The Pink City of India"
             android:textColor="#FFFFFF"
-            android:textSize="18sp"
-            android:textStyle="bold" />
+            android:textSize="15sp" />
 
-        <!-- Note Content -->
         <TextView
-            android:id="@+id/tv_note_content"
-            android:layout_width="match_parent"
+            android:id="@+id/tv_note_timestamp"
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:ellipsize="end"
-            android:maxLines="4"
-            android:text="Note content preview..."
-            android:textColor="#CCCCCC"
-            android:textSize="14sp" />
-
-        <!-- Footer with timestamp and source -->
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            android:orientation="horizontal">
-
-            <!-- Timestamp -->
-            <TextView
-                android:id="@+id/tv_note_timestamp"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="Jan 01, 2024 at 12:00 PM"
-                android:textColor="#888888"
-                android:textSize="12sp" />
-
-            <!-- Created by badge (AI or Manual) -->
-            <TextView
-                android:id="@+id/tv_note_source"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="8dp"
-                android:background="@drawable/badge_background"
-                android:paddingHorizontal="8dp"
-                android:paddingVertical="4dp"
-                android:text="AI"
-                android:textColor="#00D9FF"
-                android:textSize="10sp"
-                android:textStyle="bold" />
-
-        </LinearLayout>
-
-        <!-- Action Buttons -->
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:gravity="end"
-            android:orientation="horizontal">
-
-            <TextView
-                android:id="@+id/btn_edit_note"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:background="?attr/selectableItemBackgroundBorderless"
-                android:clickable="true"
-                android:focusable="true"
-                android:padding="8dp"
-                android:text="Edit"
-                android:textColor="#00D9FF"
-                android:textSize="14sp"
-                android:textStyle="bold" />
-
-            <TextView
-                android:id="@+id/btn_delete_note"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="16dp"
-                android:background="?attr/selectableItemBackgroundBorderless"
-                android:clickable="true"
-                android:focusable="true"
-                android:padding="8dp"
-                android:text="Delete"
-                android:textColor="#FF6B6B"
-                android:textSize="14sp"
-                android:textStyle="bold" />
-
-        </LinearLayout>
+            android:layout_marginTop="4dp"
+            android:text="10/05/26"
+            android:textColor="#888888"
+            android:textSize="11sp" />
 
     </LinearLayout>
 
-</androidx.cardview.widget.CardView>
+    <!-- Bottom divider line between rows in the same group -->
+    <View
+        android:id="@+id/row_divider"
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:layout_marginHorizontal="18dp"
+        android:background="#1FFFFFFF" />
+
+    <!-- Hidden views kept for adapter / detail compatibility -->
+    <TextView
+        android:id="@+id/tv_note_content"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:visibility="gone" />
+
+    <TextView
+        android:id="@+id/tv_note_source"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:visibility="gone" />
+
+    <TextView
+        android:id="@+id/btn_edit_note"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:visibility="gone" />
+
+    <TextView
+        android:id="@+id/btn_delete_note"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:visibility="gone" />
+
+</LinearLayout>

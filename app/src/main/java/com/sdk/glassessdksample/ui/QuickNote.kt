@@ -25,4 +25,23 @@ data class QuickNote(
         val sdf = java.text.SimpleDateFormat("MMM dd, yyyy 'at' hh:mm a", java.util.Locale.getDefault())
         return sdf.format(java.util.Date(timestamp))
     }
+
+    /** Compact date shown on list rows, e.g. "10/05/26". */
+    fun getShortDate(): String {
+        val sdf = java.text.SimpleDateFormat("dd/MM/yy", java.util.Locale.getDefault())
+        return sdf.format(java.util.Date(timestamp))
+    }
+
+    /** Full month name used to group notes, e.g. "June". */
+    fun getMonthLabel(): String {
+        val sdf = java.text.SimpleDateFormat("MMMM", java.util.Locale.getDefault())
+        return sdf.format(java.util.Date(timestamp))
+    }
+
+    /** Stable key for grouping/ordering months (year * 12 + month), newest first. */
+    fun getMonthKey(): Int {
+        val cal = java.util.Calendar.getInstance()
+        cal.timeInMillis = timestamp
+        return cal.get(java.util.Calendar.YEAR) * 12 + cal.get(java.util.Calendar.MONTH)
+    }
 }

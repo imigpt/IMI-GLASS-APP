@@ -3,6 +3,7 @@ package com.sdk.glassessdksample.ui
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.widget.PopupMenu
 import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
 import com.sdk.glassessdksample.R
@@ -19,11 +20,8 @@ class MeetingMinutesAdapter(
     inner class MeetingViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
         val tvTitle: TextView = itemView.findViewById(R.id.tv_meeting_title)
         val tvDate: TextView = itemView.findViewById(R.id.tv_meeting_date)
-        val tvDuration: TextView = itemView.findViewById(R.id.tv_meeting_duration)
-        val tvSummaryPreview: TextView = itemView.findViewById(R.id.tv_summary_preview)
-        val tvWordCount: TextView = itemView.findViewById(R.id.tv_word_count)
         val btnView: TextView = itemView.findViewById(R.id.btn_view_meeting)
-        val btnDelete: TextView = itemView.findViewById(R.id.btn_delete_meeting)
+        val btnMenu: TextView = itemView.findViewById(R.id.btn_meeting_menu)
         val cardMeeting: View = itemView.findViewById(R.id.card_meeting)
     }
 
@@ -35,36 +33,32 @@ class MeetingMinutesAdapter(
 
     override fun onBindViewHolder(holder: MeetingViewHolder, position: Int) {
         val meeting = meetings[position]
-        
+
         holder.tvTitle.text = meeting.title
-        holder.tvDate.text = meeting.getFormattedDate()
-        holder.tvDuration.text = meeting.getDuration()
-        
-        // Show speaker info if available
-        val wordCountText = if (meeting.speakerCount > 0) {
-            val peopleText = if (meeting.speakerCount == 1) "1 person" else "${meeting.speakerCount} people"
-            "📝 ${meeting.getWordCount()} words | 👥 $peopleText"
-        } else {
-            "📝 ${meeting.getWordCount()} words"
-        }
-        holder.tvWordCount.text = wordCountText
-        
-        // Summary preview - show first 120 characters
-        val summaryPreview = if (meeting.summary.isNotBlank()) {
-            meeting.summary.take(120) + if (meeting.summary.length > 120) "..." else ""
-        } else {
-            "No summary available"
-        }
-        holder.tvSummaryPreview.text = summaryPreview
-        
+        holder.tvDate.text = meeting.getTimeRange()
+
         // Click handlers
         holder.cardMeeting.setOnClickListener { onView(meeting) }
         holder.btnView.setOnClickListener { onView(meeting) }
-        holder.btnDelete.setOnClickListener { onDelete(meeting) }
+
+        // Overflow menu: View / Delete
+        holder.btnMenu.setOnClickListener { anchor ->
+            val popup = PopupMenu(anchor.context, anchor)
+            popup.menu.add("View transcript")
+            popup.menu.add("Delete")
+            popup.setOnMenuItemClickListener { item ->
+                when (item.title) {
+                    "View transcript" -> onView(meeting)
+                    "Delete" -> onDelete(meeting)
+                }
+                true
+            }
+            popup.show()
+        }
     }
 
     override fun getItemCount(): Int = meetings.size
-    
+
     fun updateMeetings(newMeetings: List<MeetingMinute>) {
         meetings = newMeetings
         notifyDataSetChanged()

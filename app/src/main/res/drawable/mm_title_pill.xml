@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Rounded translucent pill that displays the meeting title while recording -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <gradient
+        android:angle="90"
+        android:startColor="#59FF7F2E"
+        android:endColor="#332A1A10"
+        android:type="linear" />
+    <corners android:radius="14dp" />
+    <stroke
+        android:width="1dp"
+        android:color="#33FF7F2E" />
+</shape>

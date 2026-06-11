@@ -1,76 +1,177 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="vertical"
-    android:background="@drawable/bg_app_gradient">
+    android:background="@drawable/mm_bg_gradient">
 
+    <!-- Header: back arrow + title + (clear) -->
     <LinearLayout
+        android:id="@+id/header"
         android:layout_width="match_parent"
-        android:layout_height="56dp"
-        android:orientation="horizontal"
+        android:layout_height="wrap_content"
+        android:layout_alignParentTop="true"
         android:gravity="center_vertical"
-        android:paddingStart="8dp"
-        android:paddingEnd="12dp"
-        android:background="@color/glass_surface_elevated">
+        android:orientation="horizontal"
+        android:paddingHorizontal="16dp"
+        android:paddingTop="40dp"
+        android:paddingBottom="12dp">
 
         <ImageView
             android:id="@+id/btnBack"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
-            android:padding="8dp"
-            android:src="@android:drawable/ic_media_previous"
-            android:tint="#FFFFFF"
-            android:contentDescription="Back" />
+            android:layout_width="32dp"
+            android:layout_height="32dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Back"
+            android:padding="4dp"
+            android:src="@drawable/ic_arrow_back"
+            app:tint="#FFFFFF" />
 
         <TextView
             android:layout_width="0dp"
             android:layout_height="wrap_content"
+            android:layout_marginStart="12dp"
             android:layout_weight="1"
-            android:text="Conversation History"
+            android:text="History"
             android:textColor="#FFFFFF"
-            android:textSize="18sp"
+            android:textSize="20sp"
             android:textStyle="bold" />
-
-        <TextView
-            android:id="@+id/btnUserSummary"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="User AI Summary"
-            android:textColor="@color/glass_primary"
-            android:textSize="13sp"
-            android:paddingStart="8dp"
-            android:paddingEnd="8dp"
-            android:paddingTop="6dp"
-            android:paddingBottom="6dp" />
 
         <TextView
             android:id="@+id/btnClearHistory"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
+            android:background="?attr/selectableItemBackground"
+            android:paddingHorizontal="8dp"
+            android:paddingVertical="6dp"
             android:text="Clear"
-            android:textColor="@color/glass_primary"
-            android:textSize="14sp"
-            android:paddingStart="10dp"
-            android:paddingEnd="10dp"
-            android:paddingTop="6dp"
-            android:paddingBottom="6dp" />
-    </LinearLayout>
-
-    <ScrollView
-        android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:fillViewport="true"
-        android:padding="16dp">
+            android:textColor="#FF8C3A"
+            android:textSize="14sp" />
 
         <TextView
-            android:id="@+id/tvConversationHistory"
+            android:id="@+id/btnUserSummary"
+            android:layout_width="0dp"
+            android:layout_height="0dp"
+            android:visibility="gone" />
+
+    </LinearLayout>
+
+    <!-- ============ RECENTS LIST (screen 1) ============ -->
+    <LinearLayout
+        android:id="@+id/view_recents"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_below="@id/header"
+        android:orientation="vertical"
+        android:paddingHorizontal="20dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:layout_marginBottom="8dp"
+            android:text="Recents"
+            android:textColor="#FFFFFF"
+            android:textSize="20sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tvEmptyRecents"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:textColor="#E5E5E5"
-            android:textSize="14sp"
-            android:lineSpacingExtra="6dp"
-            android:text="No conversation history found yet." />
-    </ScrollView>
+            android:layout_marginTop="40dp"
+            android:gravity="center"
+            android:text="No conversation history found yet."
+            android:textColor="#999999"
+            android:textSize="15sp"
+            android:visibility="gone" />
 
-</LinearLayout>
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/rvRecents"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:clipToPadding="false"
+            android:paddingBottom="16dp" />
+
+    </LinearLayout>
+
+    <!-- ============ THREAD VIEW (screen 2) ============ -->
+    <RelativeLayout
+        android:id="@+id/view_thread"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_below="@id/header"
+        android:visibility="gone">
+
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/rvThread"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:layout_above="@id/composer"
+            android:clipToPadding="false"
+            android:paddingHorizontal="16dp"
+            android:paddingTop="10dp"
+            android:paddingBottom="10dp" />
+
+        <!-- "Ask AI" composer -->
+        <LinearLayout
+            android:id="@+id/composer"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_alignParentBottom="true"
+            android:layout_marginHorizontal="16dp"
+            android:layout_marginBottom="24dp"
+            android:background="@drawable/hist_composer_bar"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingHorizontal="14dp"
+            android:paddingVertical="8dp">
+
+            <ImageView
+                android:id="@+id/btnComposerAdd"
+                android:layout_width="26dp"
+                android:layout_height="26dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Add"
+                android:src="@drawable/ic_add"
+                app:tint="#FFFFFF" />
+
+            <EditText
+                android:id="@+id/etAskAi"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="12dp"
+                android:layout_weight="1"
+                android:background="@null"
+                android:hint="Ask AI"
+                android:inputType="textMultiLine|textCapSentences"
+                android:maxLines="4"
+                android:textColor="#FFFFFF"
+                android:textColorHint="#AAAAAA"
+                android:textSize="15sp" />
+
+            <ImageView
+                android:id="@+id/btnComposerMic"
+                android:layout_width="24dp"
+                android:layout_height="24dp"
+                android:layout_marginEnd="10dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Voice"
+                android:src="@drawable/ic_mic"
+                app:tint="#CCCCCC" />
+
+            <ImageView
+                android:id="@+id/btnComposerVoice"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:background="@drawable/hist_voice_orb"
+                android:contentDescription="Voice mode"
+                android:padding="9dp"
+                android:src="@drawable/ic_waveform"
+                app:tint="#FF8C3A" />
+
+        </LinearLayout>
+
+    </RelativeLayout>
+
+</RelativeLayout>

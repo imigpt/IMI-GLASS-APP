@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Outer glowing halo behind the recording timer -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="oval">
+    <gradient
+        android:type="radial"
+        android:gradientRadius="150dp"
+        android:startColor="#FFFF8C3A"
+        android:centerColor="#88FF7F2E"
+        android:endColor="#00FF7F2E" />
+</shape>

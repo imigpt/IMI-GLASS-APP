@@ -15,7 +15,7 @@ import android.os.Looper
 import android.media.MediaRecorder
 import android.util.Log
 import android.view.View
-import android.widget.Button
+import android.widget.ImageView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
@@ -44,8 +44,12 @@ class ActiveMeetingActivity : AppCompatActivity() {
     private lateinit var tvStatus: TextView
     private lateinit var tvLiveParticipants: TextView
     private lateinit var tvTranscript: TextView
-    private lateinit var btnPause: Button
-    private lateinit var btnEndMeeting: Button
+    private lateinit var tvSummaryStatus: TextView
+    private lateinit var timerContainer: View
+    private lateinit var summaryContainer: View
+    private lateinit var btnPause: ImageView
+    private lateinit var btnSwitch: ImageView
+    private lateinit var btnEndMeeting: ImageView
     
     private var currentMeeting: MeetingMinute? = null
     private var isRecording = false
@@ -63,37 +67,30 @@ class ActiveMeetingActivity : AppCompatActivity() {
         
         meetingManager = MeetingMinutesManager(this)
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
-        
-        setupToolbar()
+
         setupUI()
         checkPermissionsAndStart()
     }
-    
-    private fun setupToolbar() {
-        val toolbar = findViewById<androidx.appcompat.widget.Toolbar>(R.id.toolbar)
-        setSupportActionBar(toolbar)
-        supportActionBar?.setDisplayHomeAsUpEnabled(true)
-        toolbar.setNavigationOnClickListener { 
-            confirmEndMeeting()
-        }
-    }
-    
+
     private fun setupUI() {
         tvMeetingTitle = findViewById(R.id.tv_meeting_title)
         tvDuration = findViewById(R.id.tv_duration)
         tvStatus = findViewById(R.id.tv_status)
         tvLiveParticipants = findViewById(R.id.tv_live_participants)
         tvTranscript = findViewById(R.id.tv_transcript)
+        tvSummaryStatus = findViewById(R.id.tv_summary_status)
+        timerContainer = findViewById(R.id.timer_container)
+        summaryContainer = findViewById(R.id.summary_container)
         btnPause = findViewById(R.id.btn_pause)
+        btnSwitch = findViewById(R.id.btn_switch)
         btnEndMeeting = findViewById(R.id.btn_end_meeting)
-        
-        // Hide transcript view during recording
-        tvTranscript.text = "🎙️ Recording audio with speaker detection...\n\n✅ Multiple speakers will be automatically identified\n✅ Individual contributions will be tracked\n✅ Transcript will show: Speaker 1, Speaker 2, etc.\n\nTranscript will be generated after meeting ends."
-        
+
+        findViewById<ImageView>(R.id.btn_back).setOnClickListener { confirmEndMeeting() }
+
         btnPause.setOnClickListener {
             if (isPaused) resumeRecording() else pauseRecording()
         }
-        
+
         btnEndMeeting.setOnClickListener {
             confirmEndMeeting()
         }
@@ -134,7 +131,7 @@ class ActiveMeetingActivity : AppCompatActivity() {
         
         // Start new meeting
         currentMeeting = meetingManager.startMeeting(meetingTitle)
-        tvMeetingTitle.text = meetingTitle
+        tvMeetingTitle.text = "Title: $meetingTitle"
         
         // Request audio focus
         requestAudioFocus()
@@ -208,10 +205,10 @@ class ActiveMeetingActivity : AppCompatActivity() {
             
             isRecording = true
             isPaused = false
-            
-            tvStatus.text = "🎙️ Recording audio..."
-            btnPause.text = "⏸️ Pause"
-            
+
+            tvStatus.text = "🎙️ Recording audio"
+            btnPause.setImageResource(R.drawable.ic_pause_bars)
+
             Log.d(TAG, "Audio recording started: $audioFilePath")
         } catch (e: Exception) {
             Log.e(TAG, "Error starting audio recording: ${e.message}", e)
@@ -226,7 +223,7 @@ class ActiveMeetingActivity : AppCompatActivity() {
                 mediaRecorder?.pause()
                 isPaused = true
                 tvStatus.text = "⏸️ Paused"
-                btnPause.text = "▶️ Resume"
+                btnPause.setImageResource(R.drawable.ic_play_triangle)
                 Log.d(TAG, "Recording paused")
             } catch (e: Exception) {
                 Log.e(TAG, "Error pausing: ${e.message}")
@@ -243,8 +240,8 @@ class ActiveMeetingActivity : AppCompatActivity() {
             try {
                 mediaRecorder?.resume()
                 isPaused = false
-                tvStatus.text = "🎙️ Recording audio..."
-                btnPause.text = "⏸️ Pause"
+                tvStatus.text = "🎙️ Recording audio"
+                btnPause.setImageResource(R.drawable.ic_pause_bars)
                 Log.d(TAG, "Recording resumed")
             } catch (e: Exception) {
                 Log.e(TAG, "Error resuming: ${e.message}")
@@ -277,11 +274,17 @@ class ActiveMeetingActivity : AppCompatActivity() {
             Log.e(TAG, "Error stopping recorder: ${e.message}")
         }
         abandonAudioFocus()
-        
-        tvStatus.text = "📝 Converting audio to text..."
+        handler.removeCallbacksAndMessages(null)
+
+        // Switch from the recording timer to the summary-generation view (mockup screen 5)
+        timerContainer.visibility = View.GONE
+        summaryContainer.visibility = View.VISIBLE
+        tvStatus.text = "✅ Recording complete"
+        tvSummaryStatus.text = "Generating Summary…"
         btnPause.isEnabled = false
+        btnSwitch.isEnabled = false
         btnEndMeeting.isEnabled = false
-        
+
         if (audioFilePath == null) {
             Toast.makeText(this, "No audio recorded", Toast.LENGTH_SHORT).show()
             meetingManager.cancelActiveMeeting()
@@ -294,8 +297,8 @@ class ActiveMeetingActivity : AppCompatActivity() {
             try {
                 // Step 1: Transcribe audio
                 runOnUiThread {
-                    tvStatus.text = "🎙️ Transcribing audio..."
-                    tvTranscript.text = "Processing audio file...\n\nThis may take a moment."
+                    tvSummaryStatus.text = "Transcribing audio…"
+                    tvTranscript.text = "Please wait while your audio is being processed.\nThis may take a few moments."
                 }
                 
                 val transcript = transcribeAudioWithGemini(audioFilePath!!)
@@ -312,7 +315,7 @@ class ActiveMeetingActivity : AppCompatActivity() {
                 
                 // Step 2: Generate summary
                 runOnUiThread {
-                    tvStatus.text = "📝 Generating summary..."
+                    tvSummaryStatus.text = "Generating Summary…"
                 }
                 
                 val summary = generateMeetingSummary(transcript)
@@ -675,7 +678,7 @@ class ActiveMeetingActivity : AppCompatActivity() {
             val durationMs = System.currentTimeMillis() - meeting.startTime
             val minutes = (durationMs / 1000 / 60).toInt()
             val seconds = ((durationMs / 1000) % 60).toInt()
-            tvDuration.text = String.format("%02d:%02d", minutes, seconds)
+            tvDuration.text = String.format("%02d :\n%02d", minutes, seconds)
         }
     }
     

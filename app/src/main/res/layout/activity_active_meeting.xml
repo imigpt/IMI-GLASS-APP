@@ -1,223 +1,233 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@drawable/bg_app_gradient"
-    android:orientation="vertical">
+    android:background="@drawable/mm_bg_gradient">
 
-    <!-- Toolbar -->
-    <com.google.android.material.appbar.AppBarLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:background="@color/glass_surface_elevated">
-
-        <androidx.appcompat.widget.Toolbar
-            android:id="@+id/toolbar"
-            android:layout_width="match_parent"
-            android:layout_height="?attr/actionBarSize"
-            android:background="@color/glass_surface_elevated"
-            app:title="Meeting Minutes"
-            app:titleTextColor="#FFFFFF"
-            app:navigationIcon="@android:drawable/ic_menu_close_clear_cancel" />
-
-    </com.google.android.material.appbar.AppBarLayout>
-
-    <!-- Content -->
-    <ScrollView
-        android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="1"
-        android:fillViewport="true">
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="vertical"
-            android:padding="20dp">
-
-            <!-- Meeting Title Card -->
-            <androidx.cardview.widget.CardView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginBottom="16dp"
-                app:cardBackgroundColor="@color/glass_surface"
-                app:cardCornerRadius="12dp"
-                app:cardElevation="4dp">
-
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:orientation="vertical"
-                    android:padding="16dp">
-
-                    <TextView
-                        android:id="@+id/tv_meeting_title"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:text="Team Meeting"
-                        android:textColor="#FFFFFF"
-                        android:textSize="20sp"
-                        android:textStyle="bold" />
-
-                    <LinearLayout
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="8dp"
-                        android:orientation="horizontal">
-
-                        <TextView
-                            android:layout_width="0dp"
-                            android:layout_height="wrap_content"
-                            android:layout_weight="1"
-                            android:text="⏱️ Duration:"
-                            android:textColor="#888888"
-                            android:textSize="14sp" />
-
-                        <TextView
-                            android:id="@+id/tv_duration"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:text="00:00"
-                            android:textColor="@color/glass_primary"
-                            android:textSize="14sp"
-                            android:textStyle="bold" />
-
-                    </LinearLayout>
-
-                    <!-- Word count removed - will be calculated from final transcript -->
-
-                </LinearLayout>
-
-            </androidx.cardview.widget.CardView>
-
-            <!-- Status Indicator -->
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginBottom="16dp"
-                android:gravity="center"
-                android:orientation="vertical">
-
-                <LinearLayout
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:gravity="center"
-                    android:orientation="horizontal">
-
-                    <View
-                        android:id="@+id/indicator_recording"
-                        android:layout_width="12dp"
-                        android:layout_height="12dp"
-                        android:background="@drawable/recording_indicator" />
-
-                    <TextView
-                        android:id="@+id/tv_status"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:layout_marginStart="8dp"
-                        android:text="🎙️ Recording..."
-                        android:textColor="#FFFFFF"
-                        android:textSize="16sp" />
-
-                </LinearLayout>
-
-                <!-- Live Participants Count -->
-                <TextView
-                    android:id="@+id/tv_live_participants"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:padding="6dp"
-                    android:background="@drawable/info_badge_bg"
-                    android:text="👥 Detecting participants..."
-                    android:textColor="@color/glass_primary"
-                    android:textSize="13sp"
-                    android:textStyle="bold"
-                    android:visibility="gone" />
-
-            </LinearLayout>
-
-            <!-- Live Transcript Card -->
-            <androidx.cardview.widget.CardView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginBottom="16dp"
-                app:cardBackgroundColor="@color/glass_surface"
-                app:cardCornerRadius="12dp"
-                app:cardElevation="4dp">
-
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:orientation="vertical"
-                    android:padding="16dp">
-
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="Live Transcript"
-                        android:textColor="@color/glass_primary"
-                        android:textSize="14sp"
-                        android:textStyle="bold" />
-
-                    <ScrollView
-                        android:layout_width="match_parent"
-                        android:layout_height="300dp"
-                        android:layout_marginTop="12dp"
-                        android:scrollbars="vertical">
-
-                        <TextView
-                            android:id="@+id/tv_transcript"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:lineSpacingExtra="4dp"
-                            android:text="Speech will appear here..."
-                            android:textColor="#CCCCCC"
-                            android:textSize="14sp" />
-
-                    </ScrollView>
-
-                </LinearLayout>
-
-            </androidx.cardview.widget.CardView>
-
-        </LinearLayout>
-
-    </ScrollView>
-
-    <!-- Action Buttons -->
+    <!-- Header: back arrow + title -->
     <LinearLayout
+        android:id="@+id/header"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:background="@color/glass_surface_elevated"
-        android:gravity="center"
+        android:layout_alignParentTop="true"
+        android:gravity="center_vertical"
         android:orientation="horizontal"
-        android:padding="16dp">
+        android:paddingHorizontal="16dp"
+        android:paddingTop="40dp"
+        android:paddingBottom="12dp">
 
-        <Button
-            android:id="@+id/btn_pause"
-            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
-            android:layout_width="0dp"
-            android:layout_height="56dp"
-            android:layout_marginEnd="8dp"
-            android:layout_weight="1"
-            android:text="⏸️ Pause"
-            android:textColor="@color/glass_primary"
-            app:strokeColor="@color/glass_primary"
-            app:strokeWidth="2dp" />
+        <ImageView
+            android:id="@+id/btn_back"
+            android:layout_width="32dp"
+            android:layout_height="32dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Back"
+            android:padding="4dp"
+            android:src="@drawable/ic_arrow_back"
+            app:tint="#FFFFFF" />
 
-        <Button
-            android:id="@+id/btn_end_meeting"
-            style="@style/Widget.MaterialComponents.Button"
-            android:layout_width="0dp"
-            android:layout_height="56dp"
-            android:layout_marginStart="8dp"
-            android:layout_weight="1"
-            android:backgroundTint="@color/glass_primary_deep"
-            android:text="⏹️ End Meeting"
-            android:textColor="#FFFFFF" />
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="12dp"
+            android:text="Meeting Minutes"
+            android:textColor="#FFFFFF"
+            android:textSize="20sp"
+            android:textStyle="bold" />
 
     </LinearLayout>
 
-</LinearLayout>
+    <!-- Title pill -->
+    <TextView
+        android:id="@+id/tv_meeting_title"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_below="@id/header"
+        android:layout_marginHorizontal="16dp"
+        android:layout_marginTop="8dp"
+        android:background="@drawable/mm_title_pill"
+        android:gravity="center"
+        android:paddingVertical="16dp"
+        android:text="Title: Health &amp; Fitness"
+        android:textColor="#FFFFFF"
+        android:textSize="16sp"
+        android:textStyle="bold" />
+
+    <!-- Recording status row -->
+    <LinearLayout
+        android:id="@+id/status_row"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_below="@id/tv_meeting_title"
+        android:layout_centerHorizontal="true"
+        android:layout_marginTop="14dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <View
+            android:id="@+id/indicator_recording"
+            android:layout_width="9dp"
+            android:layout_height="9dp"
+            android:layout_marginEnd="8dp"
+            android:background="@drawable/recording_indicator" />
+
+        <TextView
+            android:id="@+id/tv_status"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="🎙️ Recording audio"
+            android:textColor="#FFFFFF"
+            android:textSize="14sp" />
+
+    </LinearLayout>
+
+    <!-- Live participants (hidden until detected) -->
+    <TextView
+        android:id="@+id/tv_live_participants"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_below="@id/status_row"
+        android:layout_centerHorizontal="true"
+        android:layout_marginTop="6dp"
+        android:text="👥 Detecting participants…"
+        android:textColor="#FF8C3A"
+        android:textSize="12sp"
+        android:visibility="gone" />
+
+    <!-- Center area: glowing timer OR summary generation -->
+    <FrameLayout
+        android:id="@+id/center_area"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_above="@id/control_bar"
+        android:layout_below="@id/tv_live_participants">
+
+        <!-- Glowing timer (visible while recording) -->
+        <FrameLayout
+            android:id="@+id/timer_container"
+            android:layout_width="260dp"
+            android:layout_height="260dp"
+            android:layout_gravity="center">
+
+            <View
+                android:layout_width="260dp"
+                android:layout_height="260dp"
+                android:layout_gravity="center"
+                android:background="@drawable/mm_timer_glow" />
+
+            <FrameLayout
+                android:layout_width="190dp"
+                android:layout_height="190dp"
+                android:layout_gravity="center"
+                android:background="@drawable/mm_timer_inner">
+
+                <TextView
+                    android:id="@+id/tv_duration"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="center"
+                    android:gravity="center"
+                    android:text="00 :\n00"
+                    android:textColor="#FFFFFF"
+                    android:textSize="40sp"
+                    android:textStyle="bold" />
+
+            </FrameLayout>
+
+        </FrameLayout>
+
+        <!-- Summary generation (visible after meeting ends) -->
+        <LinearLayout
+            android:id="@+id/summary_container"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:gravity="center"
+            android:orientation="vertical"
+            android:paddingHorizontal="32dp"
+            android:visibility="gone">
+
+            <ImageView
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:contentDescription="Processing"
+                android:src="@drawable/ic_waveform"
+                app:tint="#FF8C3A" />
+
+            <TextView
+                android:id="@+id/tv_summary_status"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:text="Generating Summary…"
+                android:textColor="#FFFFFF"
+                android:textSize="18sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/tv_transcript"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:gravity="center"
+                android:text="Please wait while your audio is being processed.\nThis may take a few moments."
+                android:textColor="#AAAAAA"
+                android:textSize="13sp" />
+
+        </LinearLayout>
+
+    </FrameLayout>
+
+    <!-- Bottom control bar -->
+    <LinearLayout
+        android:id="@+id/control_bar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_alignParentBottom="true"
+        android:layout_marginHorizontal="24dp"
+        android:layout_marginBottom="28dp"
+        android:background="@drawable/mm_control_bar"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingHorizontal="32dp"
+        android:paddingVertical="14dp">
+
+        <!-- Switch / restart -->
+        <ImageView
+            android:id="@+id/btn_switch"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_weight="1"
+            android:background="@drawable/mm_ctrl_circle"
+            android:contentDescription="Switch"
+            android:padding="13dp"
+            android:src="@drawable/ic_sync"
+            app:tint="#FFFFFF" />
+
+        <!-- Stop (end meeting) -->
+        <ImageView
+            android:id="@+id/btn_end_meeting"
+            android:layout_width="64dp"
+            android:layout_height="64dp"
+            android:layout_weight="1"
+            android:background="@drawable/mm_ctrl_stop"
+            android:contentDescription="Stop meeting"
+            android:padding="20dp"
+            android:src="@drawable/ic_stop_square"
+            app:tint="#FFFFFF" />
+
+        <!-- Pause / resume -->
+        <ImageView
+            android:id="@+id/btn_pause"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_weight="1"
+            android:background="@drawable/mm_ctrl_circle"
+            android:contentDescription="Pause"
+            android:padding="14dp"
+            android:src="@drawable/ic_pause_bars"
+            app:tint="#FFFFFF" />
+
+    </LinearLayout>
+
+</RelativeLayout>

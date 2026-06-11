@@ -33,6 +33,14 @@ data class MeetingMinute(
         val sdf = java.text.SimpleDateFormat("MMM dd, yyyy", java.util.Locale.getDefault())
         return sdf.format(java.util.Date(startTime))
     }
+
+    /** Start - End time range, e.g. "9:00 - 10:00 AM", for the meeting list cards */
+    fun getTimeRange(): String {
+        val sdf = java.text.SimpleDateFormat("h:mm a", java.util.Locale.getDefault())
+        val start = sdf.format(java.util.Date(startTime))
+        val end = sdf.format(java.util.Date(endTime))
+        return "$start - $end"
+    }
     
     fun getWordCount(): Int {
         return transcript.split("\\s+".toRegex()).filter { it.isNotEmpty() }.size

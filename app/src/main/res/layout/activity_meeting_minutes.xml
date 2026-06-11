@@ -1,118 +1,152 @@
 <?xml version="1.0" encoding="utf-8"?>
-<androidx.coordinatorlayout.widget.CoordinatorLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#1A1A1A">
+    android:background="@drawable/mm_bg_gradient">
 
-    <!-- Toolbar with Gradient Header -->
-    <com.google.android.material.appbar.AppBarLayout
+    <!-- Header: back arrow + title -->
+    <LinearLayout
+        android:id="@+id/header"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:background="@drawable/toolbar_gradient"
-        app:elevation="4dp">
+        android:layout_alignParentTop="true"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingHorizontal="16dp"
+        android:paddingTop="40dp"
+        android:paddingBottom="16dp">
 
-        <androidx.appcompat.widget.Toolbar
-            android:id="@+id/toolbar"
-            android:layout_width="match_parent"
-            android:layout_height="?attr/actionBarSize"
-            android:background="@android:color/transparent"
-            app:title="Meeting Minutes"
-            app:titleTextColor="#FFFFFF"
-            app:navigationIcon="@android:drawable/ic_menu_revert" />
+        <ImageView
+            android:id="@+id/btn_back"
+            android:layout_width="32dp"
+            android:layout_height="32dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Back"
+            android:padding="4dp"
+            android:src="@drawable/ic_arrow_back"
+            app:tint="#FFFFFF" />
 
-        <!-- Subtitle -->
         <TextView
-            android:layout_width="match_parent"
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:paddingHorizontal="16dp"
-            android:paddingBottom="12dp"
-            android:text="View and manage your recorded meetings"
-            android:textColor="#B0E0FF"
-            android:textSize="13sp" />
+            android:layout_marginStart="12dp"
+            android:text="Meeting Minutes"
+            android:textColor="#FFFFFF"
+            android:textSize="20sp"
+            android:textStyle="bold" />
 
-    </com.google.android.material.appbar.AppBarLayout>
+    </LinearLayout>
 
-    <!-- Main Content -->
-    <androidx.core.widget.NestedScrollView
-        android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        app:layout_behavior="@string/appbar_scrolling_view_behavior">
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="vertical"
-            android:padding="16dp">
-
-            <!-- Empty State -->
-            <LinearLayout
-                android:id="@+id/layout_empty_state"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_gravity="center"
-                android:layout_marginTop="100dp"
-                android:gravity="center"
-                android:orientation="vertical"
-                android:visibility="gone">
-
-                <!-- Icon with Gradient Background -->
-                <TextView
-                    android:layout_width="80dp"
-                    android:layout_height="80dp"
-                    android:background="@drawable/empty_state_icon_bg"
-                    android:gravity="center"
-                    android:text="🎤"
-                    android:textSize="48sp" />
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="24dp"
-                    android:text="No meeting minutes yet"
-                    android:textColor="#999999"
-                    android:textSize="20sp"
-                    android:textStyle="bold" />
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="12dp"
-                    android:gravity="center"
-                    android:paddingHorizontal="32dp"
-                    android:text="Say &quot;Start Meeting Minutes&quot; or tap the button below to begin recording"
-                    android:textAlignment="center"
-                    android:textColor="#666666"
-                    android:textSize="15sp" />
-
-            </LinearLayout>
-
-            <!-- RecyclerView for Meetings -->
-            <androidx.recyclerview.widget.RecyclerView
-                android:id="@+id/rv_meetings"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:clipToPadding="false"
-                android:paddingTop="8dp"
-                android:paddingBottom="100dp" />
-
-        </LinearLayout>
-
-    </androidx.core.widget.NestedScrollView>
-
-    <!-- FAB to Start New Meeting -->
-    <com.google.android.material.floatingactionbutton.FloatingActionButton
-        android:id="@+id/fab_new_meeting"
+    <!-- "Today" section label -->
+    <TextView
+        android:id="@+id/tv_section_today"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_gravity="bottom|end"
-        android:layout_margin="28dp"
-        android:contentDescription="Start new meeting"
-        android:src="@android:drawable/ic_btn_speak_now"
-        app:backgroundTint="#00D9FF"
-        app:borderWidth="0dp"
-        app:elevation="8dp"
-        app:fabSize="normal"
-        app:tint="#1A1A1A" />
+        android:layout_below="@id/header"
+        android:layout_marginStart="20dp"
+        android:layout_marginTop="8dp"
+        android:layout_marginBottom="8dp"
+        android:text="Today"
+        android:textColor="#FFFFFF"
+        android:textSize="22sp"
+        android:textStyle="bold" />
 
-</androidx.coordinatorlayout.widget.CoordinatorLayout>
+    <!-- Empty state -->
+    <LinearLayout
+        android:id="@+id/layout_empty_state"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_below="@id/tv_section_today"
+        android:layout_marginTop="60dp"
+        android:gravity="center"
+        android:orientation="vertical"
+        android:visibility="gone">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="No meetings yet"
+            android:textColor="#999999"
+            android:textSize="18sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:gravity="center"
+            android:paddingHorizontal="40dp"
+            android:text="Tap the mic below to start recording a meeting"
+            android:textColor="#777777"
+            android:textSize="14sp" />
+
+    </LinearLayout>
+
+    <!-- Meeting list -->
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/rv_meetings"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_above="@id/mic_section"
+        android:layout_below="@id/tv_section_today"
+        android:clipToPadding="false"
+        android:paddingHorizontal="16dp"
+        android:paddingTop="4dp"
+        android:paddingBottom="16dp" />
+
+    <!-- Mic section at the bottom -->
+    <LinearLayout
+        android:id="@+id/mic_section"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_alignParentBottom="true"
+        android:gravity="center"
+        android:orientation="vertical"
+        android:paddingBottom="32dp">
+
+        <FrameLayout
+            android:layout_width="160dp"
+            android:layout_height="160dp">
+
+            <!-- Outer faint ring -->
+            <View
+                android:layout_width="160dp"
+                android:layout_height="160dp"
+                android:layout_gravity="center"
+                android:background="@drawable/mm_mic_ring" />
+
+            <!-- Mid faint ring -->
+            <View
+                android:layout_width="128dp"
+                android:layout_height="128dp"
+                android:layout_gravity="center"
+                android:background="@drawable/mm_mic_ring" />
+
+            <!-- Mic button -->
+            <ImageView
+                android:id="@+id/btn_start_mic"
+                android:layout_width="92dp"
+                android:layout_height="92dp"
+                android:layout_gravity="center"
+                android:background="@drawable/mm_mic_button"
+                android:clickable="true"
+                android:contentDescription="Start meeting"
+                android:focusable="true"
+                android:padding="26dp"
+                android:src="@drawable/ic_mic"
+                app:tint="#FFFFFF" />
+
+        </FrameLayout>
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="Start Meeting Minutes"
+            android:textColor="#DDDDDD"
+            android:textSize="15sp" />
+
+    </LinearLayout>
+
+</RelativeLayout>

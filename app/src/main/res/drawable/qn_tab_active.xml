@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Active (selected) tab pill - orange gradient -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <gradient
+        android:angle="0"
+        android:startColor="#FF8C3A"
+        android:endColor="#E5702A"
+        android:type="linear" />
+    <corners android:radius="100dp" />
+</shape>

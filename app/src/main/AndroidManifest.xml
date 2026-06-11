@@ -201,10 +201,16 @@
             android:label="User AI Summary" />
 
         <!-- QUICK NOTES - USER NOTES AND AI REMINDERS -->
-        <activity 
+        <activity
             android:name=".ui.QuickNotesActivity"
             android:exported="false"
             android:label="Quick Notes" />
+
+        <activity
+            android:name=".ui.NoteEditorActivity"
+            android:exported="false"
+            android:label="Note"
+            android:windowSoftInputMode="adjustResize" />
             
         <!-- MEETING MINUTES - SPEECH-TO-TEXT AND SUMMARIZATION -->
         <activity
