@@ -82,4 +82,18 @@
     <color name="error_red">@color/error_muted</color>
     <color name="info_blue">@color/info_muted</color>
 
+    <!-- Mark 1 Home Screen -->
+    <color name="home_bg_top">#FF7F2E</color>
+    <color name="home_bg_mid">#1C1B33</color>
+    <color name="home_bg_bottom">#000000</color>
+    <color name="home_card">#191C1B</color>
+    <color name="home_card_stroke">#D87D41</color>
+    <color name="home_hero_start">#3D200A</color>
+    <color name="home_hero_end">#1A0D02</color>
+    <color name="home_accent_orange">#FF7F2E</color>
+    <color name="home_accent_orange_end">#D87D41</color>
+    <color name="home_tile_bg">#191C1B</color>
+    <color name="home_tile_stroke">#D87D41</color>
+    <color name="home_nav_bg">#191C1B</color>
+
 </resources>

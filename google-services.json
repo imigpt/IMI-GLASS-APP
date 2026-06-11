@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "24880818190",
+    "project_id": "imi-glasses",
+    "storage_bucket": "imi-glasses.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:24880818190:android:a200b741852f348221b45f",
+        "android_client_info": {
+          "package_name": "com.aselea.imiglass"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBq1XRWKHlj2UdVjHzuswBQH9YGkT98AhI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

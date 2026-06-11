@@ -208,13 +208,28 @@ class DeviceBindActivity : BaseActivity() {
         }
     }
 
+    @SuppressLint("MissingPermission")
     private fun handleHfpConnectionSuccess() {
         mainHandler.removeCallbacksAndMessages(null)
         Log.d("DeviceBindActivity", "🎧 HFP Connected (no forced SCO in bind flow)")
         Toast.makeText(this, "🎧 Glass audio profile connected", Toast.LENGTH_SHORT).show()
         Log.d("DeviceBindActivity", "✅ Both BLE and Audio connections active")
+        setDeviceAliasIfSupported()
         cleanUpReceivers()
         mainHandler.postDelayed({ finish() }, 500)
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun setDeviceAliasIfSupported() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
+        val address = connectedDeviceAddress ?: return
+        try {
+            val device = BluetoothAdapter.getDefaultAdapter().getRemoteDevice(address)
+            device.setAlias("IMI Glasses")
+            Log.d("DeviceBindActivity", "✅ Device alias set to 'IMI Glasses'")
+        } catch (e: Exception) {
+            Log.w("DeviceBindActivity", "Could not set device alias: ${e.message}")
+        }
     }
 
     private fun cleanUpReceivers() {

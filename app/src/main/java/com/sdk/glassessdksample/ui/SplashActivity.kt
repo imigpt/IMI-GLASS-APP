@@ -9,6 +9,10 @@ import android.widget.ImageView
 import androidx.appcompat.app.AppCompatActivity
 import com.sdk.glassessdksample.R
 import java.io.IOException
+import com.sdk.glassessdksample.ui.DevicePreferenceManager
+import com.sdk.glassessdksample.ui.DeviceType
+import com.sdk.glassessdksample.ui.DeviceSelectionActivity
+import com.sdk.glassessdksample.ui.Mark1MainActivity
 
 class SplashActivity : AppCompatActivity() {
     
@@ -50,8 +54,8 @@ class SplashActivity : AppCompatActivity() {
                         Intent(this, OnboardingActivity::class.java)
                     }
                     else -> {
-                        // User logged in and completed onboarding, go to main screen
-                        Intent(this, com.sdk.glassessdksample.MainActivity::class.java)
+                        // Always show device selection so user can switch models
+                        Intent(this, DeviceSelectionActivity::class.java)
                     }
                 }
                 startActivity(intent)
