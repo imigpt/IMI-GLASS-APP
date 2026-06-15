@@ -158,6 +158,22 @@
         <item name="android:windowExitAnimation">@anim/anim_connecting_dialog_exit</item>
     </style>
 
+    <style name="SwitchDeviceBottomSheetStyle" parent="Theme.Material3.DayNight.BottomSheetDialog">
+        <item name="bottomSheetStyle">@style/SwitchDeviceBottomSheet</item>
+    </style>
+
+    <style name="SwitchDeviceBottomSheet" parent="Widget.Material3.BottomSheet.Modal">
+        <item name="backgroundTint">#1A1209</item>
+        <item name="shapeAppearance">@style/SwitchDeviceShapeAppearance</item>
+    </style>
+
+    <style name="SwitchDeviceShapeAppearance" parent="ShapeAppearance.Material3.LargeComponent">
+        <item name="cornerSizeTopLeft">28dp</item>
+        <item name="cornerSizeTopRight">28dp</item>
+        <item name="cornerSizeBottomLeft">0dp</item>
+        <item name="cornerSizeBottomRight">0dp</item>
+    </style>
+
     <style name="Theme.TransparentDialog" parent="android:Theme.Dialog">
         <item name="android:windowBackground">@android:color/transparent</item>
         <item name="android:windowIsTranslucent">true</item>

@@ -5,11 +5,10 @@
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:orientation="vertical"
-    android:background="@drawable/bg_switch_device_dialog"
     android:paddingStart="24dp"
     android:paddingEnd="24dp"
-    android:paddingTop="28dp"
-    android:paddingBottom="24dp">
+    android:paddingTop="32dp"
+    android:paddingBottom="32dp">
 
     <!-- Title -->
     <TextView
@@ -17,7 +16,7 @@
         android:layout_height="wrap_content"
         android:text="Switch Device"
         android:textColor="#FF7F2E"
-        android:textSize="20sp"
+        android:textSize="22sp"
         android:textStyle="bold"
         android:layout_gravity="center_horizontal"
         android:layout_marginBottom="6dp" />
@@ -28,16 +27,16 @@
         android:layout_height="wrap_content"
         android:text="Choose one option"
         android:textColor="#AAFFFFFF"
-        android:textSize="13sp"
+        android:textSize="14sp"
         android:layout_gravity="center_horizontal"
-        android:layout_marginBottom="24dp" />
+        android:layout_marginBottom="28dp" />
 
     <!-- Device option cards row -->
     <LinearLayout
         android:layout_width="match_parent"
-        android:layout_height="140dp"
+        android:layout_height="180dp"
         android:orientation="horizontal"
-        android:layout_marginBottom="24dp">
+        android:layout_marginBottom="28dp">
 
         <!-- Mark I card -->
         <LinearLayout
@@ -48,7 +47,7 @@
             android:orientation="vertical"
             android:gravity="center"
             android:background="@drawable/bg_switch_device_card_selected"
-            android:layout_marginEnd="10dp"
+            android:layout_marginEnd="12dp"
             android:clickable="true"
             android:focusable="true">
 
@@ -57,7 +56,7 @@
                 android:layout_height="wrap_content"
                 android:text="IMI"
                 android:textColor="#FFFFFF"
-                android:textSize="16sp"
+                android:textSize="18sp"
                 android:textStyle="bold"
                 android:letterSpacing="0.08" />
 
@@ -66,14 +65,14 @@
                 android:layout_height="wrap_content"
                 android:text="MARK I"
                 android:textColor="#FFFFFF"
-                android:textSize="13sp"
+                android:textSize="14sp"
                 android:textStyle="bold"
                 android:letterSpacing="0.05"
-                android:layout_marginBottom="10dp" />
+                android:layout_marginBottom="16dp" />
 
             <ImageView
-                android:layout_width="72dp"
-                android:layout_height="40dp"
+                android:layout_width="90dp"
+                android:layout_height="50dp"
                 android:src="@drawable/glasses_mark1"
                 android:scaleType="fitCenter" />
         </LinearLayout>
@@ -87,7 +86,7 @@
             android:orientation="vertical"
             android:gravity="center"
             android:background="@drawable/bg_switch_device_card_plain"
-            android:layout_marginStart="10dp"
+            android:layout_marginStart="12dp"
             android:clickable="true"
             android:focusable="true">
 
@@ -96,7 +95,7 @@
                 android:layout_height="wrap_content"
                 android:text="IMI"
                 android:textColor="#FFFFFF"
-                android:textSize="16sp"
+                android:textSize="18sp"
                 android:textStyle="bold"
                 android:letterSpacing="0.08" />
 
@@ -105,14 +104,14 @@
                 android:layout_height="wrap_content"
                 android:text="MARK II"
                 android:textColor="#FFFFFF"
-                android:textSize="13sp"
+                android:textSize="14sp"
                 android:textStyle="bold"
                 android:letterSpacing="0.05"
-                android:layout_marginBottom="10dp" />
+                android:layout_marginBottom="16dp" />
 
             <ImageView
-                android:layout_width="72dp"
-                android:layout_height="40dp"
+                android:layout_width="90dp"
+                android:layout_height="50dp"
                 android:src="@drawable/glasses_mark2"
                 android:scaleType="fitCenter" />
         </LinearLayout>
@@ -122,15 +121,15 @@
     <com.google.android.material.button.MaterialButton
         android:id="@+id/btnSwitchConfirm"
         android:layout_width="match_parent"
-        android:layout_height="50dp"
+        android:layout_height="54dp"
         android:text="Switch"
         android:textColor="#FFFFFF"
-        android:textSize="16sp"
+        android:textSize="17sp"
         android:textStyle="bold"
         android:textAllCaps="false"
         app:backgroundTint="#FF7F2E"
-        app:cornerRadius="25dp"
-        android:layout_marginBottom="12dp" />
+        app:cornerRadius="27dp"
+        android:layout_marginBottom="14dp" />
 
     <!-- Not Now -->
     <TextView

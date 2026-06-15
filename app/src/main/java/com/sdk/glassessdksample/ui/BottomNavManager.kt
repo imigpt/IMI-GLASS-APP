@@ -7,7 +7,7 @@ import com.sdk.glassessdksample.MainActivity
 import com.sdk.glassessdksample.MoreActivity
 import com.sdk.glassessdksample.ProfileActivity
 import com.sdk.glassessdksample.R
-import com.sdk.glassessdksample.SettingsActivity
+import com.sdk.glassessdksample.ui.ChatActivity
 
 object BottomNavManager {
 
@@ -25,7 +25,7 @@ object BottomNavManager {
     private fun navigate(activity: Activity, destinationId: Int) {
         val target = when (destinationId) {
             R.id.nav_home -> MainActivity::class.java
-            R.id.nav_settings -> SettingsActivity::class.java
+            R.id.nav_chat -> ChatActivity::class.java
             R.id.nav_profile -> ProfileActivity::class.java
             R.id.nav_more -> MoreActivity::class.java
             else -> return

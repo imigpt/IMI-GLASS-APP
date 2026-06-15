@@ -26,7 +26,7 @@ class SettingsActivity : AppCompatActivity() {
         setContentView(binding.root)
 
         setupSettings()
-        Mark1BottomNavManager.setup(this, binding.bottomNavigation, R.id.nav_settings)
+        Mark1BottomNavManager.setup(this, binding.bottomNavigation, R.id.nav_profile)
     }
 
     override fun onResume() {

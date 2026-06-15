@@ -53,17 +53,12 @@ class ProfileActivity : AppCompatActivity() {
     }
 
     private fun showSwitchDeviceDialog() {
-        val current = DevicePreferenceManager.getDeviceType(this)
+        val current = DevicePreferenceManager.getDeviceType(this) ?: DeviceType.MARK1
         var selected = current
 
-        val dialog = android.app.Dialog(this, R.style.Theme_TransparentDialog)
+        val sheet = BottomSheetDialog(this, R.style.SwitchDeviceBottomSheetStyle)
         val view = layoutInflater.inflate(R.layout.dialog_switch_device, null)
-        dialog.setContentView(view)
-        dialog.window?.setLayout(
-            (resources.displayMetrics.widthPixels * 0.88).toInt(),
-            android.view.ViewGroup.LayoutParams.WRAP_CONTENT
-        )
-        dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
+        sheet.setContentView(view)
 
         val cardMark1 = view.findViewById<LinearLayout>(R.id.cardMark1)
         val cardMark2 = view.findViewById<LinearLayout>(R.id.cardMark2)
@@ -86,25 +81,23 @@ class ProfileActivity : AppCompatActivity() {
         cardMark2.setOnClickListener { updateSelection(DeviceType.MARK2) }
 
         view.findViewById<com.google.android.material.button.MaterialButton>(R.id.btnSwitchConfirm).setOnClickListener {
-            dialog.dismiss()
-            if (selected != current) {
-                DevicePreferenceManager.setDeviceType(this, selected)
-                val target = if (selected == DeviceType.MARK2)
-                    MainActivity::class.java
-                else
-                    com.sdk.glassessdksample.ui.Mark1MainActivity::class.java
-                startActivity(Intent(this, target).apply {
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
-                })
-                finish()
-            }
+            sheet.dismiss()
+            DevicePreferenceManager.setDeviceType(this, selected)
+            val target = if (selected == DeviceType.MARK2)
+                MainActivity::class.java
+            else
+                com.sdk.glassessdksample.ui.Mark1MainActivity::class.java
+            startActivity(Intent(this, target).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+            })
+            finish()
         }
 
         view.findViewById<TextView>(R.id.btnNotNow).setOnClickListener {
-            dialog.dismiss()
+            sheet.dismiss()
         }
 
-        dialog.show()
+        sheet.show()
     }
 
     private fun setupUI() {

@@ -6,7 +6,7 @@ import com.google.android.material.bottomnavigation.BottomNavigationView
 import com.sdk.glassessdksample.MoreActivity
 import com.sdk.glassessdksample.ProfileActivity
 import com.sdk.glassessdksample.R
-import com.sdk.glassessdksample.SettingsActivity
+import com.sdk.glassessdksample.ui.ChatActivity
 
 object Mark1BottomNavManager {
 
@@ -17,7 +17,7 @@ object Mark1BottomNavManager {
             if (item.itemId == selectedItemId) return@setOnItemSelectedListener true
             val intent: Intent? = when (item.itemId) {
                 R.id.nav_home -> Intent(activity, Mark1MainActivity::class.java)
-                R.id.nav_settings -> Intent(activity, SettingsActivity::class.java)
+                R.id.nav_chat -> Intent(activity, ChatActivity::class.java)
                 R.id.nav_more -> Intent(activity, MoreActivity::class.java)
                 R.id.nav_profile -> Intent(activity, ProfileActivity::class.java)
                 else -> null
