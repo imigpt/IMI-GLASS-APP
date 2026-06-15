@@ -119,6 +119,17 @@
         <item name="fontFamily">@font/neue_plak</item>
     </style>
 
+    <!-- Home bottom-nav active indicator (filled orange circle behind active icon) -->
+    <style name="HomeNavActiveIndicator" parent="Widget.Material3.BottomNavigationView.ActiveIndicator">
+        <item name="android:width">44dp</item>
+        <item name="android:height">44dp</item>
+        <item name="marginHorizontal">0dp</item>
+        <item name="android:color">#FF7F2E</item>
+        <item name="shapeAppearance">@style/HomeNavActiveIndicatorShape</item>
+    </style>
+
+    <style name="HomeNavActiveIndicatorShape" parent="ShapeAppearance.Material3.Corner.Full" />
+
     <!-- Bottom Sheet Style (dark, rounded top corners) -->
     <style name="BottomSheetStyle" parent="Theme.Material3.DayNight.BottomSheetDialog">
         <item name="bottomSheetStyle">@style/BottomSheetModal</item>
@@ -145,6 +156,15 @@
     <style name="ConnectingDialogAnimation">
         <item name="android:windowEnterAnimation">@anim/anim_connecting_dialog_enter</item>
         <item name="android:windowExitAnimation">@anim/anim_connecting_dialog_exit</item>
+    </style>
+
+    <style name="Theme.TransparentDialog" parent="android:Theme.Dialog">
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowIsFloating">true</item>
+        <item name="android:backgroundDimEnabled">true</item>
+        <item name="android:backgroundDimAmount">0.6</item>
     </style>
 
 </resources>

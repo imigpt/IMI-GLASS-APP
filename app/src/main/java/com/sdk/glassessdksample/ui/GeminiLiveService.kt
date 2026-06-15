@@ -85,8 +85,8 @@ class GeminiLiveService(
          */
         fun getSavedModelProvider(context: Context): ModelProvider {
             val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
-            val saved = prefs.getString(PREF_KEY_MODEL, "gpt") ?: "gpt"
-            return if (saved == "gemini") ModelProvider.GEMINI_LIVE else ModelProvider.GPT_REALTIME
+            val saved = prefs.getString(PREF_KEY_MODEL, "gemini") ?: "gemini"
+            return if (saved == "gpt") ModelProvider.GPT_REALTIME else ModelProvider.GEMINI_LIVE
         }
         
         /**

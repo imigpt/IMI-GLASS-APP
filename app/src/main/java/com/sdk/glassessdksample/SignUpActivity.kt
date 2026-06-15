@@ -2,15 +2,16 @@ package com.sdk.glassessdksample
 
 import android.content.Intent
 import android.os.Bundle
-import android.widget.Button
-import android.widget.EditText
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import com.sdk.glassessdksample.auth.AuthApi
 import com.sdk.glassessdksample.databinding.ActivitySignUpBinding
 
 class SignUpActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivitySignUpBinding
+    private val authApi by lazy { AuthApi(this) }
+    private var isSubmitting = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -21,11 +22,6 @@ class SignUpActivity : AppCompatActivity() {
     }
 
     private fun setupUI() {
-        // Back button
-        binding.backButton.setOnClickListener {
-            finish()
-        }
-
         // Sign Up button
         binding.signUpButton.setOnClickListener {
             performSignUp()
@@ -39,6 +35,8 @@ class SignUpActivity : AppCompatActivity() {
     }
 
     private fun performSignUp() {
+        if (isSubmitting) return
+
         val fullName = binding.fullNameInput.text.toString().trim()
         val email = binding.emailInput.text.toString().trim()
         val password = binding.passwordInput.text.toString().trim()
@@ -65,22 +63,57 @@ class SignUpActivity : AppCompatActivity() {
             return
         }
 
-        // Save user data to SharedPreferences
-        val prefs = getSharedPreferences("user_prefs", MODE_PRIVATE)
-        prefs.edit().apply {
-            putString("user_name", fullName)
-            putString("user_email", email)
-            putBoolean("is_logged_in", true)
-            apply()
+        setSubmitting(true)
+        authApi.register(fullName, email, password, confirmPassword) { result ->
+            when (result) {
+                is AuthApi.Result.Success -> {
+                    // Registration succeeds but returns no token — log in to obtain one.
+                    loginAfterRegister(email, password)
+                }
+                is AuthApi.Result.Error -> {
+                    setSubmitting(false)
+                    showError(result.message)
+                }
+            }
         }
+    }
 
-        showSuccess("Account created successfully!")
-        
-        // Go to home screen after 2 seconds
-        binding.root.postDelayed({
-            startActivity(Intent(this, MainActivity::class.java))
-            finish()
-        }, 2000)
+    private fun loginAfterRegister(email: String, password: String) {
+        authApi.login(email, password) { result ->
+            setSubmitting(false)
+            when (result) {
+                is AuthApi.Result.Success -> {
+                    showSuccess("Account created successfully!")
+                    goToNextScreen()
+                }
+                is AuthApi.Result.Error -> {
+                    // Account exists now; send them to login to finish signing in.
+                    showError("Account created. Please log in. (${result.message})")
+                    startActivity(Intent(this, LoginActivity::class.java))
+                    finish()
+                }
+            }
+        }
+    }
+
+    private fun goToNextScreen() {
+        // Mirror SplashActivity routing: onboarding first, then device selection.
+        val prefs = getSharedPreferences("IMI_PREFS", MODE_PRIVATE)
+        val hasCompletedOnboarding = prefs.getBoolean("onboarding_completed", false)
+        val intent = if (hasCompletedOnboarding) {
+            Intent(this, com.sdk.glassessdksample.ui.DeviceSelectionActivity::class.java)
+        } else {
+            Intent(this, com.sdk.glassessdksample.ui.OnboardingActivity::class.java)
+        }
+        intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+        startActivity(intent)
+        finish()
+    }
+
+    private fun setSubmitting(submitting: Boolean) {
+        isSubmitting = submitting
+        binding.signUpButton.isEnabled = !submitting
+        binding.signUpButton.text = if (submitting) "Creating account…" else "Create Account"
     }
 
     private fun showError(message: String) {

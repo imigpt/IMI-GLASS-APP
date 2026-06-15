@@ -5,7 +5,6 @@ import android.os.Bundle
 import android.view.View
 import androidx.appcompat.app.AppCompatActivity
 import androidx.viewpager2.widget.ViewPager2
-import com.sdk.glassessdksample.MainActivity
 import com.sdk.glassessdksample.R
 import com.sdk.glassessdksample.databinding.ActivityOnboardingBinding
 
@@ -96,8 +95,8 @@ class OnboardingActivity : AppCompatActivity() {
         val sharedPreferences = getSharedPreferences("IMI_PREFS", MODE_PRIVATE)
         sharedPreferences.edit().putBoolean("onboarding_completed", true).apply()
         
-        // Navigate to main activity
-        startActivity(Intent(this, MainActivity::class.java))
+        // Navigate to device selection ("Choose Your Device")
+        startActivity(Intent(this, DeviceSelectionActivity::class.java))
         finish()
     }
 }

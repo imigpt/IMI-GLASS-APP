@@ -3,7 +3,6 @@ package com.sdk.glassessdksample.ui
 import android.app.Activity
 import android.content.Intent
 import com.google.android.material.bottomnavigation.BottomNavigationView
-import com.sdk.glassessdksample.CameraActivity
 import com.sdk.glassessdksample.MainActivity
 import com.sdk.glassessdksample.MoreActivity
 import com.sdk.glassessdksample.ProfileActivity
@@ -26,7 +25,6 @@ object BottomNavManager {
     private fun navigate(activity: Activity, destinationId: Int) {
         val target = when (destinationId) {
             R.id.nav_home -> MainActivity::class.java
-            R.id.nav_camera -> CameraActivity::class.java
             R.id.nav_settings -> SettingsActivity::class.java
             R.id.nav_profile -> ProfileActivity::class.java
             R.id.nav_more -> MoreActivity::class.java

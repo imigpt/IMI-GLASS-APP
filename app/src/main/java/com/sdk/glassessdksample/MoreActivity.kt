@@ -28,6 +28,7 @@ class MoreActivity : AppCompatActivity() {
     }
 
     private fun setupActions() {
+        binding.cardCamera.setOnClickListener { open(CameraActivity::class.java) }
         binding.cardQuickNotes.setOnClickListener { open(QuickNotesActivity::class.java) }
         binding.cardMeetingMinutes.setOnClickListener { open(MeetingMinutesActivity::class.java) }
         binding.cardConversationHistory.setOnClickListener { open(ConversationHistoryActivity::class.java) }

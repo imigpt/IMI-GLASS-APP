@@ -10,10 +10,10 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:orientation="vertical"
-        android:gravity="center"
+        android:gravity="center_horizontal"
         android:paddingStart="24dp"
         android:paddingEnd="24dp"
-        android:paddingTop="40dp"
+        android:paddingTop="72dp"
         android:paddingBottom="40dp">
 
         <!-- Header -->
@@ -22,184 +22,163 @@
             android:layout_height="wrap_content"
             android:text="Select Your Device"
             android:textColor="#FFFFFF"
-            android:textSize="26sp"
+            android:textSize="34sp"
             android:textStyle="bold"
-            android:layout_marginBottom="8dp" />
+            android:gravity="center"
+            android:layout_marginBottom="10dp" />
 
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="Choose your IMI Smart Glasses Model"
-            android:textColor="#88FFFFFF"
-            android:textSize="14sp"
-            android:layout_marginBottom="36dp" />
-
-        <!-- Mark 1 Card -->
-        <androidx.cardview.widget.CardView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            app:cardCornerRadius="20dp"
-            app:cardElevation="0dp"
-            app:cardBackgroundColor="@android:color/transparent"
-            android:layout_marginBottom="16dp">
-
-            <LinearLayout
-                android:id="@+id/btnSelectMark1"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:background="@drawable/bg_home_card"
-                android:padding="20dp"
-                android:clickable="true"
-                android:focusable="true">
-
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:orientation="horizontal"
-                    android:gravity="center_vertical"
-                    android:layout_marginBottom="16dp">
-
-                    <ImageView
-                        android:layout_width="32dp"
-                        android:layout_height="32dp"
-                        android:src="@drawable/ic_connect"
-                        android:tint="#4488FF" />
-
-                    <LinearLayout
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:layout_weight="1"
-                        android:orientation="vertical"
-                        android:layout_marginStart="14dp">
-
-                        <TextView
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:text="Mark I"
-                            android:textColor="#FFFFFF"
-                            android:textSize="20sp"
-                            android:textStyle="bold" />
-
-                        <TextView
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:text="Bluetooth · Voice · AI Assistant"
-                            android:textColor="#88FFFFFF"
-                            android:textSize="13sp"
-                            android:layout_marginTop="2dp" />
-                    </LinearLayout>
-                </LinearLayout>
-
-                <Button
-                    android:id="@+id/btnSelectMark1Action"
-                    android:layout_width="match_parent"
-                    android:layout_height="44dp"
-                    android:text="Select Mark I"
-                    android:textColor="#FFFFFF"
-                    android:textSize="14sp"
-                    android:textStyle="bold"
-                    android:background="@drawable/bg_home_btn_orange"
-                    android:stateListAnimator="@null"
-                    android:clickable="false"
-                    android:focusable="false" />
-            </LinearLayout>
-        </androidx.cardview.widget.CardView>
-
-        <!-- Mark 2 Card -->
-        <androidx.cardview.widget.CardView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            app:cardCornerRadius="20dp"
-            app:cardElevation="0dp"
-            app:cardBackgroundColor="@android:color/transparent">
-
-            <LinearLayout
-                android:id="@+id/btnSelectMark2"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:background="@drawable/bg_home_card"
-                android:padding="20dp"
-                android:clickable="true"
-                android:focusable="true">
-
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:orientation="horizontal"
-                    android:gravity="center_vertical"
-                    android:layout_marginBottom="16dp">
-
-                    <ImageView
-                        android:layout_width="32dp"
-                        android:layout_height="32dp"
-                        android:src="@drawable/ic_waveform"
-                        android:tint="#AA44FF" />
-
-                    <LinearLayout
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:layout_weight="1"
-                        android:orientation="vertical"
-                        android:layout_marginStart="14dp">
-
-                        <TextView
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:text="Mark II"
-                            android:textColor="#FFFFFF"
-                            android:textSize="20sp"
-                            android:textStyle="bold" />
-
-                        <TextView
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:text="Camera · AI Vision · Full SDK"
-                            android:textColor="#88FFFFFF"
-                            android:textSize="13sp"
-                            android:layout_marginTop="2dp" />
-                    </LinearLayout>
-                </LinearLayout>
-
-                <Button
-                    android:id="@+id/btnSelectMark2Action"
-                    android:layout_width="match_parent"
-                    android:layout_height="44dp"
-                    android:text="Select Mark II"
-                    android:textColor="#FFFFFF"
-                    android:textSize="14sp"
-                    android:textStyle="bold"
-                    android:background="@drawable/bg_home_btn_orange"
-                    android:stateListAnimator="@null"
-                    android:clickable="false"
-                    android:focusable="false" />
-            </LinearLayout>
-        </androidx.cardview.widget.CardView>
-
-        <!-- Info button -->
-        <LinearLayout
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal"
+            android:textColor="#99FFFFFF"
+            android:textSize="15sp"
             android:gravity="center"
-            android:layout_marginTop="28dp"
+            android:layout_marginBottom="44dp" />
+
+        <!-- Mark 1 Card (selected / highlighted) -->
+        <LinearLayout
+            android:id="@+id/btnSelectMark1"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="@drawable/bg_device_card_selected"
+            android:padding="22dp"
             android:clickable="true"
             android:focusable="true"
-            android:id="@+id/btnInfo">
+            android:layout_marginBottom="28dp">
 
-            <ImageView
-                android:layout_width="20dp"
-                android:layout_height="20dp"
-                android:src="@drawable/ic_manage"
-                android:tint="#88FFFFFF" />
-
-            <TextView
-                android:layout_width="wrap_content"
+            <LinearLayout
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text=" How to connect your glasses"
-                android:textColor="#88FFFFFF"
-                android:textSize="13sp" />
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginBottom="18dp">
+
+                <ImageView
+                    android:layout_width="52dp"
+                    android:layout_height="52dp"
+                    android:src="@drawable/glasses_mark1"
+                    android:scaleType="fitCenter"
+                    android:contentDescription="Mark I glasses" />
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical"
+                    android:layout_marginStart="16dp">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Mark I"
+                        android:textColor="#FFFFFF"
+                        android:textSize="26sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Bluetooth-Voice- AI Assistant"
+                        android:textColor="#B3FFFFFF"
+                        android:textSize="14sp"
+                        android:layout_marginTop="2dp" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- Divider -->
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:background="#33FFFFFF"
+                android:layout_marginBottom="18dp" />
+
+            <Button
+                android:id="@+id/btnSelectMark1Action"
+                android:layout_width="match_parent"
+                android:layout_height="52dp"
+                android:text="Select Mark I"
+                android:textColor="#FFFFFF"
+                android:textSize="17sp"
+                android:textStyle="bold"
+                android:textAllCaps="false"
+                android:background="@drawable/bg_device_btn_pill"
+                android:stateListAnimator="@null"
+                android:clickable="false"
+                android:focusable="false" />
+        </LinearLayout>
+
+        <!-- Mark 2 Card (plain) -->
+        <LinearLayout
+            android:id="@+id/btnSelectMark2"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="@drawable/bg_device_card_plain"
+            android:padding="22dp"
+            android:clickable="true"
+            android:focusable="true">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginBottom="18dp">
+
+                <ImageView
+                    android:layout_width="52dp"
+                    android:layout_height="52dp"
+                    android:src="@drawable/glasses_mark2"
+                    android:scaleType="fitCenter"
+                    android:contentDescription="Mark II glasses" />
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical"
+                    android:layout_marginStart="16dp">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Mark II"
+                        android:textColor="#FFFFFF"
+                        android:textSize="26sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Camera-AI Vision-Full SDK"
+                        android:textColor="#B3FFFFFF"
+                        android:textSize="14sp"
+                        android:layout_marginTop="2dp" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- Divider -->
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:background="#26FFFFFF"
+                android:layout_marginBottom="18dp" />
+
+            <Button
+                android:id="@+id/btnSelectMark2Action"
+                android:layout_width="match_parent"
+                android:layout_height="52dp"
+                android:text="Select Mark II"
+                android:textColor="#FFFFFF"
+                android:textSize="17sp"
+                android:textStyle="bold"
+                android:textAllCaps="false"
+                android:background="@drawable/bg_device_btn_pill"
+                android:stateListAnimator="@null"
+                android:clickable="false"
+                android:focusable="false" />
         </LinearLayout>
 
     </LinearLayout>

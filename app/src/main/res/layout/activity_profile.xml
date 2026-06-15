@@ -1,62 +1,74 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<androidx.core.widget.NestedScrollView
+    xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="vertical"
-    android:background="@drawable/bg_app_gradient"
-    android:padding="0dp">
+    android:background="@drawable/bg_comper_mark1_screen"
+    android:overScrollMode="never"
+    android:fillViewport="true">
 
-    <!-- Header -->
     <LinearLayout
         android:layout_width="match_parent"
-        android:layout_height="50dp"
-        android:orientation="horizontal"
-        android:gravity="center_vertical"
-        android:padding="12dp"
-        android:background="#1A1A1A">
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingStart="18dp"
+        android:paddingEnd="18dp"
+        android:paddingTop="20dp"
+        android:paddingBottom="20dp">
 
-        <ImageButton
-            android:id="@+id/backButton"
-            android:layout_width="20dp"
-            android:layout_height="20dp"
-            android:src="@drawable/ic_back"
-            android:background="?attr/selectableItemBackground"
-            android:tint="#FFFFFF"
-            android:contentDescription="Back" />
-
-        <TextView
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="Profile"
-            android:textColor="#FFFFFF"
-            android:textSize="16sp"
-            android:textStyle="bold"
-            android:layout_marginStart="12dp" />
-    </LinearLayout>
-
-    <!-- Content Scroll View -->
-    <androidx.core.widget.NestedScrollView
-        android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="1">
-
+        <!-- HEADER ROW -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="vertical"
-            android:padding="12dp">
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginBottom="22dp">
 
-            <!-- User Account Card -->
+            <ImageButton
+                android:id="@+id/backButton"
+                android:layout_width="30dp"
+                android:layout_height="30dp"
+                android:src="@drawable/ic_back"
+                android:background="@android:color/transparent"
+                android:tint="#FFFFFF"
+                android:scaleType="fitCenter"
+                android:contentDescription="Back" />
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Profile"
+                android:textColor="#FFFFFF"
+                android:textSize="24sp"
+                android:textStyle="bold"
+                android:layout_marginStart="12dp" />
+        </LinearLayout>
+
+        <!-- YOUR ACCOUNT CARD -->
+        <androidx.cardview.widget.CardView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            app:cardCornerRadius="20dp"
+            app:cardElevation="0dp"
+            app:cardBackgroundColor="@android:color/transparent"
+            android:layout_marginBottom="14dp">
+
             <LinearLayout
-                android:id="@+id/upgradeCard"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
-                android:background="@drawable/card_background"
-                android:padding="12dp"
-                android:layout_marginBottom="12dp">
+                android:background="@drawable/bg_home_card"
+                android:padding="16dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Your Account"
+                    android:textColor="#AAFFFFFF"
+                    android:textSize="13sp"
+                    android:layout_marginBottom="12dp" />
 
                 <LinearLayout
                     android:layout_width="match_parent"
@@ -64,27 +76,28 @@
                     android:orientation="horizontal"
                     android:gravity="center_vertical">
 
-                    <!-- Profile Image -->
                     <ImageView
                         android:id="@+id/profileImage"
-                        android:layout_width="56dp"
-                        android:layout_height="56dp"
+                        android:layout_width="48dp"
+                        android:layout_height="48dp"
                         android:src="@drawable/ic_profile"
                         android:scaleType="centerCrop"
-                        android:background="@drawable/circle_button" />
+                        android:background="@drawable/bg_home_avatar"
+                        android:padding="10dp"
+                        android:tint="#FFFFFF" />
 
                     <LinearLayout
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
                         android:orientation="vertical"
-                        android:layout_marginStart="12dp">
+                        android:layout_marginStart="14dp">
 
                         <TextView
                             android:id="@+id/userName"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="Tanay"
+                            android:text="User"
                             android:textColor="#FFFFFF"
                             android:textSize="16sp"
                             android:textStyle="bold" />
@@ -93,31 +106,41 @@
                             android:id="@+id/userEmail"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="tanay@imigpt.com"
-                            android:textColor="#A0A0A0"
+                            android:text="user@imigpt.com"
+                            android:textColor="#88FFFFFF"
                             android:textSize="12sp"
                             android:layout_marginTop="2dp" />
                     </LinearLayout>
 
                     <ImageButton
                         android:id="@+id/editProfileButton"
-                        android:layout_width="34dp"
-                        android:layout_height="34dp"
+                        android:layout_width="28dp"
+                        android:layout_height="28dp"
                         android:src="@drawable/ic_edit"
-                        android:background="@drawable/circle_button"
+                        android:background="@android:color/transparent"
                         android:tint="#FFFFFF"
+                        android:scaleType="fitCenter"
                         android:contentDescription="Edit Profile" />
                 </LinearLayout>
             </LinearLayout>
+        </androidx.cardview.widget.CardView>
 
-            <!-- Upgrade Card -->
+        <!-- UPGRADE CARD -->
+        <androidx.cardview.widget.CardView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            app:cardCornerRadius="20dp"
+            app:cardElevation="0dp"
+            app:cardBackgroundColor="@android:color/transparent"
+            android:layout_marginBottom="18dp">
+
             <LinearLayout
+                android:id="@+id/upgradeCard"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
-                android:background="@drawable/card_background"
-                android:padding="12dp"
-                android:layout_marginBottom="18dp">
+                android:background="@drawable/bg_home_hero"
+                android:padding="16dp">
 
                 <TextView
                     android:id="@+id/upgradeCardTitle"
@@ -125,7 +148,7 @@
                     android:layout_height="wrap_content"
                     android:text="Upgrade to Premium"
                     android:textColor="#FFFFFF"
-                    android:textSize="14sp"
+                    android:textSize="16sp"
                     android:textStyle="bold" />
 
                 <TextView
@@ -133,284 +156,351 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="Unlock advanced Glasses AI features"
-                    android:textColor="#B0B0B0"
+                    android:textColor="#CCFFFFFF"
                     android:textSize="12sp"
-                    android:layout_marginTop="6dp"
-                    android:layout_marginBottom="6dp" />
-
-                <TextView
-                    android:id="@+id/upgradeCardPlanStatus"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Current plan: Free"
-                    android:textColor="#D2E3D8"
-                    android:textSize="12sp"
-                    android:layout_marginBottom="10dp" />
+                    android:layout_marginTop="4dp"
+                    android:layout_marginBottom="14dp" />
 
                 <Button
                     android:id="@+id/upgradePlanButton"
                     android:layout_width="wrap_content"
-                    android:layout_height="36dp"
+                    android:layout_height="40dp"
                     android:text="Upgrade"
-                    android:textColor="#1A1A1A"
-                    android:textSize="12sp"
+                    android:textColor="#FFFFFF"
+                    android:textSize="14sp"
                     android:textStyle="bold"
-                    android:background="@drawable/button_upgrade"
-                    android:paddingHorizontal="18dp" />
-            </LinearLayout>
+                    android:textAllCaps="false"
+                    android:background="@drawable/bg_upgrade_btn_orange"
+                    android:paddingStart="26dp"
+                    android:paddingEnd="26dp"
+                    android:stateListAnimator="@null" />
 
-            <!-- Preferences Section -->
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Preferences"
-                android:textColor="#FFFFFF"
-                android:textSize="13sp"
-                android:textStyle="bold"
-                android:layout_marginBottom="10dp" />
-
-            <!-- Manage Data -->
-            <LinearLayout
-                android:id="@+id/manageDataButton"
-                android:layout_width="match_parent"
-                android:layout_height="48dp"
-                android:orientation="horizontal"
-                android:background="@drawable/card_background"
-                android:padding="12dp"
-                android:gravity="center_vertical"
-                android:layout_marginBottom="6dp">
-
-                <ImageView
-                    android:layout_width="20dp"
-                    android:layout_height="20dp"
-                    android:src="@drawable/ic_manage"
-                    android:tint="#FFFFFF" />
-
+                <!-- Hidden plan status (kept for code compatibility) -->
                 <TextView
+                    android:id="@+id/upgradeCardPlanStatus"
                     android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:text="Manage Data"
-                    android:textColor="#FFFFFF"
-                    android:textSize="14sp"
-                    android:layout_marginStart="12dp" />
-
-                <ImageView
-                    android:layout_width="20dp"
-                    android:layout_height="20dp"
-                    android:src="@drawable/ic_forward"
-                    android:tint="#FFFFFF" />
+                    android:layout_height="0dp"
+                    android:visibility="gone" />
             </LinearLayout>
+        </androidx.cardview.widget.CardView>
 
-            <!-- Permission -->
-            <LinearLayout
-                android:id="@+id/permissionButton"
-                android:layout_width="match_parent"
-                android:layout_height="48dp"
-                android:orientation="horizontal"
-                android:background="@drawable/card_background"
-                android:padding="12dp"
-                android:gravity="center_vertical"
-                android:layout_marginBottom="6dp">
+        <!-- PREFERENCES CARD -->
+        <androidx.cardview.widget.CardView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            app:cardCornerRadius="20dp"
+            app:cardElevation="0dp"
+            app:cardBackgroundColor="@android:color/transparent"
+            android:layout_marginBottom="36dp">
 
-                <ImageView
-                    android:layout_width="20dp"
-                    android:layout_height="20dp"
-                    android:src="@drawable/ic_lock"
-                    android:tint="#FFFFFF" />
-
-                <TextView
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:text="Permission"
-                    android:textColor="#FFFFFF"
-                    android:textSize="14sp"
-                    android:layout_marginStart="12dp" />
-
-                <ImageView
-                    android:layout_width="20dp"
-                    android:layout_height="20dp"
-                    android:src="@drawable/ic_forward"
-                    android:tint="#FFFFFF" />
-            </LinearLayout>
-
-            <!-- Dark Mode Toggle -->
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="48dp"
-                android:orientation="horizontal"
-                android:background="@drawable/card_background"
-                android:padding="12dp"
-                android:gravity="center_vertical"
-                android:layout_marginBottom="6dp">
-
-                <ImageView
-                    android:layout_width="20dp"
-                    android:layout_height="20dp"
-                    android:src="@drawable/ic_dark_mode"
-                    android:tint="#FFFFFF" />
-
-                <TextView
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:text="Dark Mode"
-                    android:textColor="#FFFFFF"
-                    android:textSize="14sp"
-                    android:layout_marginStart="12dp" />
-
-                <androidx.appcompat.widget.SwitchCompat
-                    android:id="@+id/darkModeToggle"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content" />
-            </LinearLayout>
-
-            <!-- Rate Us -->
-            <LinearLayout
-                android:id="@+id/rateUsButton"
-                android:layout_width="match_parent"
-                android:layout_height="48dp"
-                android:orientation="horizontal"
-                android:background="@drawable/card_background"
-                android:padding="12dp"
-                android:gravity="center_vertical"
-                android:layout_marginBottom="18dp">
-
-                <ImageView
-                    android:layout_width="20dp"
-                    android:layout_height="20dp"
-                    android:src="@drawable/ic_star"
-                    android:tint="#FFFFFF" />
-
-                <TextView
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:text="Rate Us"
-                    android:textColor="#FFFFFF"
-                    android:textSize="14sp"
-                    android:layout_marginStart="12dp" />
-
-                <ImageView
-                    android:layout_width="20dp"
-                    android:layout_height="20dp"
-                    android:src="@drawable/ic_forward"
-                    android:tint="#FFFFFF" />
-            </LinearLayout>
-
-            <!-- Version Info -->
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
-                android:gravity="center_horizontal"
-                android:layout_marginBottom="16dp">
-
-                <TextView
-                    android:id="@+id/versionText"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="v2.0.1"
-                    android:textColor="#808080"
-                    android:textSize="12sp" />
+                android:background="@drawable/bg_home_card"
+                android:paddingStart="16dp"
+                android:paddingEnd="16dp"
+                android:paddingTop="16dp"
+                android:paddingBottom="10dp">
 
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="IMI Glasses App"
-                    android:textColor="#606060"
-                    android:textSize="12sp"
-                    android:layout_marginTop="4dp" />
+                    android:text="Preferences"
+                    android:textColor="#FFFFFF"
+                    android:textSize="16sp"
+                    android:textStyle="bold"
+                    android:layout_marginBottom="6dp" />
+
+                <!-- Manage Data -->
+                <LinearLayout
+                    android:id="@+id/manageDataButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="58dp"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:background="?attr/selectableItemBackground">
+
+                    <ImageView
+                        android:layout_width="38dp"
+                        android:layout_height="38dp"
+                        android:src="@drawable/ic_bar_chart"
+                        android:background="@drawable/bg_icon_circle"
+                        android:padding="9dp"
+                        android:tint="#FFFFFF" />
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="Manage Data"
+                        android:textColor="#FFFFFF"
+                        android:textSize="15sp"
+                        android:layout_marginStart="14dp" />
+
+                    <ImageView
+                        android:layout_width="16dp"
+                        android:layout_height="16dp"
+                        android:src="@drawable/ic_forward"
+                        android:tint="#66FFFFFF" />
+                </LinearLayout>
+
+                <!-- Permission -->
+                <LinearLayout
+                    android:id="@+id/permissionButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="58dp"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:background="?attr/selectableItemBackground">
+
+                    <ImageView
+                        android:layout_width="38dp"
+                        android:layout_height="38dp"
+                        android:src="@drawable/ic_lock"
+                        android:background="@drawable/bg_icon_circle"
+                        android:padding="9dp"
+                        android:tint="#FFFFFF" />
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="Permission"
+                        android:textColor="#FFFFFF"
+                        android:textSize="15sp"
+                        android:layout_marginStart="14dp" />
+
+                    <ImageView
+                        android:layout_width="16dp"
+                        android:layout_height="16dp"
+                        android:src="@drawable/ic_forward"
+                        android:tint="#66FFFFFF" />
+                </LinearLayout>
+
+                <!-- Settings -->
+                <LinearLayout
+                    android:id="@+id/settingsButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="58dp"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:background="?attr/selectableItemBackground">
+
+                    <ImageView
+                        android:layout_width="38dp"
+                        android:layout_height="38dp"
+                        android:src="@drawable/ic_settings"
+                        android:background="@drawable/bg_icon_circle"
+                        android:padding="9dp"
+                        android:tint="#FFFFFF" />
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="Settings"
+                        android:textColor="#FFFFFF"
+                        android:textSize="15sp"
+                        android:layout_marginStart="14dp" />
+
+                    <ImageView
+                        android:layout_width="16dp"
+                        android:layout_height="16dp"
+                        android:src="@drawable/ic_forward"
+                        android:tint="#66FFFFFF" />
+                </LinearLayout>
+
+                <!-- Switch Device -->
+                <LinearLayout
+                    android:id="@+id/switchDeviceButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="58dp"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:background="?attr/selectableItemBackground">
+
+                    <ImageView
+                        android:layout_width="38dp"
+                        android:layout_height="38dp"
+                        android:src="@drawable/ic_bluetooth"
+                        android:background="@drawable/bg_icon_circle"
+                        android:padding="9dp"
+                        android:tint="#FFFFFF" />
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="vertical"
+                        android:layout_marginStart="14dp">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Switch Device"
+                            android:textColor="#FFFFFF"
+                            android:textSize="15sp" />
+
+                        <TextView
+                            android:id="@+id/tvCurrentDevice"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Mark 1"
+                            android:textColor="#88FFFFFF"
+                            android:textSize="12sp" />
+                    </LinearLayout>
+
+                    <ImageView
+                        android:layout_width="16dp"
+                        android:layout_height="16dp"
+                        android:src="@drawable/ic_forward"
+                        android:tint="#66FFFFFF" />
+                </LinearLayout>
+
+                <!-- Rate Us -->
+                <LinearLayout
+                    android:id="@+id/rateUsButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="58dp"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:background="?attr/selectableItemBackground">
+
+                    <ImageView
+                        android:layout_width="38dp"
+                        android:layout_height="38dp"
+                        android:src="@drawable/ic_star_outline"
+                        android:background="@drawable/bg_icon_circle"
+                        android:padding="9dp"
+                        android:tint="#FFFFFF" />
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="Rate Us"
+                        android:textColor="#FFFFFF"
+                        android:textSize="15sp"
+                        android:layout_marginStart="14dp" />
+
+                    <ImageView
+                        android:layout_width="16dp"
+                        android:layout_height="16dp"
+                        android:src="@drawable/ic_forward"
+                        android:tint="#66FFFFFF" />
+                </LinearLayout>
+
+                <!-- Logout -->
+                <LinearLayout
+                    android:id="@+id/logoutButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="58dp"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:background="?attr/selectableItemBackground">
+
+                    <ImageView
+                        android:layout_width="38dp"
+                        android:layout_height="38dp"
+                        android:src="@drawable/ic_logout"
+                        android:background="@drawable/bg_icon_circle"
+                        android:padding="9dp"
+                        android:tint="#FF7F2E" />
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="Logout"
+                        android:textColor="#FF7F2E"
+                        android:textSize="15sp"
+                        android:layout_marginStart="14dp" />
+
+                    <ImageView
+                        android:layout_width="16dp"
+                        android:layout_height="16dp"
+                        android:src="@drawable/ic_forward"
+                        android:tint="#66FFFFFF" />
+                </LinearLayout>
             </LinearLayout>
+        </androidx.cardview.widget.CardView>
 
-            <!-- Footer Links -->
-            <LinearLayout
-                android:layout_width="match_parent"
+        <!-- Version Info -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:gravity="center_horizontal">
+
+            <TextView
+                android:id="@+id/versionText"
+                android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:gravity="center_horizontal"
-                android:layout_marginBottom="18dp">
+                android:text="v2.0.1"
+                android:textColor="#66FFFFFF"
+                android:textSize="12sp" />
 
-                <TextView
-                    android:id="@+id/supportLink"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Support"
-                    android:textColor="#6BA3FF"
-                    android:textSize="12sp"
-                    android:paddingHorizontal="10dp" />
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="IMI Glasses App"
+                android:textColor="#55FFFFFF"
+                android:textSize="11sp"
+                android:layout_marginTop="2dp" />
+        </LinearLayout>
 
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="•"
-                    android:textColor="#606060"
-                    android:textSize="12sp" />
+        <!-- ============================================================
+             HIDDEN VIEWS kept for ProfileActivity code compatibility
+             ============================================================ -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="gone">
 
-                <TextView
-                    android:id="@+id/privacyLink"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Privacy Policy"
-                    android:textColor="#6BA3FF"
-                    android:textSize="12sp"
-                    android:paddingHorizontal="10dp" />
+            <com.google.android.material.bottomnavigation.BottomNavigationView
+                android:id="@+id/bottomNavigation"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content" />
 
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="•"
-                    android:textColor="#606060"
-                    android:textSize="12sp" />
+            <androidx.appcompat.widget.SwitchCompat
+                android:id="@+id/darkModeToggle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content" />
 
-                <TextView
-                    android:id="@+id/aboutLink"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="About Us"
-                    android:textColor="#6BA3FF"
-                    android:textSize="12sp"
-                    android:paddingHorizontal="10dp" />
-            </LinearLayout>
-
-            <!-- Logout Button -->
-            <Button
-                android:id="@+id/logoutButton"
-                android:layout_width="match_parent"
-                android:layout_height="44dp"
-                android:text="Logout"
-                android:textColor="#FFFFFF"
-                android:textSize="14sp"
-                android:textStyle="bold"
-                android:background="@drawable/button_logout"
-                android:layout_marginBottom="10dp" />
-
-            <!-- Sign Up Button -->
             <Button
                 android:id="@+id/signUpButton"
-                android:layout_width="match_parent"
-                android:layout_height="44dp"
-                android:text="Invite a Friend - Sign Up"
-                android:textColor="#1A1A1A"
-                android:textSize="13sp"
-                android:textStyle="bold"
-                android:background="@drawable/button_signup"
-                android:layout_marginBottom="24dp" />
-        </LinearLayout>
-    </androidx.core.widget.NestedScrollView>
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content" />
 
-    <com.google.android.material.bottomnavigation.BottomNavigationView
-        android:id="@+id/bottomNavigation"
-        android:layout_width="match_parent"
-        android:layout_height="68dp"
-        android:layout_marginStart="12dp"
-        android:layout_marginEnd="12dp"
-        android:layout_marginBottom="8dp"
-        android:background="@drawable/bg_bottom_nav_glass"
-        app:itemBackground="@drawable/bg_bottom_nav_item"
-        app:itemIconTint="@color/bottom_nav_item_color"
-        app:itemTextColor="@color/bottom_nav_item_color"
-        app:labelVisibilityMode="labeled"
-        app:menu="@menu/menu_bottom_nav" />
-</LinearLayout>
+            <TextView
+                android:id="@+id/supportLink"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content" />
+
+            <TextView
+                android:id="@+id/privacyLink"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content" />
+
+            <TextView
+                android:id="@+id/aboutLink"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content" />
+        </LinearLayout>
+
+    </LinearLayout>
+</androidx.core.widget.NestedScrollView>

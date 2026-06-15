@@ -24,6 +24,7 @@ class MeetingMinutesActivity : AppCompatActivity() {
     private lateinit var rvMeetings: RecyclerView
     private lateinit var btnStartMic: ImageView
     private lateinit var btnBack: ImageView
+    private lateinit var btnViewAll: TextView
     private lateinit var layoutEmptyState: LinearLayout
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -40,9 +41,14 @@ class MeetingMinutesActivity : AppCompatActivity() {
         rvMeetings = findViewById(R.id.rv_meetings)
         btnStartMic = findViewById(R.id.btn_start_mic)
         btnBack = findViewById(R.id.btn_back)
+        btnViewAll = findViewById(R.id.btn_view_all)
         layoutEmptyState = findViewById(R.id.layout_empty_state)
 
         btnBack.setOnClickListener { finish() }
+
+        btnViewAll.setOnClickListener {
+            startActivity(Intent(this, AllMeetingMinutesActivity::class.java))
+        }
 
         // Setup RecyclerView
         meetingsAdapter = MeetingMinutesAdapter(
@@ -63,7 +69,7 @@ class MeetingMinutesActivity : AppCompatActivity() {
     }
 
     private fun loadMeetings() {
-        val meetings = meetingManager.getAllMeetings()
+        val meetings = meetingManager.getAllMeetings().filter { isToday(it.startTime) }
         meetingsAdapter.updateMeetings(meetings)
         
         // Show/hide empty state
@@ -124,111 +130,15 @@ class MeetingMinutesActivity : AppCompatActivity() {
     }
 
     private fun showMeetingDetails(meeting: MeetingMinute) {
-        // Inflate custom dialog layout
-        val dialogView = layoutInflater.inflate(R.layout.dialog_meeting_details, null)
-        
-        // Get views from dialog
-        val tvTitle = dialogView.findViewById<android.widget.TextView>(R.id.tv_dialog_title)
-        val tvDate = dialogView.findViewById<android.widget.TextView>(R.id.tv_dialog_date)
-        val tvDuration = dialogView.findViewById<android.widget.TextView>(R.id.tv_dialog_duration)
-        val tvWordCount = dialogView.findViewById<android.widget.TextView>(R.id.tv_dialog_word_count)
-        val tvSpeakerCount = dialogView.findViewById<android.widget.TextView>(R.id.tv_dialog_speaker_count)
-        val layoutSpeakerCount = dialogView.findViewById<android.widget.LinearLayout>(R.id.layout_speaker_count)
-        val tvSummary = dialogView.findViewById<android.widget.TextView>(R.id.tv_dialog_summary)
-        val tvTranscript = dialogView.findViewById<android.widget.TextView>(R.id.tv_dialog_transcript)
-        val layoutTranscript = dialogView.findViewById<android.widget.LinearLayout>(R.id.layout_transcript_section)
-        val btnToggleTranscript = dialogView.findViewById<android.widget.TextView>(R.id.btn_toggle_transcript)
-        val btnClose = dialogView.findViewById<android.widget.TextView>(R.id.btn_dialog_close)
-        val btnDelete = dialogView.findViewById<android.widget.TextView>(R.id.btn_dialog_delete)
-        
-        // Set meeting data
-        tvTitle.text = meeting.title
-        tvDate.text = meeting.getFormattedStartTime()
-        tvDuration.text = "Duration: ${meeting.getDuration()}"
-        tvWordCount.text = "Words: ${meeting.getWordCount()}"
-        
-        // Show speaker count if available
-        if (meeting.speakerCount > 0) {
-            layoutSpeakerCount.visibility = View.VISIBLE
-            val participantsText = if (meeting.speakerCount == 1) {
-                "👤 Participants: 1 person detected"
-            } else {
-                "👥 Participants: ${meeting.speakerCount} people in meeting"
-            }
-            tvSpeakerCount.text = participantsText
-        } else {
-            layoutSpeakerCount.visibility = View.GONE
-        }
-        
-        // Add speaker stats to summary if available
-        val summaryWithStats = if (meeting.speakerCount > 0 && meeting.speakerTranscript.isNotBlank()) {
-            val stats = meeting.getSpeakerStats()
-            val statsText = StringBuilder()
-            val totalWords = stats.values.sum()
-            
-            if (totalWords > 0) {
-                statsText.append("\n\n━━━ WHO SPOKE IN THIS MEETING ━━━\n\n")
-                stats.entries.sortedByDescending { it.value }.forEach { (speaker, words) ->
-                    val percentage = (words * 100 / totalWords)
-                    statsText.append("🗣️ Speaker $speaker: $words words ($percentage% of conversation)\n")
-                }
-                statsText.append("\n━━━━━━━━━━━━━━━━━━━━━━━\n")
-            }
-            
-            (meeting.summary.ifBlank { "No summary available" }) + statsText.toString()
-        } else {
-            meeting.summary.ifBlank { "No summary available" }
-        }
-        
-        tvSummary.text = summaryWithStats
-        
-        // Use speaker transcript if available, otherwise plain transcript
-        val transcriptText = if (meeting.speakerTranscript.isNotBlank()) {
-            // Format transcript with better spacing
-            val formatted = meeting.speakerTranscript
-                .replace("\n\n", "\n")
-                .replace("Speaker ", "\n\n🗣️ Speaker ")
-                .trim()
-            "\n" + formatted
-        } else {
-            meeting.transcript.ifBlank { "No transcript" }
-        }
-        tvTranscript.text = transcriptText
-        
-        // Create dialog
-        val dialog = AlertDialog.Builder(this)
-            .setView(dialogView)
-            .setCancelable(true)
-            .create()
-        
-        // Make dialog background transparent so our custom layout shows through
-        dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
-        
-        // Toggle transcript visibility
-        var transcriptVisible = false
-        btnToggleTranscript.setOnClickListener {
-            transcriptVisible = !transcriptVisible
-            if (transcriptVisible) {
-                layoutTranscript.visibility = View.VISIBLE
-                btnToggleTranscript.text = "▲ Hide Transcript"
-            } else {
-                layoutTranscript.visibility = View.GONE
-                btnToggleTranscript.text = "▼ Show Transcript"
-            }
-        }
-        
-        // Close button
-        btnClose.setOnClickListener {
-            dialog.dismiss()
-        }
-        
-        // Delete button
-        btnDelete.setOnClickListener {
-            dialog.dismiss()
-            confirmDeleteMeeting(meeting)
-        }
-        
-        dialog.show()
+        MeetingDetailsDialog.show(this, meeting) { confirmDeleteMeeting(it) }
+    }
+
+    /** True if the given epoch millis falls on the current calendar day. */
+    private fun isToday(timeMillis: Long): Boolean {
+        val now = java.util.Calendar.getInstance()
+        val then = java.util.Calendar.getInstance().apply { timeInMillis = timeMillis }
+        return now.get(java.util.Calendar.YEAR) == then.get(java.util.Calendar.YEAR) &&
+            now.get(java.util.Calendar.DAY_OF_YEAR) == then.get(java.util.Calendar.DAY_OF_YEAR)
     }
 
     private fun confirmDeleteMeeting(meeting: MeetingMinute) {

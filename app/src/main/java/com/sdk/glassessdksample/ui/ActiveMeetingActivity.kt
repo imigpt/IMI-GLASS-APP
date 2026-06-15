@@ -22,10 +22,10 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import com.sdk.glassessdksample.BuildConfig
+import com.google.ai.client.generativeai.GenerativeModel
+import com.google.ai.client.generativeai.type.content
 import com.sdk.glassessdksample.R
 import kotlinx.coroutines.*
-import okhttp3.MediaType.Companion.toMediaType
 import java.util.*
 
 /**
@@ -45,11 +45,39 @@ class ActiveMeetingActivity : AppCompatActivity() {
     private lateinit var tvLiveParticipants: TextView
     private lateinit var tvTranscript: TextView
     private lateinit var tvSummaryStatus: TextView
+    private lateinit var tvSummaryMeetingTitle: TextView
+    private lateinit var tvSummaryDate: TextView
+    private lateinit var tvSummaryDuration: TextView
+    private lateinit var tvSummaryWords: TextView
+    private lateinit var layoutGenerating: View
+    private lateinit var cardSummaryResult: View
     private lateinit var timerContainer: View
     private lateinit var summaryContainer: View
+    private lateinit var indicatorRecording: View
+    private lateinit var blobGlow: MeetingBlobView
+    private lateinit var glowBg: MeetingGlowView
     private lateinit var btnPause: ImageView
     private lateinit var btnSwitch: ImageView
     private lateinit var btnEndMeeting: ImageView
+
+    // Polls MediaRecorder amplitude every 100 ms and drives the blob animation.
+    private val amplitudeRunnable = object : Runnable {
+        override fun run() {
+            if (isRecording && !isPaused) {
+                try {
+                    val raw = mediaRecorder?.maxAmplitude ?: 0
+                    // Typical speech peaks at 500-5000; use 6000 as practical max with a boost curve
+                    val normalised = ((raw / 6000f) * 1.5f).coerceIn(0f, 1f)
+                    blobGlow.setAmplitude(normalised)
+                    glowBg.setAmplitude(normalised)
+                } catch (_: Exception) {}
+            } else {
+                blobGlow.setAmplitude(0f)
+                glowBg.setAmplitude(0f)
+            }
+            handler.postDelayed(this, 100)
+        }
+    }
     
     private var currentMeeting: MeetingMinute? = null
     private var isRecording = false
@@ -81,6 +109,21 @@ class ActiveMeetingActivity : AppCompatActivity() {
         tvSummaryStatus = findViewById(R.id.tv_summary_status)
         timerContainer = findViewById(R.id.timer_container)
         summaryContainer = findViewById(R.id.summary_container)
+        indicatorRecording = findViewById(R.id.indicator_recording)
+        blobGlow = findViewById(R.id.blob_glow)
+        glowBg = findViewById(R.id.glow_bg)
+        tvSummaryMeetingTitle = findViewById(R.id.tv_summary_meeting_title)
+        tvSummaryDate = findViewById(R.id.tv_summary_date)
+        tvSummaryDuration = findViewById(R.id.tv_summary_duration)
+        tvSummaryWords = findViewById(R.id.tv_summary_words)
+        layoutGenerating = findViewById(R.id.layout_generating)
+        cardSummaryResult = findViewById(R.id.card_summary_result)
+
+        findViewById<android.widget.Button>(R.id.btn_summary_close).setOnClickListener { finish() }
+        findViewById<android.widget.Button>(R.id.btn_summary_view_all).setOnClickListener {
+            startActivity(Intent(this, MeetingMinutesActivity::class.java))
+            finish()
+        }
         btnPause = findViewById(R.id.btn_pause)
         btnSwitch = findViewById(R.id.btn_switch)
         btnEndMeeting = findViewById(R.id.btn_end_meeting)
@@ -206,8 +249,13 @@ class ActiveMeetingActivity : AppCompatActivity() {
             isRecording = true
             isPaused = false
 
-            tvStatus.text = "🎙️ Recording audio"
+            tvStatus.text = "Recording audio"
+            indicatorRecording.visibility = View.VISIBLE
             btnPause.setImageResource(R.drawable.ic_pause_bars)
+
+            // Start driving the blob with mic amplitude.
+            handler.removeCallbacks(amplitudeRunnable)
+            handler.postDelayed(amplitudeRunnable, 100)
 
             Log.d(TAG, "Audio recording started: $audioFilePath")
         } catch (e: Exception) {
@@ -222,7 +270,10 @@ class ActiveMeetingActivity : AppCompatActivity() {
             try {
                 mediaRecorder?.pause()
                 isPaused = true
-                tvStatus.text = "⏸️ Paused"
+                tvStatus.text = "Paused"
+                indicatorRecording.visibility = View.GONE
+                blobGlow.setAmplitude(0f)
+                glowBg.setAmplitude(0f)
                 btnPause.setImageResource(R.drawable.ic_play_triangle)
                 Log.d(TAG, "Recording paused")
             } catch (e: Exception) {
@@ -240,8 +291,11 @@ class ActiveMeetingActivity : AppCompatActivity() {
             try {
                 mediaRecorder?.resume()
                 isPaused = false
-                tvStatus.text = "🎙️ Recording audio"
+                tvStatus.text = "Recording audio"
+                indicatorRecording.visibility = View.VISIBLE
                 btnPause.setImageResource(R.drawable.ic_pause_bars)
+                handler.removeCallbacks(amplitudeRunnable)
+                handler.postDelayed(amplitudeRunnable, 100)
                 Log.d(TAG, "Recording resumed")
             } catch (e: Exception) {
                 Log.e(TAG, "Error resuming: ${e.message}")
@@ -277,10 +331,25 @@ class ActiveMeetingActivity : AppCompatActivity() {
         handler.removeCallbacksAndMessages(null)
 
         // Switch from the recording timer to the summary-generation view (mockup screen 5)
+        handler.removeCallbacks(amplitudeRunnable)
+        blobGlow.setAmplitude(0f)
+        glowBg.setAmplitude(0f)
+        glowBg.visibility = View.GONE
         timerContainer.visibility = View.GONE
         summaryContainer.visibility = View.VISIBLE
-        tvStatus.text = "✅ Recording complete"
-        tvSummaryStatus.text = "Generating Summary…"
+        indicatorRecording.visibility = View.GONE
+        layoutGenerating.visibility = View.VISIBLE
+        cardSummaryResult.visibility = View.GONE
+        tvStatus.text = "Recording complete"
+        tvSummaryStatus.text = "Generating Summary…."
+
+        // Pre-fill the info card with what we know already
+        currentMeeting?.let { m ->
+            tvSummaryMeetingTitle.text = "Title: ${m.title}"
+            tvSummaryDate.text = m.getFormattedStartTime()
+            tvSummaryDuration.text = "Duration: ${m.getDuration()}"
+            tvSummaryWords.text = ""
+        }
         btnPause.isEnabled = false
         btnSwitch.isEnabled = false
         btnEndMeeting.isEnabled = false
@@ -329,9 +398,8 @@ class ActiveMeetingActivity : AppCompatActivity() {
                 }
                 
                 if (completedMeeting != null) {
-                    // Show summary dialog
                     runOnUiThread {
-                        showSummaryDialog(completedMeeting)
+                        showSummaryInScreen(completedMeeting)
                     }
                 } else {
                     Toast.makeText(this@ActiveMeetingActivity, "Error saving meeting", Toast.LENGTH_SHORT).show()
@@ -347,321 +415,80 @@ class ActiveMeetingActivity : AppCompatActivity() {
     
     private suspend fun transcribeAudioWithGemini(audioFilePath: String): String = withContext(Dispatchers.IO) {
         try {
-            val apiKey = RemoteConfigManager.geminiApiKey
             val audioFile = java.io.File(audioFilePath)
-            
-            if (!audioFile.exists()) {
-                return@withContext "Error: Audio file not found"
-            }
-            
-            // Read audio file as base64
+            if (!audioFile.exists()) return@withContext "Error: Audio file not found"
+
             val audioBytes = audioFile.readBytes()
-            val audioBase64 = android.util.Base64.encodeToString(audioBytes, android.util.Base64.NO_WRAP)
-            
-            val client = okhttp3.OkHttpClient.Builder()
-                .connectTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
-                .readTimeout(180, java.util.concurrent.TimeUnit.SECONDS)
-                .writeTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
-                .build()
-            
-            // Use Google Cloud Speech-to-Text API with speaker diarization
-            val requestBody = com.google.gson.Gson().toJson(mapOf(
-                "config" to mapOf(
-                    "encoding" to "AMR_WB",
-                    "sampleRateHertz" to 16000,
-                    "languageCode" to "en-US",
-                    "enableAutomaticPunctuation" to true,
-                    "diarizationConfig" to mapOf(
-                        "enableSpeakerDiarization" to true,
-                        "minSpeakerCount" to 1,
-                        "maxSpeakerCount" to 10
-                    ),
-                    "model" to "latest_long"
-                ),
-                "audio" to mapOf(
-                    "content" to audioBase64
-                )
-            ))
-            
-            val request = okhttp3.Request.Builder()
-                .url("https://speech.googleapis.com/v1/speech:recognize?key=$apiKey")
-                .post(okhttp3.RequestBody.create(
-                    "application/json".toMediaType(),
-                    requestBody
-                ))
-                .build()
-            
-            Log.d(TAG, "Sending audio for transcription with speaker diarization (${audioBytes.size} bytes)")
-            
-            val response = client.newCall(request).execute()
-            val responseBody = response.body?.string() ?: ""
-            
-            if (!response.isSuccessful) {
-                Log.e(TAG, "Speech-to-Text error: $responseBody")
-                // Fallback to Gemini if Speech-to-Text fails
-                return@withContext transcribeWithGeminiFallback(audioFile, audioBase64, client)
-            }
-            
-            val jsonResponse = org.json.JSONObject(responseBody)
-            val results = jsonResponse.optJSONArray("results")
-            
-            if (results != null && results.length() > 0) {
-                val plainTranscript = StringBuilder()
-                val speakerTranscript = StringBuilder()
-                var speakerCount = 0
-                val speakerWords = mutableMapOf<Int, MutableList<String>>()
-                
-                // Parse results with speaker labels
-                for (i in 0 until results.length()) {
-                    val result = results.getJSONObject(i)
-                    val alternatives = result.getJSONArray("alternatives")
-                    
-                    if (alternatives.length() > 0) {
-                        val alternative = alternatives.getJSONObject(0)
-                        plainTranscript.append(alternative.getString("transcript")).append(" ")
-                        
-                        // Check if words with speaker tags exist
-                        val words = alternative.optJSONArray("words")
-                        if (words != null) {
-                            for (j in 0 until words.length()) {
-                                val word = words.getJSONObject(j)
-                                val text = word.getString("word")
-                                val speakerTag = word.optInt("speakerTag", -1)
-                                
-                                if (speakerTag > 0) {
-                                    if (speakerTag > speakerCount) speakerCount = speakerTag
-                                    speakerWords.getOrPut(speakerTag) { mutableListOf() }.add(text)
-                                }
-                            }
-                        }
-                    }
+            Log.d(TAG, "Transcribing via Gemini SDK (${audioBytes.size} bytes)")
+
+            val model = GenerativeModel(
+                modelName = "gemini-2.5-flash",
+                apiKey = RemoteConfigManager.geminiApiKey
+            )
+
+            val response = model.generateContent(
+                content {
+                    text("Transcribe this audio recording completely and accurately. Return only the spoken words, nothing else.")
+                    blob("audio/3gp", audioBytes)
                 }
-                
-                // Build speaker-separated transcript
-                if (speakerWords.isNotEmpty()) {
-                    var currentSpeaker = -1
-                    for (i in 0 until results.length()) {
-                        val result = results.getJSONObject(i)
-                        val alternatives = result.getJSONArray("alternatives")
-                        if (alternatives.length() > 0) {
-                            val alternative = alternatives.getJSONObject(0)
-                            val words = alternative.optJSONArray("words")
-                            if (words != null) {
-                                for (j in 0 until words.length()) {
-                                    val word = words.getJSONObject(j)
-                                    val text = word.getString("word")
-                                    val speakerTag = word.optInt("speakerTag", -1)
-                                    
-                                    if (speakerTag > 0 && speakerTag != currentSpeaker) {
-                                        if (currentSpeaker != -1) speakerTranscript.append("\\n\\n")
-                                        speakerTranscript.append("Speaker $speakerTag: ")
-                                        currentSpeaker = speakerTag
-                                    }
-                                    speakerTranscript.append(text).append(" ")
-                                }
-                            }
-                        }
-                    }
-                }
-                
-                val transcript = plainTranscript.toString().trim()
-                val speakerText = speakerTranscript.toString().trim()
-                
-                // Save speaker information
-                runOnUiThread {
-                    val activeMeeting = meetingManager.getActiveMeeting()
-                    if (activeMeeting != null) {
-                        val updatedMeeting = activeMeeting.copy(
-                            transcript = transcript,
-                            speakerTranscript = speakerText,
-                            speakerCount = speakerCount
-                        )
-                        meetingManager.saveMeeting(updatedMeeting)
-                        
-                        // Update live participants display
-                        updateLiveParticipantsDisplay(speakerCount)
-                    }
-                }
-                
-                Log.d(TAG, "Transcription successful: ${transcript.length} chars, $speakerCount speakers")
-                return@withContext transcript
-            }
-            
-            "Transcription failed. No content returned."
+            )
+
+            val text = response.text?.trim() ?: ""
+            Log.d(TAG, "Transcription result: $text")
+            if (text.isBlank()) "No speech detected." else text
+
         } catch (e: Exception) {
-            Log.e(TAG, "Error transcribing audio: ${e.message}", e)
-            "Error transcribing audio: ${e.message}"
+            Log.e(TAG, "Transcription error: ${e.message}", e)
+            "Audio recorded but transcription failed: ${e.message}"
         }
     }
-    
-    // Fallback transcription using Gemini (no speaker diarization)
-    private suspend fun transcribeWithGeminiFallback(
-        audioFile: java.io.File,
-        audioBase64: String,
-        client: okhttp3.OkHttpClient
-    ): String {
-        try {
-            Log.d(TAG, "Using Gemini fallback for transcription")
-            val apiKey = RemoteConfigManager.geminiApiKey
-            
-            val requestBody = com.google.gson.Gson().toJson(mapOf(
-                "contents" to listOf(
-                    mapOf(
-                        "parts" to listOf(
-                            mapOf(
-                                "text" to "Please transcribe this audio recording completely. Provide only the transcription, nothing else."
-                            ),
-                            mapOf(
-                                "inline_data" to mapOf(
-                                    "mime_type" to "audio/3gpp",
-                                    "data" to audioBase64
-                                )
-                            )
-                        )
-                    )
-                )
-            ))
-            
-            val request = okhttp3.Request.Builder()
-                .url("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=$apiKey")
-                .post(okhttp3.RequestBody.create(
-                    "application/json".toMediaType(),
-                    requestBody
-                ))
-                .build()
-            
-            val response = client.newCall(request).execute()
-            val responseBody = response.body?.string() ?: ""
-            
-            if (!response.isSuccessful) {
-                return "Error: Unable to transcribe audio"
-            }
-            
-            val jsonResponse = org.json.JSONObject(responseBody)
-            val candidates = jsonResponse.getJSONArray("candidates")
-            if (candidates.length() > 0) {
-                val content = candidates.getJSONObject(0).getJSONObject("content")
-                val parts = content.getJSONArray("parts")
-                if (parts.length() > 0) {
-                    return parts.getJSONObject(0).getString("text")
-                }
-            }
-            
-            return "Transcription failed."
-        } catch (e: Exception) {
-            Log.e(TAG, "Gemini fallback failed: ${e.message}", e)
-            return "Error transcribing audio"
-        }
-    }
-    
+
     private suspend fun generateMeetingSummary(transcript: String): String = withContext(Dispatchers.IO) {
         try {
-            val apiKey = RemoteConfigManager.geminiApiKey
-            val client = okhttp3.OkHttpClient()
-            
-            val activeMeeting = meetingManager.getActiveMeeting()
-            val speakerInfo = if (activeMeeting != null && activeMeeting.speakerCount > 0) {
-                "\\n\\n📊 Speakers Detected: ${activeMeeting.speakerCount}"
-            } else {
-                ""
-            }
-            
+            val model = GenerativeModel(
+                modelName = "gemini-2.5-flash",
+                apiKey = RemoteConfigManager.geminiApiKey
+            )
+
             val prompt = """
                 Please provide a concise meeting summary based on this transcript:
-                
+
                 $transcript
-                
+
                 Include:
                 1. Key Discussion Points (bullet points)
                 2. Decisions Made (if any)
                 3. Action Items (if any)
-                4. Important Notes$speakerInfo
-                
+                4. Important Notes
+
                 Keep it clear and professional.
             """.trimIndent()
-            
-            val requestBody = com.google.gson.Gson().toJson(mapOf(
-                "contents" to listOf(
-                    mapOf("parts" to listOf(mapOf("text" to prompt)))
-                )
-            ))
-            
-            val request = okhttp3.Request.Builder()
-                .url("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=$apiKey")
-                .post(okhttp3.RequestBody.create(
-                    "application/json".toMediaType(),
-                    requestBody
-                ))
-                .build()
-            
-            val response = client.newCall(request).execute()
-            val responseBody = response.body?.string() ?: ""
-            
-            if (!response.isSuccessful) {
-                Log.e(TAG, "Gemini API error: $responseBody")
-                return@withContext "Error generating summary. Transcript saved."
-            }
-            
-            val jsonResponse = org.json.JSONObject(responseBody)
-            val candidates = jsonResponse.getJSONArray("candidates")
-            if (candidates.length() > 0) {
-                val content = candidates.getJSONObject(0).getJSONObject("content")
-                val parts = content.getJSONArray("parts")
-                if (parts.length() > 0) {
-                    return@withContext parts.getJSONObject(0).getString("text")
-                }
-            }
-            
-            "Summary generation failed. Transcript saved."
+
+            val response = model.generateContent(
+                content { text(prompt) }
+            )
+
+            val text = response.text?.trim() ?: ""
+            Log.d(TAG, "Summary result: $text")
+            if (text.isBlank()) "Summary generation failed. Transcript saved." else text
+
         } catch (e: Exception) {
-            Log.e(TAG, "Error generating summary: ${e.message}", e)
+            Log.e(TAG, "Summary error: ${e.message}", e)
             "Error generating summary: ${e.message}"
         }
     }
     
-    private fun showSummaryDialog(meeting: MeetingMinute) {
-        val speakerInfo = if (meeting.speakerCount > 0) {
-            val peopleText = if (meeting.speakerCount == 1) "1 person" else "${meeting.speakerCount} people"
-            val stats = meeting.getSpeakerStats()
-            val totalWords = stats.values.sum()
-            val statsText = StringBuilder("\n👥 Participants: $peopleText detected\n")
-            
-            if (totalWords > 0 && stats.isNotEmpty()) {
-                statsText.append("\n🗣️ What Each Person Said:\n")
-                stats.entries.sortedByDescending { it.value }.forEach { (speaker, words) ->
-                    val percentage = (words * 100 / totalWords)
-                    statsText.append("   Person $speaker: $percentage% ($words words)\n")
-                }
-            }
-            statsText.toString()
-        } else {
-            ""
-        }
-        
-        val message = """
-            ✅ Meeting Saved Successfully!
-            
-            📅 ${meeting.getFormattedStartTime()}
-            ⏱️ Duration: ${meeting.getDuration()}
-            📝 Words: ${meeting.getWordCount()}$speakerInfo
-            
-            ━━━━━━━━━ SUMMARY ━━━━━━━━━
-            ${meeting.summary?.ifBlank { "No summary available" } ?: "No summary"}
-        """.trimIndent()
-        
-        AlertDialog.Builder(this)
-            .setTitle("📋 " + meeting.title)
-            .setMessage(message)
-            .setPositiveButton("View All Meetings") { _, _ ->
-                val intent = Intent(this, MeetingMinutesActivity::class.java)
-                startActivity(intent)
-                finish()
-            }
-            .setNegativeButton("Close") { _, _ ->
-                finish()
-            }
-            .setCancelable(false)
-            .show()
+    private fun showSummaryInScreen(meeting: MeetingMinute) {
+        tvSummaryMeetingTitle.text = "Title: ${meeting.title}"
+        tvSummaryDate.text = meeting.getFormattedStartTime()
+        tvSummaryDuration.text = "Duration: ${meeting.getDuration()}"
+        tvSummaryWords.text = "Words: ${meeting.getWordCount()} words"
+
+        val summaryText = meeting.summary?.takeIf { it.isNotBlank() } ?: "No summary available."
+        tvTranscript.text = summaryText
+
+        layoutGenerating.visibility = View.GONE
+        cardSummaryResult.visibility = View.VISIBLE
     }
     
     private fun startDurationTimer() {

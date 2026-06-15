@@ -8,7 +8,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import com.sdk.glassessdksample.databinding.ActivitySettingsBinding
-import com.sdk.glassessdksample.ui.BottomNavManager
+import com.sdk.glassessdksample.ui.Mark1BottomNavManager
 import com.sdk.glassessdksample.ui.GeminiLiveService
 import com.sdk.glassessdksample.ui.HotHelper
 import com.sdk.glassessdksample.ui.ModelProvider
@@ -26,7 +26,7 @@ class SettingsActivity : AppCompatActivity() {
         setContentView(binding.root)
 
         setupSettings()
-        BottomNavManager.setup(binding.bottomNavigation, R.id.nav_settings, this)
+        Mark1BottomNavManager.setup(this, binding.bottomNavigation, R.id.nav_settings)
     }
 
     override fun onResume() {
@@ -38,33 +38,27 @@ class SettingsActivity : AppCompatActivity() {
     private fun setupSettings() {
         val prefs = getSharedPreferences("imi_prefs", MODE_PRIVATE)
 
+        // Continuous Chat toggle
+        binding.switchContinuousChat.isChecked = prefs.getBoolean("continuous_chat", true)
+        binding.switchContinuousChat.setOnCheckedChangeListener { _, isChecked ->
+            prefs.edit().putBoolean("continuous_chat", isChecked).apply()
+        }
+
+        // Hidden model/wake engine buttons still wired so existing logic works
         val currentModel = GeminiLiveService.getSavedModelProvider(this)
         updateModelUi(currentModel)
 
         val currentWakeEngine = WakeWordEngineSettings.getSelectedEngine(this)
         updateWakeEngineUi(currentWakeEngine)
 
-        binding.btnModelGpt.setOnClickListener {
-            setModel(ModelProvider.GPT_REALTIME)
-        }
-
-        binding.btnModelGemini.setOnClickListener {
-            setModel(ModelProvider.GEMINI_LIVE)
-        }
-
-        binding.btnWakeEngineCustom.setOnClickListener {
-            setWakeWordEngine(WakeWordEngine.CUSTOM_ONNX)
-        }
-
-        binding.btnWakeEngineSnowboy.setOnClickListener {
-            setWakeWordEngine(WakeWordEngine.SNOWBOY)
-        }
+        binding.btnModelGpt.setOnClickListener { setModel(ModelProvider.GPT_REALTIME) }
+        binding.btnModelGemini.setOnClickListener { setModel(ModelProvider.GEMINI_LIVE) }
+        binding.btnWakeEngineCustom.setOnClickListener { setWakeWordEngine(WakeWordEngine.CUSTOM_ONNX) }
+        binding.btnWakeEngineSnowboy.setOnClickListener { setWakeWordEngine(WakeWordEngine.SNOWBOY) }
 
         binding.switchGeminiAck.isChecked = prefs.getBoolean("useGeminiAck", true)
         binding.switchGeminiAck.setOnCheckedChangeListener { _, isChecked ->
             prefs.edit().putBoolean("useGeminiAck", isChecked).apply()
-            val status = if (isChecked) "enabled" else "disabled"
-            Toast.makeText(this, "Gemini acknowledgement $status", Toast.LENGTH_SHORT).show()
         }
 
         binding.btnOpenPermissionSettings.setOnClickListener {
@@ -131,7 +125,7 @@ class SettingsActivity : AppCompatActivity() {
         val snapshot = UsageLimitManager.getSnapshot(this)
 
         binding.tvCurrentPlan.text = snapshot.plan.title
-        binding.tvPlanPrice.text = "${snapshot.plan.priceLabel} - ${snapshot.plan.subtitle}"
+        binding.tvPlanPrice.text = "${snapshot.plan.title} – ${snapshot.plan.priceLabel}/month"
 
         bindUsage(
             usage = snapshot.voice,
@@ -163,6 +157,6 @@ class SettingsActivity : AppCompatActivity() {
     ) {
         callsView.text = "${usage.used} / ${usage.limit}"
         progressView.progress = usage.progressPercent
-        remainingView.text = "Remaining: ${usage.remaining}"
+        remainingView.text = "Remaining : ${usage.remaining}"
     }
 }

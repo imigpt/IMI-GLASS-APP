@@ -75,9 +75,7 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.GlassesSDKSample"
-        android.usesCleartextTraffic="true"
-        android:id="@+id/etCommand"
-
+        android:usesCleartextTraffic="true"
         tools:targetApi="31">
 
         <!-- SPLASH SCREEN -->
@@ -222,6 +220,11 @@
             android:name=".ui.ActiveMeetingActivity"
             android:exported="false"
             android:label="Recording Meeting" />
+
+        <activity
+            android:name=".ui.AllMeetingMinutesActivity"
+            android:exported="false"
+            android:label="All Meetings" />
 
             <!-- BLE PCM TEST ACTIVITY -->
             <activity

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Base dark fill -->
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="#1A1410" />
+        </shape>
+    </item>
+
+    <!-- Warm orange glow radiating from the top-left, contained to upper area -->
+    <item>
+        <shape android:shape="rectangle">
+            <gradient
+                android:type="radial"
+                android:gradientRadius="460dp"
+                android:centerX="0.20"
+                android:centerY="0.04"
+                android:startColor="#F0801F"
+                android:centerColor="#5E3115"
+                android:endColor="#00120D0A" />
+        </shape>
+    </item>
+</layer-list>

@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Center stop control button (white outline, filled) -->
+<!-- Center stop button: dark circle with bright white border (matches reference) -->
 <ripple xmlns:android="http://schemas.android.com/apk/res/android"
     android:color="#33FFFFFF">
     <item>
         <shape android:shape="oval">
             <solid android:color="#2A2A2A" />
             <stroke
-                android:width="2dp"
+                android:width="2.5dp"
                 android:color="#FFFFFF" />
         </shape>
     </item>

@@ -4,7 +4,7 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@drawable/bg_home_screen">
+    android:background="@drawable/bg_comper_mark1_screen">
 
     <!-- ============================================================
          SCROLLABLE CONTENT
@@ -327,7 +327,7 @@
                                 android:layout_width="20dp"
                                 android:layout_height="20dp"
                                 android:src="@drawable/ic_sunny"
-                                android:tint="#FF7F2E" />
+                                android:tint="#E0FFFFFF" />
 
                             <TextView
                                 android:layout_width="wrap_content"
@@ -384,7 +384,7 @@
             <LinearLayout
                 android:id="@+id/rowTiles2"
                 android:layout_width="match_parent"
-                android:layout_height="108dp"
+                android:layout_height="140dp"
                 android:orientation="horizontal"
                 android:layout_marginBottom="10dp">
 
@@ -402,106 +402,30 @@
                         android:layout_width="match_parent"
                         android:layout_height="match_parent"
                         android:orientation="vertical"
-                        android:gravity="center"
+                        android:gravity="start|center_vertical"
                         android:background="@drawable/bg_home_tile"
+                        android:padding="16dp"
                         android:clickable="true"
                         android:focusable="true">
 
                         <ImageView
-                            android:layout_width="28dp"
-                            android:layout_height="28dp"
+                            android:layout_width="26dp"
+                            android:layout_height="26dp"
                             android:src="@drawable/ic_note"
-                            android:tint="#FF7F2E" />
+                            android:tint="#CCFFFFFF" />
+
+                        <View
+                            android:layout_width="match_parent"
+                            android:layout_height="0dp"
+                            android:layout_weight="1" />
 
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="Quick Notes"
+                            android:text="Quick Note"
                             android:textColor="#FFFFFF"
-                            android:textSize="14sp"
-                            android:textStyle="bold"
-                            android:layout_marginTop="6dp" />
-                    </LinearLayout>
-                </androidx.cardview.widget.CardView>
-
-                <androidx.cardview.widget.CardView
-                    android:layout_width="0dp"
-                    android:layout_height="match_parent"
-                    android:layout_weight="1"
-                    app:cardCornerRadius="17dp"
-                    app:cardElevation="0dp"
-                    app:cardBackgroundColor="@android:color/transparent"
-                    android:layout_marginStart="5dp">
-
-                    <LinearLayout
-                        android:id="@+id/btnMeetingMinutes"
-                        android:layout_width="match_parent"
-                        android:layout_height="match_parent"
-                        android:orientation="vertical"
-                        android:gravity="center"
-                        android:background="@drawable/bg_home_tile"
-                        android:clickable="true"
-                        android:focusable="true">
-
-                        <ImageView
-                            android:layout_width="28dp"
-                            android:layout_height="28dp"
-                            android:src="@drawable/ic_mic"
-                            android:tint="#FF7F2E" />
-
-                        <TextView
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:text="Meetings"
-                            android:textColor="#FFFFFF"
-                            android:textSize="14sp"
-                            android:textStyle="bold"
-                            android:layout_marginTop="6dp" />
-                    </LinearLayout>
-                </androidx.cardview.widget.CardView>
-            </LinearLayout>
-
-            <!-- ROW 3: History + Connect -->
-            <LinearLayout
-                android:id="@+id/rowTiles3"
-                android:layout_width="match_parent"
-                android:layout_height="108dp"
-                android:orientation="horizontal"
-                android:layout_marginBottom="14dp">
-
-                <androidx.cardview.widget.CardView
-                    android:layout_width="0dp"
-                    android:layout_height="match_parent"
-                    android:layout_weight="1"
-                    app:cardCornerRadius="17dp"
-                    app:cardElevation="0dp"
-                    app:cardBackgroundColor="@android:color/transparent"
-                    android:layout_marginEnd="5dp">
-
-                    <LinearLayout
-                        android:id="@+id/btnConversationHistory"
-                        android:layout_width="match_parent"
-                        android:layout_height="match_parent"
-                        android:orientation="vertical"
-                        android:gravity="center"
-                        android:background="@drawable/bg_home_tile"
-                        android:clickable="true"
-                        android:focusable="true">
-
-                        <ImageView
-                            android:layout_width="28dp"
-                            android:layout_height="28dp"
-                            android:src="@drawable/ic_clock"
-                            android:tint="#FF7F2E" />
-
-                        <TextView
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:text="History"
-                            android:textColor="#FFFFFF"
-                            android:textSize="14sp"
-                            android:textStyle="bold"
-                            android:layout_marginTop="6dp" />
+                            android:textSize="15sp"
+                            android:textStyle="bold" />
                     </LinearLayout>
                 </androidx.cardview.widget.CardView>
 
@@ -519,25 +443,121 @@
                         android:layout_width="match_parent"
                         android:layout_height="match_parent"
                         android:orientation="vertical"
-                        android:gravity="center"
+                        android:gravity="start|center_vertical"
                         android:background="@drawable/bg_home_tile"
+                        android:padding="16dp"
                         android:clickable="true"
                         android:focusable="true">
 
                         <ImageView
-                            android:layout_width="28dp"
-                            android:layout_height="28dp"
-                            android:src="@drawable/ic_connect"
-                            android:tint="#FF7F2E" />
+                            android:layout_width="26dp"
+                            android:layout_height="26dp"
+                            android:src="@drawable/ic_controls"
+                            android:tint="#CCFFFFFF" />
+
+                        <View
+                            android:layout_width="match_parent"
+                            android:layout_height="0dp"
+                            android:layout_weight="1" />
 
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="Connect"
+                            android:text="Controls"
                             android:textColor="#FFFFFF"
-                            android:textSize="14sp"
-                            android:textStyle="bold"
-                            android:layout_marginTop="6dp" />
+                            android:textSize="15sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+                </androidx.cardview.widget.CardView>
+            </LinearLayout>
+
+            <!-- ROW 3: History + Connect -->
+            <LinearLayout
+                android:id="@+id/rowTiles3"
+                android:layout_width="match_parent"
+                android:layout_height="140dp"
+                android:orientation="horizontal"
+                android:layout_marginBottom="14dp">
+
+                <androidx.cardview.widget.CardView
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1"
+                    app:cardCornerRadius="17dp"
+                    app:cardElevation="0dp"
+                    app:cardBackgroundColor="@android:color/transparent"
+                    android:layout_marginEnd="5dp">
+
+                    <LinearLayout
+                        android:id="@+id/btnConversationHistory"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:orientation="vertical"
+                        android:gravity="start|center_vertical"
+                        android:background="@drawable/bg_home_tile"
+                        android:padding="16dp"
+                        android:clickable="true"
+                        android:focusable="true">
+
+                        <ImageView
+                            android:layout_width="26dp"
+                            android:layout_height="26dp"
+                            android:src="@drawable/ic_clock"
+                            android:tint="#CCFFFFFF" />
+
+                        <View
+                            android:layout_width="match_parent"
+                            android:layout_height="0dp"
+                            android:layout_weight="1" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="History"
+                            android:textColor="#FFFFFF"
+                            android:textSize="15sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+                </androidx.cardview.widget.CardView>
+
+                <androidx.cardview.widget.CardView
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1"
+                    app:cardCornerRadius="17dp"
+                    app:cardElevation="0dp"
+                    app:cardBackgroundColor="@android:color/transparent"
+                    android:layout_marginStart="5dp">
+
+                    <LinearLayout
+                        android:id="@+id/btnMeetingMinutes"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:orientation="vertical"
+                        android:gravity="start|center_vertical"
+                        android:background="@drawable/bg_home_tile"
+                        android:padding="16dp"
+                        android:clickable="true"
+                        android:focusable="true">
+
+                        <ImageView
+                            android:layout_width="26dp"
+                            android:layout_height="26dp"
+                            android:src="@drawable/ic_mic"
+                            android:tint="#CCFFFFFF" />
+
+                        <View
+                            android:layout_width="match_parent"
+                            android:layout_height="0dp"
+                            android:layout_weight="1" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Meetings"
+                            android:textColor="#FFFFFF"
+                            android:textSize="15sp"
+                            android:textStyle="bold" />
                     </LinearLayout>
                 </androidx.cardview.widget.CardView>
             </LinearLayout>
@@ -740,15 +760,15 @@
         android:id="@+id/layoutBleGate"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:background="#EE000000"
+        android:background="@drawable/bg_comper_mark1_screen"
         android:visibility="visible">
 
-        <!-- Loading animation at top center -->
+        <!-- Dots constellation + IMI center — fills top portion of screen -->
         <com.sdk.glassessdksample.ui.DotsOrbitView
-            android:layout_width="280dp"
-            android:layout_height="280dp"
+            android:layout_width="match_parent"
+            android:layout_height="340dp"
             android:layout_gravity="top|center_horizontal"
-            android:layout_marginTop="80dp" />
+            android:layout_marginTop="40dp" />
 
         <!-- Bottom content area -->
         <LinearLayout
@@ -758,7 +778,7 @@
             android:orientation="vertical"
             android:paddingStart="32dp"
             android:paddingEnd="32dp"
-            android:paddingBottom="60dp">
+            android:paddingBottom="56dp">
 
             <!-- Checking state -->
             <LinearLayout
@@ -781,16 +801,17 @@
                     android:layout_height="wrap_content"
                     android:text="your device..."
                     android:textColor="#FFFFFF"
-                    android:textSize="38sp"
-                    android:textStyle="bold" />
+                    android:textSize="42sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="-0.02" />
 
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="Looking for your IMI glasses..."
                     android:textColor="#88FFFFFF"
-                    android:textSize="14sp"
-                    android:layout_marginTop="8dp" />
+                    android:textSize="15sp"
+                    android:layout_marginTop="10dp" />
             </LinearLayout>
 
             <!-- Not connected state -->
@@ -801,12 +822,13 @@
                 android:orientation="vertical"
                 android:visibility="gone">
 
+                <!-- "no device" row + info button -->
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:orientation="horizontal"
                     android:gravity="center_vertical"
-                    android:layout_marginBottom="6dp">
+                    android:layout_marginBottom="4dp">
 
                     <TextView
                         android:layout_width="0dp"
@@ -814,15 +836,18 @@
                         android:layout_weight="1"
                         android:text="no device"
                         android:textColor="#FF7F2E"
-                        android:textSize="20sp"
+                        android:textSize="22sp"
                         android:textStyle="bold" />
 
+                    <!-- Info button: orange-bordered circle -->
                     <ImageView
                         android:id="@+id/btnBleGateInfo"
-                        android:layout_width="36dp"
-                        android:layout_height="36dp"
-                        android:src="@drawable/ic_manage"
-                        android:tint="#88FFFFFF"
+                        android:layout_width="42dp"
+                        android:layout_height="42dp"
+                        android:src="@drawable/ic_bluetooth"
+                        android:tint="#FF7F2E"
+                        android:background="@drawable/bg_ble_info_circle"
+                        android:padding="10dp"
                         android:clickable="true"
                         android:focusable="true" />
                 </LinearLayout>
@@ -832,27 +857,30 @@
                     android:layout_height="wrap_content"
                     android:text="connected."
                     android:textColor="#FFFFFF"
-                    android:textSize="38sp"
-                    android:textStyle="bold" />
+                    android:textSize="42sp"
+                    android:textStyle="bold"
+                    android:letterSpacing="-0.02"
+                    android:layout_marginBottom="12dp" />
 
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="Connect your IMI glasses via your phone's Bluetooth settings, then tap Retry."
-                    android:textColor="#88FFFFFF"
-                    android:textSize="14sp"
-                    android:layout_marginTop="10dp"
-                    android:layout_marginBottom="24dp" />
+                    android:textColor="#99FFFFFF"
+                    android:textSize="15sp"
+                    android:lineSpacingMultiplier="1.3"
+                    android:layout_marginBottom="28dp" />
 
+                <!-- Retry: large grey pill matching reference -->
                 <Button
                     android:id="@+id/btnBleGateRetry"
                     android:layout_width="match_parent"
-                    android:layout_height="50dp"
+                    android:layout_height="58dp"
                     android:text="Retry"
                     android:textColor="#FFFFFF"
-                    android:textSize="16sp"
+                    android:textSize="17sp"
                     android:textStyle="bold"
-                    android:background="@drawable/bg_home_btn_orange"
+                    android:background="@drawable/bg_ble_retry_btn"
                     android:stateListAnimator="@null" />
             </LinearLayout>
         </LinearLayout>
@@ -873,7 +901,9 @@
         app:menu="@menu/menu_bottom_nav_mark1"
         app:itemIconTint="@color/home_nav_item_color"
         app:itemTextColor="@color/home_nav_item_color"
-        app:labelVisibilityMode="labeled"
+        app:itemActiveIndicatorStyle="@style/HomeNavActiveIndicator"
+        app:itemRippleColor="@android:color/transparent"
+        app:labelVisibilityMode="unlabeled"
         app:elevation="0dp" />
 
 </androidx.coordinatorlayout.widget.CoordinatorLayout>

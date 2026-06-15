@@ -241,14 +241,16 @@
         android:layout_width="match_parent"
         android:layout_height="68dp"
         android:layout_gravity="bottom"
-        android:layout_marginStart="12dp"
-        android:layout_marginEnd="12dp"
-        android:layout_marginBottom="8dp"
-        android:background="@drawable/bg_bottom_nav_glass"
-        app:itemBackground="@drawable/bg_bottom_nav_item"
-        app:itemIconTint="@color/bottom_nav_item_color"
-        app:itemTextColor="@color/bottom_nav_item_color"
-        app:labelVisibilityMode="labeled"
-        app:menu="@menu/menu_bottom_nav" />
+        android:layout_marginStart="14dp"
+        android:layout_marginEnd="14dp"
+        android:layout_marginBottom="14dp"
+        android:background="@drawable/bg_home_nav"
+        app:menu="@menu/menu_bottom_nav_mark1"
+        app:itemIconTint="@color/home_nav_item_color"
+        app:itemTextColor="@color/home_nav_item_color"
+        app:itemActiveIndicatorStyle="@style/HomeNavActiveIndicator"
+        app:itemRippleColor="@android:color/transparent"
+        app:labelVisibilityMode="unlabeled"
+        app:elevation="0dp" />
 
 </androidx.coordinatorlayout.widget.CoordinatorLayout>

@@ -539,8 +539,11 @@ class Mark1MainActivity : AppCompatActivity(), GeminiLiveService.GeminiLiveCallb
             }
         }
 
+        // "Controls" tile — opens device controls
         binding.btnNotifications.setOnClickListener {
-            animateTilePress(it) { handleNotificationsTile() }
+            animateTilePress(it) {
+                startActivity(Intent(this, DeviceBindActivity::class.java))
+            }
         }
 
         // Music player controls

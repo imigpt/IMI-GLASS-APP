@@ -13,7 +13,7 @@
         android:layout_width="44dp"
         android:layout_height="4dp"
         android:layout_gravity="center_horizontal"
-        android:background="#99AEC3B3" />
+        android:background="#55FFFFFF" />
 
     <TextView
         android:layout_width="wrap_content"
@@ -22,7 +22,7 @@
         android:layout_marginTop="14dp"
         android:text="SPECIAL OFFER"
         android:textAllCaps="true"
-        android:textColor="#476155"
+        android:textColor="#AAFFFFFF"
         android:textSize="11sp"
         android:textStyle="bold" />
 
@@ -33,7 +33,7 @@
         android:layout_gravity="center_horizontal"
         android:layout_marginTop="6dp"
         android:text="Go Unlimited"
-        android:textColor="#111A14"
+        android:textColor="#FF7F2E"
         android:textSize="30sp"
         android:textStyle="bold" />
 
@@ -43,9 +43,9 @@
         android:layout_height="wrap_content"
         android:layout_marginTop="4dp"
         android:gravity="center"
-        android:text="Unlock higher limits and continue using all AI features."
-        android:textColor="#334D3F"
-        android:textSize="14sp" />
+        android:text="Unlock higher limits and continue using all AI features"
+        android:textColor="#CCFFFFFF"
+        android:textSize="13sp" />
 
     <TextView
         android:id="@+id/tvCurrentPlan"
@@ -53,8 +53,8 @@
         android:layout_height="wrap_content"
         android:layout_marginTop="12dp"
         android:gravity="center"
-        android:text="Current plan: Free"
-        android:textColor="#274336"
+        android:text="Current plan: Free (₹0)"
+        android:textColor="#FFFFFF"
         android:textSize="13sp"
         android:textStyle="bold" />
 
@@ -79,7 +79,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:text="Pro Plan"
-                android:textColor="#111A14"
+                android:textColor="#FF7F2E"
                 android:textSize="16sp"
                 android:textStyle="bold" />
 
@@ -88,29 +88,29 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="4dp"
-                android:text="Rs500"
-                android:textColor="#173D29"
-                android:textSize="22sp"
+                android:text="₹500"
+                android:textColor="#FFFFFF"
+                android:textSize="26sp"
                 android:textStyle="bold" />
 
             <TextView
                 android:id="@+id/tvProLimits"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
+                android:layout_marginTop="6dp"
                 android:text="Voice 120 | Vision 30 | Chat 300"
-                android:textColor="#345444"
+                android:textColor="#AAFFFFFF"
                 android:textSize="12sp" />
 
             <Button
                 android:id="@+id/btnSelectPro"
                 android:layout_width="match_parent"
                 android:layout_height="40dp"
-                android:layout_marginTop="10dp"
+                android:layout_marginTop="12dp"
                 android:background="@drawable/bg_upgrade_action_button"
                 android:text="Upgrade"
                 android:textAllCaps="false"
-                android:textColor="#102A1A"
+                android:textColor="#FFFFFF"
                 android:textStyle="bold" />
         </LinearLayout>
 
@@ -129,7 +129,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:text="Ultra Plan"
-                android:textColor="#111A14"
+                android:textColor="#FF7F2E"
                 android:textSize="16sp"
                 android:textStyle="bold" />
 
@@ -138,29 +138,29 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="4dp"
-                android:text="Rs3000"
-                android:textColor="#173D29"
-                android:textSize="22sp"
+                android:text="₹3000"
+                android:textColor="#FFFFFF"
+                android:textSize="26sp"
                 android:textStyle="bold" />
 
             <TextView
                 android:id="@+id/tvUltraLimits"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
+                android:layout_marginTop="6dp"
                 android:text="Voice 1000 | Vision 250 | Chat 2500"
-                android:textColor="#345444"
+                android:textColor="#AAFFFFFF"
                 android:textSize="12sp" />
 
             <Button
                 android:id="@+id/btnSelectUltra"
                 android:layout_width="match_parent"
                 android:layout_height="40dp"
-                android:layout_marginTop="10dp"
+                android:layout_marginTop="12dp"
                 android:background="@drawable/bg_upgrade_action_button"
                 android:text="Upgrade"
                 android:textAllCaps="false"
-                android:textColor="#102A1A"
+                android:textColor="#FFFFFF"
                 android:textStyle="bold" />
         </LinearLayout>
     </LinearLayout>
@@ -169,21 +169,21 @@
         android:id="@+id/tvUpgradeHint"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="12dp"
+        android:layout_marginTop="14dp"
         android:gravity="center"
         android:text="Upgrade now to unlock higher usage limits."
-        android:textColor="#355646"
+        android:textColor="#AAFFFFFF"
         android:textSize="12sp" />
 
     <Button
         android:id="@+id/btnKeepCurrent"
         android:layout_width="match_parent"
-        android:layout_height="42dp"
+        android:layout_height="46dp"
         android:layout_marginTop="10dp"
         android:background="@drawable/bg_upgrade_secondary_button"
-        android:text="Not now"
+        android:text="Not Now"
         android:textAllCaps="false"
-        android:textColor="#203A2B"
+        android:textColor="#CCFFFFFF"
         android:textStyle="bold" />
 
 </LinearLayout>

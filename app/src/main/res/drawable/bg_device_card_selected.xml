@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Base dark fill -->
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="#1A0F0A" />
+            <corners android:radius="22dp" />
+        </shape>
+    </item>
+    <!-- Orange glow from top-left -->
+    <item>
+        <shape android:shape="rectangle">
+            <gradient
+                android:type="radial"
+                android:gradientRadius="80%p"
+                android:startColor="#80D87D41"
+                android:endColor="#001A0F0A"
+                android:centerX="0.3"
+                android:centerY="0.2" />
+            <corners android:radius="22dp" />
+        </shape>
+    </item>
+    <!-- Orange border -->
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="@android:color/transparent" />
+            <corners android:radius="22dp" />
+            <stroke android:width="1.5dp" android:color="#FF7F2E" />
+        </shape>
+    </item>
+</layer-list>

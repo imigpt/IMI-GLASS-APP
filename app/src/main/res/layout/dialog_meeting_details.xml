@@ -3,7 +3,9 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:background="#1E1E1E"
+    android:layout_margin="16dp"
+    android:background="@drawable/mm_dialog_card_bg"
+    android:clipToOutline="true"
     android:fillViewport="true">
 
     <LinearLayout
@@ -21,13 +23,14 @@
             android:orientation="horizontal"
             android:padding="20dp">
 
-            <TextView
-                android:layout_width="48dp"
-                android:layout_height="48dp"
+            <ImageView
+                android:layout_width="44dp"
+                android:layout_height="44dp"
                 android:background="@drawable/icon_circle_bg"
-                android:gravity="center"
-                android:text="📋"
-                android:textSize="28sp" />
+                android:contentDescription="Meeting"
+                android:padding="11dp"
+                android:src="@drawable/ic_note"
+                app:tint="#FFFFFF" />
 
             <TextView
                 android:id="@+id/tv_dialog_title"
@@ -37,7 +40,7 @@
                 android:layout_weight="1"
                 android:ellipsize="end"
                 android:maxLines="2"
-                android:text="Meeting Title"
+                android:text="Title: Meeting Title"
                 android:textColor="#FFFFFF"
                 android:textSize="20sp"
                 android:textStyle="bold" />
@@ -48,7 +51,6 @@
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:background="#252525"
             android:orientation="vertical"
             android:padding="20dp">
 
@@ -59,13 +61,14 @@
                 android:gravity="center_vertical"
                 android:orientation="horizontal">
 
-                <TextView
-                    android:layout_width="32dp"
-                    android:layout_height="32dp"
+                <ImageView
+                    android:layout_width="34dp"
+                    android:layout_height="34dp"
                     android:background="@drawable/info_badge_bg"
-                    android:gravity="center"
-                    android:text="📅"
-                    android:textSize="18sp" />
+                    android:contentDescription="Date"
+                    android:padding="8dp"
+                    android:src="@drawable/ic_clock"
+                    app:tint="#FF8C3A" />
 
                 <TextView
                     android:id="@+id/tv_dialog_date"
@@ -73,8 +76,8 @@
                     android:layout_height="wrap_content"
                     android:layout_marginStart="12dp"
                     android:layout_weight="1"
-                    android:text="Feb 13, 2026 at 04:30 pm"
-                    android:textColor="#E0E0E0"
+                    android:text="Jun 15, 2026 at 12:30 pm"
+                    android:textColor="#E8E0D8"
                     android:textSize="15sp" />
 
             </LinearLayout>
@@ -87,13 +90,14 @@
                 android:gravity="center_vertical"
                 android:orientation="horizontal">
 
-                <TextView
-                    android:layout_width="32dp"
-                    android:layout_height="32dp"
+                <ImageView
+                    android:layout_width="34dp"
+                    android:layout_height="34dp"
                     android:background="@drawable/info_badge_bg"
-                    android:gravity="center"
-                    android:text="⏱️"
-                    android:textSize="18sp" />
+                    android:contentDescription="Duration"
+                    android:padding="8dp"
+                    android:src="@drawable/ic_clock"
+                    app:tint="#FF8C3A" />
 
                 <TextView
                     android:id="@+id/tv_dialog_duration"
@@ -101,8 +105,8 @@
                     android:layout_height="wrap_content"
                     android:layout_marginStart="12dp"
                     android:layout_weight="1"
-                    android:text="Duration: 58s"
-                    android:textColor="#E0E0E0"
+                    android:text="Duration: 18s"
+                    android:textColor="#E8E0D8"
                     android:textSize="15sp" />
 
             </LinearLayout>
@@ -115,13 +119,14 @@
                 android:gravity="center_vertical"
                 android:orientation="horizontal">
 
-                <TextView
-                    android:layout_width="32dp"
-                    android:layout_height="32dp"
+                <ImageView
+                    android:layout_width="34dp"
+                    android:layout_height="34dp"
                     android:background="@drawable/info_badge_bg"
-                    android:gravity="center"
-                    android:text="📝"
-                    android:textSize="18sp" />
+                    android:contentDescription="Words"
+                    android:padding="8dp"
+                    android:src="@drawable/ic_edit"
+                    app:tint="#FF8C3A" />
 
                 <TextView
                     android:id="@+id/tv_dialog_word_count"
@@ -129,8 +134,8 @@
                     android:layout_height="wrap_content"
                     android:layout_marginStart="12dp"
                     android:layout_weight="1"
-                    android:text="Words: 75"
-                    android:textColor="#E0E0E0"
+                    android:text="Words: 57"
+                    android:textColor="#E8E0D8"
                     android:textSize="15sp" />
 
             </LinearLayout>
@@ -145,13 +150,14 @@
                 android:orientation="horizontal"
                 android:visibility="gone">
 
-                <TextView
-                    android:layout_width="32dp"
-                    android:layout_height="32dp"
+                <ImageView
+                    android:layout_width="34dp"
+                    android:layout_height="34dp"
                     android:background="@drawable/info_badge_bg"
-                    android:gravity="center"
-                    android:text="👥"
-                    android:textSize="18sp" />
+                    android:contentDescription="Participants"
+                    android:padding="8dp"
+                    android:src="@drawable/ic_note"
+                    app:tint="#FF8C3A" />
 
                 <TextView
                     android:id="@+id/tv_dialog_speaker_count"
@@ -160,7 +166,7 @@
                     android:layout_marginStart="12dp"
                     android:layout_weight="1"
                     android:text="Participants: 3 speakers detected"
-                    android:textColor="#00D9FF"
+                    android:textColor="#FF8C3A"
                     android:textSize="15sp"
                     android:textStyle="bold" />
 
@@ -173,7 +179,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"
-            android:padding="20dp">
+            android:paddingHorizontal="20dp">
 
             <!-- Summary Header -->
             <TextView
@@ -183,7 +189,7 @@
                 android:letterSpacing="0.15"
                 android:paddingVertical="12dp"
                 android:text="SUMMARY"
-                android:textColor="#00D9FF"
+                android:textColor="#FF8C3A"
                 android:textSize="14sp"
                 android:textStyle="bold" />
 
@@ -200,8 +206,8 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:lineSpacingExtra="4dp"
-                android:text="Here's a concise meeting summary:\n\n**Subject: Informal Check-in**\n\n**1. Key Discussion Points:**\n\n* Update on the deployment of &quot;Grax&quot; which will soon be live on the Play Store.\n* Brief mention of &quot;Astro Guru कृपा&quot; and status.\n\n**2. Decisions Made:**\n\n* None explicitly stated.\n\n**3. Action Items:**\n\n* None explicitly stated.\n\n**4. Important Notes:**\n\n* The meeting was a casual check-in.\n* Further details about &quot;Grax&quot; and &quot;Astro Guru कृपा&quot; were not discussed in detail based on the transcript provided."
-                android:textColor="#D0D0D0"
+                android:text="The team discussed the progress of the free wedding app and the remaining tasks related to it."
+                android:textColor="#D8D0C8"
                 android:textSize="15sp" />
 
         </LinearLayout>
@@ -211,9 +217,9 @@
             android:id="@+id/layout_transcript_section"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:background="#1A1A1A"
             android:orientation="vertical"
-            android:padding="20dp"
+            android:paddingHorizontal="20dp"
+            android:paddingTop="8dp"
             android:visibility="gone">
 
             <!-- Transcript Header -->
@@ -224,7 +230,7 @@
                 android:letterSpacing="0.15"
                 android:paddingVertical="12dp"
                 android:text="TRANSCRIPT"
-                android:textColor="#888888"
+                android:textColor="#FF8C3A"
                 android:textSize="14sp"
                 android:textStyle="bold" />
 
@@ -233,7 +239,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="1dp"
                 android:layout_marginBottom="16dp"
-                android:background="#333333" />
+                android:background="#4DFF7F2E" />
 
             <!-- Transcript Content -->
             <TextView
@@ -242,7 +248,7 @@
                 android:layout_height="wrap_content"
                 android:lineSpacingExtra="3dp"
                 android:text="Full transcript text here..."
-                android:textColor="#999999"
+                android:textColor="#B8B0A8"
                 android:textSize="13sp" />
 
         </LinearLayout>
@@ -250,15 +256,19 @@
         <!-- Show Transcript Toggle Button -->
         <TextView
             android:id="@+id/btn_toggle_transcript"
-            android:layout_width="match_parent"
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:background="?attr/selectableItemBackground"
+            android:layout_gravity="center"
+            android:background="?attr/selectableItemBackgroundBorderless"
             android:clickable="true"
+            android:drawableStart="@drawable/ic_eye"
+            android:drawablePadding="8dp"
+            android:drawableTint="#FF8C3A"
             android:focusable="true"
             android:gravity="center"
             android:padding="16dp"
-            android:text="▼ Show Transcript"
-            android:textColor="#00D9FF"
+            android:text="Show Transcript"
+            android:textColor="#FF8C3A"
             android:textSize="14sp"
             android:textStyle="bold" />
 
@@ -266,21 +276,23 @@
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:background="#252525"
-            android:gravity="end"
+            android:gravity="end|center_vertical"
             android:orientation="horizontal"
-            android:padding="16dp">
+            android:paddingHorizontal="20dp"
+            android:paddingTop="8dp"
+            android:paddingBottom="20dp">
 
             <TextView
                 android:id="@+id/btn_dialog_delete"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:background="?attr/selectableItemBackgroundBorderless"
+                android:background="@drawable/mm_btn_delete_pill"
                 android:clickable="true"
                 android:focusable="true"
-                android:padding="12dp"
+                android:paddingHorizontal="26dp"
+                android:paddingVertical="10dp"
                 android:text="Delete"
-                android:textColor="#FF6B6B"
+                android:textColor="#FFFFFF"
                 android:textSize="14sp"
                 android:textStyle="bold" />
 
@@ -288,13 +300,13 @@
                 android:id="@+id/btn_dialog_close"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="16dp"
+                android:layout_marginStart="20dp"
                 android:background="?attr/selectableItemBackgroundBorderless"
                 android:clickable="true"
                 android:focusable="true"
                 android:padding="12dp"
                 android:text="Close"
-                android:textColor="#00D9FF"
+                android:textColor="#E8E0D8"
                 android:textSize="14sp"
                 android:textStyle="bold" />
 

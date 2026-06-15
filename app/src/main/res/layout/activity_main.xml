@@ -3,12 +3,12 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@drawable/bg_app_gradient">
+    android:background="@drawable/bg_comper_mark1_screen">
 
     <androidx.core.widget.NestedScrollView
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:layout_marginBottom="94dp"
+        android:layout_marginBottom="84dp"
         android:fillViewport="true">
 
         <LinearLayout
@@ -48,7 +48,7 @@
                         android:layout_height="wrap_content"
                         android:layout_marginTop="-4dp"
                         android:text="Your smart companion"
-                        android:textColor="#FF3EADE8"
+                        android:textColor="#FF7F2E"
                         android:textSize="12sp" />
                 </LinearLayout>
 
@@ -86,11 +86,11 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginBottom="14dp"
-                app:cardBackgroundColor="#3A2E3036"
+                app:cardBackgroundColor="#22FFFFFF"
                 app:cardCornerRadius="22dp"
                 app:cardElevation="0dp"
-                app:strokeColor="#4A6D727B"
-                app:strokeWidth="1dp">
+                app:strokeColor="#55FFFFFF"
+                app:strokeWidth="0.8dp">
 
                 <LinearLayout
                     android:layout_width="match_parent"
@@ -200,16 +200,16 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginBottom="14dp"
-                app:cardBackgroundColor="@android:color/transparent"
+                app:cardBackgroundColor="#22FFFFFF"
                 app:cardCornerRadius="24dp"
                 app:cardElevation="0dp"
-                app:strokeColor="#6A7A8088"
-                app:strokeWidth="1dp">
+                app:strokeColor="#55FFFFFF"
+                app:strokeWidth="0.8dp">
 
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:background="@drawable/bg_card_premium"
+                    android:background="@android:color/transparent"
                     android:gravity="center_vertical"
                     android:orientation="horizontal"
                     android:padding="12dp">
@@ -443,7 +443,7 @@
                                 android:scaleX="0.82"
                                 android:scaleY="0.82"
                                 app:thumbTint="#FFFFFFFF"
-                                app:trackTint="#FF2FB8FF" />
+                                app:trackTint="#FFFF7F2E" />
                         </LinearLayout>
                     </LinearLayout>
                 </LinearLayout>
@@ -953,14 +953,16 @@
         android:layout_width="match_parent"
         android:layout_height="68dp"
         android:layout_gravity="bottom"
-        android:layout_marginStart="12dp"
-        android:layout_marginEnd="12dp"
-        android:layout_marginBottom="8dp"
-        android:background="@drawable/bg_bottom_nav_glass"
-        app:itemBackground="@drawable/bg_bottom_nav_item"
-        app:itemIconTint="@color/bottom_nav_item_color"
-        app:itemTextColor="@color/bottom_nav_item_color"
-        app:labelVisibilityMode="labeled"
-        app:menu="@menu/menu_bottom_nav" />
+        android:layout_marginStart="14dp"
+        android:layout_marginEnd="14dp"
+        android:layout_marginBottom="14dp"
+        android:background="@drawable/bg_home_nav"
+        app:menu="@menu/menu_bottom_nav_mark1"
+        app:itemIconTint="@color/home_nav_item_color"
+        app:itemTextColor="@color/home_nav_item_color"
+        app:itemActiveIndicatorStyle="@style/HomeNavActiveIndicator"
+        app:itemRippleColor="@android:color/transparent"
+        app:labelVisibilityMode="unlabeled"
+        app:elevation="0dp" />
 </androidx.coordinatorlayout.widget.CoordinatorLayout>
 

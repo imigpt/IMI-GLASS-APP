@@ -1,4 +1,4 @@
-# Vision Chat - Glasses Image Transfer & Analysis
+![alt text](image.png)# Vision Chat - Glasses Image Transfer & Analysis
 
 ## Overview
 A new **Vision Chat** page that:

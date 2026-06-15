@@ -6,12 +6,16 @@ import android.net.Uri
 import android.os.Bundle
 import android.widget.Button
 import android.widget.ImageView
+import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import com.bumptech.glide.Glide
+import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.sdk.glassessdksample.databinding.ActivityProfileBinding
-import com.sdk.glassessdksample.ui.BottomNavManager
+import com.sdk.glassessdksample.ui.DevicePreferenceManager
+import com.sdk.glassessdksample.ui.DeviceType
+import com.sdk.glassessdksample.ui.Mark1BottomNavManager
 import com.sdk.glassessdksample.ui.UsageLimitManager
 import com.sdk.glassessdksample.ui.UserMemoryActivity
 
@@ -30,15 +34,81 @@ class ProfileActivity : AppCompatActivity() {
         setupUI()
         loadUserData()
         refreshUpgradeCard()
+        updateCurrentDeviceLabel()
     }
 
     override fun onResume() {
         super.onResume()
         refreshUpgradeCard()
+        updateCurrentDeviceLabel()
+    }
+
+    private fun updateCurrentDeviceLabel() {
+        val type = DevicePreferenceManager.getDeviceType(this)
+        binding.tvCurrentDevice.text = when (type) {
+            DeviceType.MARK1 -> "Mark 1"
+            DeviceType.MARK2 -> "Mark 2"
+            else -> "Not selected"
+        }
+    }
+
+    private fun showSwitchDeviceDialog() {
+        val current = DevicePreferenceManager.getDeviceType(this)
+        var selected = current
+
+        val dialog = android.app.Dialog(this, R.style.Theme_TransparentDialog)
+        val view = layoutInflater.inflate(R.layout.dialog_switch_device, null)
+        dialog.setContentView(view)
+        dialog.window?.setLayout(
+            (resources.displayMetrics.widthPixels * 0.88).toInt(),
+            android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+        )
+        dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
+
+        val cardMark1 = view.findViewById<LinearLayout>(R.id.cardMark1)
+        val cardMark2 = view.findViewById<LinearLayout>(R.id.cardMark2)
+
+        fun updateSelection(type: DeviceType) {
+            selected = type
+            cardMark1.setBackgroundResource(
+                if (type == DeviceType.MARK1) R.drawable.bg_switch_device_card_selected
+                else R.drawable.bg_switch_device_card_plain
+            )
+            cardMark2.setBackgroundResource(
+                if (type == DeviceType.MARK2) R.drawable.bg_switch_device_card_selected
+                else R.drawable.bg_switch_device_card_plain
+            )
+        }
+
+        updateSelection(current)
+
+        cardMark1.setOnClickListener { updateSelection(DeviceType.MARK1) }
+        cardMark2.setOnClickListener { updateSelection(DeviceType.MARK2) }
+
+        view.findViewById<com.google.android.material.button.MaterialButton>(R.id.btnSwitchConfirm).setOnClickListener {
+            dialog.dismiss()
+            if (selected != current) {
+                DevicePreferenceManager.setDeviceType(this, selected)
+                val target = if (selected == DeviceType.MARK2)
+                    MainActivity::class.java
+                else
+                    com.sdk.glassessdksample.ui.Mark1MainActivity::class.java
+                startActivity(Intent(this, target).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+                })
+                finish()
+            }
+        }
+
+        view.findViewById<TextView>(R.id.btnNotNow).setOnClickListener {
+            dialog.dismiss()
+        }
+
+        dialog.show()
     }
 
     private fun setupUI() {
-        BottomNavManager.setup(binding.bottomNavigation, R.id.nav_profile, this)
+        Mark1BottomNavManager.setup(this, binding.bottomNavigation, R.id.nav_profile)
 
         // Back button
         binding.backButton.setOnClickListener {
@@ -49,6 +119,11 @@ class ProfileActivity : AppCompatActivity() {
         binding.editProfileButton.setOnClickListener {
             // Open user memory activity for editing
             startActivity(Intent(this, UserMemoryActivity::class.java))
+        }
+
+        // Switch Device (Mark 1 / Mark 2)
+        binding.switchDeviceButton.setOnClickListener {
+            showSwitchDeviceDialog()
         }
 
         // Manage Data button
@@ -64,6 +139,11 @@ class ProfileActivity : AppCompatActivity() {
             startActivity(intent)
         }
 
+        // Settings button
+        binding.settingsButton.setOnClickListener {
+            startActivity(Intent(this, SettingsActivity::class.java))
+        }
+
         // Dark Mode toggle
         binding.darkModeToggle.setOnCheckedChangeListener { _, isChecked ->
             sharedPref.edit().putBoolean("dark_mode", isChecked).apply()
@@ -72,7 +152,7 @@ class ProfileActivity : AppCompatActivity() {
 
         // Rate Us button
         binding.rateUsButton.setOnClickListener {
-            openPlayStore()
+            showRateUsDialog()
         }
 
         // Logout button
@@ -112,10 +192,14 @@ class ProfileActivity : AppCompatActivity() {
     }
 
     private fun loadUserData() {
-        // Get user data from SharedPreferences
-        val userName = sharedPref.getString("user_name", "User") ?: "User"
-        val userEmail = sharedPref.getString("user_email", "user@example.com") ?: "user@example.com"
-        val profileImageUrl = sharedPref.getString("profile_image_url", "") ?: ""
+        // Prefer the API session (IMI_PREFS), fall back to legacy user_prefs values.
+        val session = com.sdk.glassessdksample.auth.SessionManager(this)
+        val userName = session.userName?.takeIf { it.isNotBlank() }
+            ?: sharedPref.getString("user_name", "User") ?: "User"
+        val userEmail = session.userEmail?.takeIf { it.isNotBlank() }
+            ?: sharedPref.getString("user_email", "user@example.com") ?: "user@example.com"
+        val profileImageUrl = session.profileImageUrl?.takeIf { it.isNotBlank() }
+            ?: sharedPref.getString("profile_image_url", "") ?: ""
 
         // Set user name and email
         binding.userName.text = userName
@@ -169,20 +253,50 @@ class ProfileActivity : AppCompatActivity() {
     }
 
     private fun showManageDataDialog() {
-        AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
-            .setTitle("Manage Data")
-            .setMessage("Choose what to do with your data:")
-            .setNegativeButton("Clear App Data") { dialog, which ->
-                clearAppData()
+        val sheet = BottomSheetDialog(this, R.style.BottomSheetStyle)
+        val view = layoutInflater.inflate(R.layout.bottom_sheet_manage_data, null)
+        sheet.setContentView(view)
+
+        view.findViewById<ImageView>(R.id.btnCloseManageData).setOnClickListener {
+            sheet.dismiss()
+        }
+        view.findViewById<Button>(R.id.btnDownloadData).setOnClickListener {
+            showToast("Data export feature coming soon")
+            sheet.dismiss()
+        }
+        view.findViewById<Button>(R.id.btnClearData).setOnClickListener {
+            sheet.dismiss()
+            clearAppData()
+        }
+
+        sheet.show()
+    }
+
+    private fun showRateUsDialog() {
+        val sheet = BottomSheetDialog(this, R.style.BottomSheetStyle)
+        val view = layoutInflater.inflate(R.layout.bottom_sheet_rate_us, null)
+        sheet.setContentView(view)
+
+        view.findViewById<ImageView>(R.id.btnCloseRateUs).setOnClickListener {
+            sheet.dismiss()
+        }
+
+        val stars = listOf(
+            view.findViewById<ImageView>(R.id.star1),
+            view.findViewById<ImageView>(R.id.star2),
+            view.findViewById<ImageView>(R.id.star3),
+            view.findViewById<ImageView>(R.id.star4),
+            view.findViewById<ImageView>(R.id.star5)
+        )
+        stars.forEach { star ->
+            star.setOnClickListener {
+                // Any star tap sends the user to the Play Store to leave a rating.
+                sheet.dismiss()
+                openPlayStore()
             }
-            .setNeutralButton("Export Data") { dialog, which ->
-                // Export data functionality
-                showToast("Data export feature coming soon")
-            }
-            .setPositiveButton("Cancel") { dialog, which ->
-                dialog.dismiss()
-            }
-            .show()
+        }
+
+        sheet.show()
     }
 
     private fun clearAppData() {
@@ -218,19 +332,23 @@ class ProfileActivity : AppCompatActivity() {
     }
 
     private fun performLogout() {
-        // Clear authentication data
-        sharedPref.edit()
-            .remove("user_name")
-            .remove("user_email")
-            .remove("auth_token")
-            .remove("is_logged_in")
-            .apply()
+        // Invalidate the server session and clear the local session (IMI_PREFS).
+        // AuthApi.logout() clears the session regardless of the server outcome.
+        com.sdk.glassessdksample.auth.AuthApi(this).logout {
+            // Also clear any legacy profile fields kept in the user_prefs file.
+            sharedPref.edit()
+                .remove("user_name")
+                .remove("user_email")
+                .remove("auth_token")
+                .remove("is_logged_in")
+                .apply()
 
-        // Go to login screen
-        val intent = Intent(this, LoginActivity::class.java)
-        intent.flags = Intent.FLAG_ACTIVITY_CLEAR_TASK or Intent.FLAG_ACTIVITY_NEW_TASK
-        startActivity(intent)
-        finish()
+            // Go to login screen
+            val intent = Intent(this, LoginActivity::class.java)
+            intent.flags = Intent.FLAG_ACTIVITY_CLEAR_TASK or Intent.FLAG_ACTIVITY_NEW_TASK
+            startActivity(intent)
+            finish()
+        }
     }
 
     private fun openPlayStore() {

@@ -22,7 +22,7 @@ class CameraActivity : AppCompatActivity() {
         setContentView(binding.root)
 
         setupUi()
-        BottomNavManager.setup(binding.bottomNavigation, R.id.nav_camera, this)
+        BottomNavManager.setup(binding.bottomNavigation, R.id.nav_more, this)
     }
 
     private fun setupUi() {
