@@ -1,7 +1,7 @@
 <resources>
 
     <!-- App Info -->
-    <string name="app_name">GlassesSDKSample</string>
+    <string name="app_name">IMI Glasses</string>
 
     <!-- Laptop / AI Controls -->
     <string name="text_connect_laptop">Connect Laptop</string>

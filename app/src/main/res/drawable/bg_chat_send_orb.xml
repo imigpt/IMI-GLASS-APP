@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Orange round send / stop button -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="oval">
+    <gradient
+        android:angle="135"
+        android:startColor="#FF8B46"
+        android:endColor="#FF6900"
+        android:type="linear" />
+</shape>

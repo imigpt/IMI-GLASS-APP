@@ -127,12 +127,14 @@ class AuthApi(context: Context) {
                     return false
                 }
                 val json = JSONObject(raw)
-                val newAccess = json.optString("accessToken").takeIf { it.isNotBlank() }
+                // The backend is inconsistent: login returns camelCase, refresh returns
+                // snake_case (access_token / expires_in). Accept either.
+                val newAccess = json.firstString("accessToken", "access_token")
                     ?: return false
                 session.updateTokens(
                     accessToken = newAccess,
-                    refreshToken = json.optString("refreshToken").takeIf { it.isNotBlank() },
-                    expiresInSeconds = json.optLong("expiresIn", DEFAULT_EXPIRES_IN)
+                    refreshToken = json.firstString("refreshToken", "refresh_token"),
+                    expiresInSeconds = json.firstLong("expiresIn", "expires_in", default = DEFAULT_EXPIRES_IN)
                 )
                 true
             }
@@ -157,16 +159,35 @@ class AuthApi(context: Context) {
 
     private fun persistLoginResponse(resp: JSONObject) {
         val user = resp.optJSONObject("user")
+        // Tolerate both camelCase and snake_case (the backend mixes them across endpoints).
         session.saveSession(
-            accessToken = resp.optString("accessToken"),
-            refreshToken = resp.optString("refreshToken").takeIf { it.isNotBlank() },
-            expiresInSeconds = resp.optLong("expiresIn", DEFAULT_EXPIRES_IN),
-            userId = user?.optString("userId"),
-            fullName = user?.optString("fullName"),
+            accessToken = resp.firstString("accessToken", "access_token").orEmpty(),
+            refreshToken = resp.firstString("refreshToken", "refresh_token"),
+            expiresInSeconds = resp.firstLong("expiresIn", "expires_in", default = DEFAULT_EXPIRES_IN),
+            userId = user?.firstString("userId", "user_id", "id"),
+            fullName = user?.firstString("fullName", "full_name", "name"),
             email = user?.optString("email"),
             plan = user?.optString("plan"),
-            profileImageUrl = user?.optString("profileImageUrl").takeIf { !it.isNullOrBlank() && it != "null" }
+            profileImageUrl = user?.firstString("profileImageUrl", "profile_image_url")
+                ?.takeIf { it != "null" }
         )
+    }
+
+    /** Returns the first non-blank string value among [keys], or null. */
+    private fun JSONObject.firstString(vararg keys: String): String? {
+        for (k in keys) {
+            val v = optString(k)
+            if (v.isNotBlank() && v != "null") return v
+        }
+        return null
+    }
+
+    /** Returns the first present long value among [keys], or [default]. */
+    private fun JSONObject.firstLong(vararg keys: String, default: Long): Long {
+        for (k in keys) {
+            if (has(k) && !isNull(k)) return optLong(k, default)
+        }
+        return default
     }
 
     private fun buildRequest(url: String, body: JSONObject, authToken: String?): Request {

@@ -41,6 +41,12 @@ class SplashActivity : AppCompatActivity() {
         
         val isLoggedIn = sharedPreferences.getBoolean("is_logged_in", false) || skipAuth
         val hasCompletedOnboarding = sharedPreferences.getBoolean("onboarding_completed", false) || skipAuth
+
+        // Kick off the one-time migration + pull of Quick Notes / Meeting Minutes
+        // from the backend. Runs on a background thread; no-op if not signed in.
+        if (isLoggedIn) {
+            com.sdk.glassessdksample.ui.sync.BackendSync.syncOnLaunch(applicationContext)
+        }
         
         Handler(Looper.getMainLooper()).postDelayed({
             try {

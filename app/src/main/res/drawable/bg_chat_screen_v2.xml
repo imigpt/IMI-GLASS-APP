@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Chat screen background: warm orange glow at top fading to dark (matches new design) -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="#0E0D0C" />
+        </shape>
+    </item>
+    <item android:gravity="top|center_horizontal" android:width="680dp" android:height="560dp" android:top="-120dp">
+        <shape android:shape="oval">
+            <gradient
+                android:type="radial"
+                android:gradientRadius="360dp"
+                android:startColor="#9EC8541A"
+                android:centerColor="#3AC8541A"
+                android:endColor="#000E0D0C" />
+        </shape>
+    </item>
+</layer-list>

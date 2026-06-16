@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Round icon badge inside each Quick Note row (Figma: 36dp, #1A1D1C @ 76%) -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="oval">
+    <solid android:color="#C21A1D1C" />
+</shape>

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- "Listening" bar background: dark capsule with a warm orange theme gradient sheen -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <gradient
+        android:angle="0"
+        android:startColor="#33FF6900"
+        android:centerColor="#1F241608"
+        android:endColor="#3DFF8B46"
+        android:type="linear" />
+    <corners android:radius="32dp" />
+    <stroke android:width="0.8dp" android:color="#55FF8B46" />
+</shape>

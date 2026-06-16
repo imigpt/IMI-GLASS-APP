@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Quick Note row (Figma: #191C1B, radius 20, border 0.5px rgba(255,141,40,0.84)) -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="#191C1B" />
+    <corners android:radius="20dp" />
+    <stroke android:width="0.5dp" android:color="#D6FF8D28" />
+</shape>

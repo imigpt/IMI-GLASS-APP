@@ -1,5 +1,9 @@
 package com.sdk.glassessdksample.ui
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
 import android.graphics.BitmapFactory
 import android.view.Gravity
 import android.view.LayoutInflater
@@ -9,6 +13,7 @@ import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.Toast
 import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.RecyclerView
 import com.sdk.glassessdksample.R
@@ -46,6 +51,12 @@ class ChatAdapter(
         val imageBadge: TextView? = itemView.findViewById(R.id.imageBadge)
         val messageTimestamp: TextView? = itemView.findViewById(R.id.messageTimestamp)
         val imageRefBadge: TextView? = itemView.findViewById(R.id.imageRefBadge)
+        // AI action row
+        val aiActionRow: LinearLayout? = itemView.findViewById(R.id.aiActionRow)
+        val btnCopy: ImageView? = itemView.findViewById(R.id.btnCopyMessage)
+        val btnLike: ImageView? = itemView.findViewById(R.id.btnLikeMessage)
+        val btnDislike: ImageView? = itemView.findViewById(R.id.btnDislikeMessage)
+        val btnShare: ImageView? = itemView.findViewById(R.id.btnShareMessage)
     }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ChatViewHolder {
@@ -116,9 +127,16 @@ class ChatAdapter(
         holder.messageTimestamp?.setTextColor(ContextCompat.getColor(context, R.color.text_tertiary))
         holder.imageRefBadge?.setTextColor(ContextCompat.getColor(context, R.color.text_secondary))
         holder.messageText.setTextColor(ContextCompat.getColor(context, R.color.text_primary))
-        holder.messageText.textSize = 14f
+        holder.messageText.textSize = 15f
         holder.aiAvatar?.visibility = View.GONE
-        
+        holder.aiActionRow?.visibility = View.GONE
+
+        // Whether this message should render as a plain AI answer (no bubble,
+        // with the copy/like/dislike/share action row) per the new design.
+        val isAiAnswer = !message.isFromUser &&
+            message.isFinal &&
+            message.messageType != MessageType.SYSTEM
+
         // --- Style based on message type and source ---
         when (message.messageType) {
             MessageType.SYSTEM -> {
@@ -127,39 +145,30 @@ class ChatAdapter(
                 holder.messageCard.setBackgroundResource(R.drawable.bg_chat_bubble_system)
                 holder.messageText.setTextColor(ContextCompat.getColor(context, R.color.text_secondary))
                 holder.messageText.textSize = 12f
-                holder.aiAvatar?.visibility = View.GONE
-            }
-            MessageType.VISION_RESULT -> {
-                // Vision result - assistant style
-                holder.containerLayout.gravity = Gravity.START
-                holder.messageCard.setBackgroundResource(R.drawable.bg_chat_bubble_ai)
-                holder.aiAvatar?.visibility = View.VISIBLE
-                holder.messageText.textSize = 14f
-            }
-            MessageType.IMAGE, MessageType.IMAGE_WITH_TEXT -> {
-                if (message.isFromUser) {
-                    holder.containerLayout.gravity = Gravity.END
-                    holder.messageCard.setBackgroundResource(R.drawable.bg_chat_bubble_user)
-                    holder.aiAvatar?.visibility = View.GONE
-                } else {
-                    holder.containerLayout.gravity = Gravity.START
-                    holder.messageCard.setBackgroundResource(R.drawable.bg_chat_bubble_ai)
-                    holder.aiAvatar?.visibility = View.VISIBLE
-                }
-                holder.messageText.textSize = 14f
             }
             else -> {
-                // Normal text message
                 if (message.isFromUser) {
+                    // User: orange bubble, right-aligned
                     holder.containerLayout.gravity = Gravity.END
-                    holder.messageCard.setBackgroundResource(R.drawable.bg_chat_bubble_user)
-                    holder.aiAvatar?.visibility = View.GONE
+                    holder.messageCard.setBackgroundResource(R.drawable.bg_chat_bubble_user_v2)
                 } else {
+                    // AI: plain text, left-aligned, no bubble
                     holder.containerLayout.gravity = Gravity.START
-                    holder.messageCard.setBackgroundResource(R.drawable.bg_chat_bubble_ai)
-                    holder.aiAvatar?.visibility = View.VISIBLE
+                    holder.messageCard.background = null
                 }
-                holder.messageText.textSize = 14f
+            }
+        }
+
+        // --- AI answer action row (copy / like / dislike / share) ---
+        if (isAiAnswer && message.text.isNotBlank()) {
+            holder.aiActionRow?.visibility = View.VISIBLE
+            holder.btnCopy?.setOnClickListener { copyToClipboard(context, message.text) }
+            holder.btnShare?.setOnClickListener { shareText(context, message.text) }
+            holder.btnLike?.setOnClickListener {
+                Toast.makeText(context, "Thanks for the feedback", Toast.LENGTH_SHORT).show()
+            }
+            holder.btnDislike?.setOnClickListener {
+                Toast.makeText(context, "Thanks — we'll improve", Toast.LENGTH_SHORT).show()
             }
         }
         
@@ -169,6 +178,20 @@ class ChatAdapter(
         } else {
             holder.messageCard.alpha = 1.0f
         }
+    }
+
+    private fun copyToClipboard(context: Context, text: String) {
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("IMI AI", text))
+        Toast.makeText(context, "Copied", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun shareText(context: Context, text: String) {
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, text)
+        }
+        context.startActivity(Intent.createChooser(intent, "Share via"))
     }
 
     override fun getItemCount(): Int = messages.size

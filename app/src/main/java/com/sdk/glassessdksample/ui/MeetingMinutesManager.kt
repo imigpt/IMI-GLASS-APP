@@ -4,13 +4,15 @@ import android.content.Context
 import android.util.Log
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
+import com.sdk.glassessdksample.ui.sync.BackendSync
 
 /**
  * Manager for storing and retrieving Meeting Minutes
  * Uses SharedPreferences for persistent storage
  */
 class MeetingMinutesManager(context: Context) {
-    
+
+    private val appContext = context.applicationContext
     private val prefs = context.getSharedPreferences("meeting_minutes_prefs", Context.MODE_PRIVATE)
     private val gson = Gson()
     private val TAG = "MeetingMinutesManager"
@@ -50,6 +52,7 @@ class MeetingMinutesManager(context: Context) {
         
         saveMeetings(meetings)
         Log.d(TAG, "Meeting saved: ${meeting.title} (${meeting.getDuration()})")
+        BackendSync.pushUpdateMeeting(appContext, meeting)
     }
     
     /**
@@ -66,6 +69,7 @@ class MeetingMinutesManager(context: Context) {
         // Save as active meeting
         prefs.edit().putString(KEY_ACTIVE_MEETING, gson.toJson(meeting)).apply()
         Log.d(TAG, "Meeting started: ${meeting.title}")
+        BackendSync.pushStartMeeting(appContext, meeting)
         return meeting
     }
     
@@ -88,10 +92,11 @@ class MeetingMinutesManager(context: Context) {
     fun updateActiveMeetingTranscript(additionalText: String) {
         val meeting = getActiveMeeting() ?: return
         val updatedMeeting = meeting.copy(
-            transcript = if (meeting.transcript.isEmpty()) additionalText 
+            transcript = if (meeting.transcript.isEmpty()) additionalText
                         else "${meeting.transcript} $additionalText"
         )
         prefs.edit().putString(KEY_ACTIVE_MEETING, gson.toJson(updatedMeeting)).apply()
+        BackendSync.pushAppendTranscript(appContext, meeting.id, additionalText)
     }
     
     /**
@@ -106,13 +111,18 @@ class MeetingMinutesManager(context: Context) {
             isActive = false
         )
         
-        // Save to meetings list
-        saveMeeting(completedMeeting)
-        
+        // Save to meetings list (local cache only; the server push happens below
+        // as an end-meeting PUT against the already-created active meeting).
+        saveMeetings(getAllMeetings().toMutableList().also { list ->
+            val i = list.indexOfFirst { it.id == completedMeeting.id }
+            if (i != -1) list[i] = completedMeeting else list.add(completedMeeting)
+        })
+
         // Clear active meeting
         prefs.edit().remove(KEY_ACTIVE_MEETING).apply()
-        
+
         Log.d(TAG, "Meeting ended: ${completedMeeting.title} (${completedMeeting.getDuration()})")
+        BackendSync.pushUpdateMeeting(appContext, completedMeeting)
         return completedMeeting
     }
     
@@ -120,8 +130,10 @@ class MeetingMinutesManager(context: Context) {
      * Cancel active meeting without saving
      */
     fun cancelActiveMeeting() {
+        val active = getActiveMeeting()
         prefs.edit().remove(KEY_ACTIVE_MEETING).apply()
         Log.d(TAG, "Active meeting cancelled")
+        if (active != null) BackendSync.pushCancelMeeting(appContext, active.id)
     }
     
     /**
@@ -132,6 +144,7 @@ class MeetingMinutesManager(context: Context) {
         meetings.removeAll { it.id == meetingId }
         saveMeetings(meetings)
         Log.d(TAG, "Meeting deleted: $meetingId")
+        BackendSync.pushDeleteMeeting(appContext, meetingId)
     }
     
     /**
@@ -199,6 +212,15 @@ class MeetingMinutesManager(context: Context) {
         return contextBuilder.toString()
     }
     
+    /**
+     * Replace the local cache with the authoritative server list (used by [BackendSync]
+     * during the launch pull). Does NOT push back to the server.
+     */
+    fun replaceAllFromServer(serverMeetings: List<MeetingMinute>) {
+        saveMeetings(serverMeetings)
+        Log.d(TAG, "Local cache replaced with ${serverMeetings.size} server meetings")
+    }
+
     private fun saveMeetings(meetings: List<MeetingMinute>) {
         val json = gson.toJson(meetings)
         prefs.edit().putString(KEY_MEETINGS, json).apply()

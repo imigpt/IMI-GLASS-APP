@@ -84,18 +84,18 @@ class GeminiLiveService(
          * Read saved model preference
          */
         fun getSavedModelProvider(context: Context): ModelProvider {
-            val prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
-            val saved = prefs.getString(PREF_KEY_MODEL, "gemini") ?: "gemini"
-            return if (saved == "gpt") ModelProvider.GPT_REALTIME else ModelProvider.GEMINI_LIVE
+            // Gemini is the only user-facing provider. The GPT Realtime code path
+            // is kept for internal use (e.g. the Whisper interview) but is never
+            // selectable, so the app always defaults to Gemini Live here.
+            return ModelProvider.GEMINI_LIVE
         }
         
         /**
          * Save model preference
          */
         fun saveModelProvider(context: Context, provider: ModelProvider) {
-            val value = if (provider == ModelProvider.GEMINI_LIVE) "gemini" else "gpt"
-            context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
-                .edit().putString(PREF_KEY_MODEL, value).apply()
+            // No-op: provider selection is locked to Gemini Live (see
+            // getSavedModelProvider). Kept so existing call sites compile.
         }
         
         // Audio configuration constants
@@ -121,7 +121,12 @@ class GeminiLiveService(
         private const val GPT_OUTPUT_SAMPLE_RATE = 24000
         
         // ---- Google Gemini Live ----
-        private const val GEMINI_MODEL = "gemini-2.5-flash-native-audio-preview-12-2025"
+        // Gemini Live native-audio model. The dated "-12-2025" preview returned
+        // 404 ("model not available for your key"); this is the stable native-audio
+        // preview ID. If the key lacks native-audio access, fall back to
+        // GEMINI_MODEL_FALLBACK (half-cascade Live), which is more widely enabled.
+        private const val GEMINI_MODEL = "gemini-2.5-flash-native-audio-preview-09-2025"
+        private const val GEMINI_MODEL_FALLBACK = "gemini-live-2.5-flash-preview"
         private const val GEMINI_VOICE = "Kore"
         private const val GEMINI_INPUT_SAMPLE_RATE = 16000
         private const val GEMINI_OUTPUT_SAMPLE_RATE = 24000
@@ -132,6 +137,13 @@ class GeminiLiveService(
     
     // Active model provider (read from prefs at start)
     private var activeProvider: ModelProvider = getSavedModelProvider(context)
+
+    // Gemini Live model actually used for the current connection. Starts at the
+    // primary model and switches to the fallback if the primary returns 404.
+    private var activeGeminiModel: String = GEMINI_MODEL
+    private var triedGeminiFallback: Boolean = false
+    private var lastSystemInstruction: String = ""
+    private var lastApiKey: String = ""
     
     // Dynamic sample rates based on provider
     private val inputSampleRate: Int get() = if (activeProvider == ModelProvider.GPT_REALTIME) GPT_INPUT_SAMPLE_RATE else GEMINI_INPUT_SAMPLE_RATE
@@ -284,6 +296,9 @@ class GeminiLiveService(
 
         // Re-read model preference at start
         activeProvider = getSavedModelProvider(context)
+        // Reset Gemini Live model to the primary; fallback re-arms per session.
+        activeGeminiModel = GEMINI_MODEL
+        triedGeminiFallback = false
         Log.d(TAG, "🔄 Starting with model provider: $activeProvider")
         
         val apiKey = if (activeProvider == ModelProvider.GPT_REALTIME) {
@@ -694,7 +709,8 @@ class GeminiLiveService(
     private fun connectWebSocket(apiKey: String, systemInstruction: String) {
         val url: String
         val requestBuilder = Request.Builder()
-        
+        lastSystemInstruction = systemInstruction
+
         if (activeProvider == ModelProvider.GPT_REALTIME) {
             url = "wss://api.openai.com/v1/realtime?model=$GPT_MODEL"
             requestBuilder.url(url)
@@ -704,8 +720,10 @@ class GeminiLiveService(
         } else {
             url = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=$apiKey"
             requestBuilder.url(url)
-            Log.d(TAG, "🌐 Connecting to Gemini Live: $GEMINI_MODEL")
+            Log.d(TAG, "🌐 Connecting to Gemini Live: $activeGeminiModel")
         }
+        // Remember the key so a 404 fallback can reconnect without re-plumbing it.
+        lastApiKey = apiKey
         
         val request = requestBuilder.build()
 
@@ -747,12 +765,36 @@ class GeminiLiveService(
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 Log.e(TAG, "❌ WebSocket failure: ${t.message}", t)
-                try {
-                    Log.e(TAG, "❌ Response: ${response?.body?.string()}")
+                val responseBody = try {
+                    response?.body?.string().orEmpty()
                 } catch (e: Exception) {
                     Log.e(TAG, "❌ Could not read response body")
+                    ""
                 }
-                
+                Log.e(TAG, "❌ Response: $responseBody")
+
+                // If the Gemini Live primary model isn't available for this key
+                // (404 / NOT_FOUND), retry once with the more widely-enabled
+                // fallback model instead of surfacing a connection error.
+                val notFound = response?.code == 404 ||
+                    responseBody.contains("NOT_FOUND", ignoreCase = true) ||
+                    responseBody.contains("not found", ignoreCase = true) ||
+                    (t.message?.contains("404") == true)
+                if (activeProvider == ModelProvider.GEMINI_LIVE && notFound && !triedGeminiFallback) {
+                    triedGeminiFallback = true
+                    activeGeminiModel = GEMINI_MODEL_FALLBACK
+                    Log.w(TAG, "⚠️ Gemini Live model unavailable, retrying with $activeGeminiModel")
+                    this@GeminiLiveService.webSocket = null
+                    scope.launch {
+                        try {
+                            connectWebSocket(lastApiKey, lastSystemInstruction)
+                        } catch (e: Exception) {
+                            callbacks.onError("Connection failed: ${e.message}")
+                        }
+                    }
+                    return
+                }
+
                 val errorMessage = when {
                     t.message?.contains("network", ignoreCase = true) == true -> "Network disconnected"
                     t.message?.contains("internet", ignoreCase = true) == true -> "No internet connection"
@@ -1081,7 +1123,7 @@ MEETING MINUTES: When the user asks to "start meeting minutes", "record this mee
             
             val setupMessage = mapOf(
                 "setup" to mapOf(
-                    "model" to "models/$GEMINI_MODEL",
+                    "model" to "models/$activeGeminiModel",
                     "generation_config" to mapOf(
                         "response_modalities" to listOf("AUDIO"),
                         "speech_config" to mapOf(
@@ -1097,6 +1139,11 @@ MEETING MINUTES: When the user asks to "start meeting minutes", "record this mee
                             mapOf("text" to enhancedInstruction)
                         )
                     ),
+                    // Ask Gemini Live to return text transcripts of both the user's
+                    // speech and the model's audio reply. Without these the turn
+                    // text is empty and nothing can be saved to history.
+                    "input_audio_transcription" to mapOf<String, Any>(),
+                    "output_audio_transcription" to mapOf<String, Any>(),
                     "tools" to listOf(
                         mapOf("function_declarations" to geminiToolDeclarations),
                         mapOf("google_search" to mapOf<String, Any>())
@@ -1597,6 +1644,31 @@ MEETING MINUTES: When the user asks to "start meeting minutes", "record this mee
             if (serverContent != null) {
                 val turnComplete = serverContent["turnComplete"] as? Boolean ?: false
                 val interrupted = serverContent["interrupted"] as? Boolean ?: false
+
+                // User-speech transcript (requested via input_audio_transcription).
+                val inputTranscription = serverContent["inputTranscription"] as? Map<*, *>
+                val inputText = inputTranscription?.get("text") as? String
+                if (!inputText.isNullOrEmpty()) {
+                    currentInputTranscription.append(inputText)
+                    callbacks.onTranscriptionUpdate(
+                        currentInputTranscription.toString(),
+                        currentOutputTranscription.toString(),
+                        false
+                    )
+                }
+
+                // Model-reply transcript (requested via output_audio_transcription).
+                val outputTranscription = serverContent["outputTranscription"] as? Map<*, *>
+                val outputText = outputTranscription?.get("text") as? String
+                if (!outputText.isNullOrEmpty()) {
+                    currentOutputTranscription.append(outputText)
+                    hasTranscriptionForCurrentTurn = true
+                    callbacks.onTranscriptionUpdate(
+                        currentInputTranscription.toString(),
+                        currentOutputTranscription.toString(),
+                        false
+                    )
+                }
                 
                 val modelTurn = serverContent["modelTurn"] as? Map<*, *>
                 if (modelTurn != null) {

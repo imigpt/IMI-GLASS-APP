@@ -73,6 +73,9 @@ class Mark1MainActivity : AppCompatActivity(), GeminiLiveService.GeminiLiveCallb
     private val conversationHistory = mutableListOf<Pair<String, String>>()
     private val gson = Gson()
 
+    // Id of the conversation session currently being recorded (null when idle).
+    private var currentSessionId: String? = null
+
     private val batteryReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             val level = intent?.getIntExtra(BatteryStatusStore.EXTRA_BATTERY_LEVEL, -1) ?: return
@@ -290,6 +293,10 @@ class Mark1MainActivity : AppCompatActivity(), GeminiLiveService.GeminiLiveCallb
         if (isGeminiLiveActive) return
         isGeminiLiveActive = true
 
+        // Begin a new conversation session so every turn in this run is grouped
+        // together (date/time stamped) in the History screen.
+        currentSessionId = ConversationSessionStore.startSession(this)
+
         val systemInstruction = buildSystemInstruction()
 
         runOnUiThread {
@@ -304,6 +311,8 @@ class Mark1MainActivity : AppCompatActivity(), GeminiLiveService.GeminiLiveCallb
 
     private fun stopConversation() {
         isGeminiLiveActive = false
+        // End the current session so the next conversation is grouped separately.
+        currentSessionId = null
         geminiLiveService?.stopLiveConversation()
         stopPulseAnimation()
 
@@ -370,6 +379,14 @@ class Mark1MainActivity : AppCompatActivity(), GeminiLiveService.GeminiLiveCallb
         if (conversationHistory.size > MAX_HISTORY_PAIRS) {
             conversationHistory.removeAt(0)
         }
+        // Persist the completed turn into the current conversation session so the
+        // whole conversation is grouped and saved (not just the last few turns).
+        // If no session is active yet (e.g. wake-word triggered before the UI
+        // started one), the store creates one so the turn is never lost.
+        if (currentSessionId == null) {
+            currentSessionId = ConversationSessionStore.startSession(this)
+        }
+        ConversationSessionStore.appendTurn(this, currentSessionId, userText, aiText)
     }
 
     // ─────────────────────────────────────────────────────────────────────────

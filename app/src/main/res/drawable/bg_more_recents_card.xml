@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- "Your Recents" container card.
+     Figma: radial(ellipse at 43% top, rgba(255,127,46,0.64) -> rgba(28,27,51,0.13))
+     darkened by a 39% black overlay. Approximated with a layer-list. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="rectangle">
+            <gradient
+                android:type="radial"
+                android:gradientRadius="320dp"
+                android:centerX="0.43"
+                android:centerY="0.0"
+                android:startColor="#7AFF7F2E"
+                android:centerColor="#2E1C1B33"
+                android:endColor="#231C1B33" />
+            <corners android:radius="20dp" />
+        </shape>
+    </item>
+    <!-- 39% black overlay to match Figma -->
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="#63000000" />
+            <corners android:radius="20dp" />
+        </shape>
+    </item>
+</layer-list>

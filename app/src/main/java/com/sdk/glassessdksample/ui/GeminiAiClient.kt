@@ -22,10 +22,16 @@ class GeminiAIClient(
 
     companion object {
         private const val TAG = "GeminiAIClient"
+        // Cheapest/lowest Gemini chat model. If the key can't access it (404),
+        // the client falls back to CHAT_MODEL_FALLBACK.
         const val CHAT_MODEL_FLASH_LITE = "gemini-2.0-flash-lite"
+        // Known-good model for this key (vision uses gemini-2.5-flash).
+        const val CHAT_MODEL_FALLBACK = "gemini-2.0-flash"
         private const val DEFAULT_CHAT_MODEL = "gemini-2.5-flash"
         private const val MAX_GALLERY_CONTEXT_CHARS = 900
         private const val MAX_MEMORY_CONTEXT_CHARS = 900
+        private const val MAX_NOTES_CONTEXT_CHARS = 1000
+        private const val MAX_MEETINGS_CONTEXT_CHARS = 1500
         private const val MAX_CHAT_PROMPT_CHARS = 1800
         private const val MAX_HISTORY_ENTRIES = 6
     }
@@ -35,12 +41,38 @@ class GeminiAIClient(
         context?.let { UserMemoryManager(it) }
     }
 
+    // Quick Notes + Meeting Minutes, so the typed chat can answer questions
+    // about the user's saved notes and meetings just like the voice assistant.
+    private val notesManager: QuickNotesManager? by lazy {
+        context?.let { QuickNotesManager(it) }
+    }
+    private val meetingsManager: MeetingMinutesManager? by lazy {
+        context?.let { MeetingMinutesManager(it) }
+    }
+
+    private fun buildNotesContext(): String {
+        val notes = notesManager?.getNotesContextForAI()?.trim().orEmpty()
+        // The manager returns a "no notes" placeholder when empty — skip it.
+        if (notes.isBlank() || notes.startsWith("No quick notes")) return ""
+        return trimForPrompt(notes, MAX_NOTES_CONTEXT_CHARS)
+    }
+
+    private fun buildMeetingsContext(): String {
+        val meetings = meetingsManager?.getMeetingsContextForAI()?.trim().orEmpty()
+        if (meetings.isBlank()) return ""
+        return trimForPrompt(meetings, MAX_MEETINGS_CONTEXT_CHARS)
+    }
+
     // Compact system prompt for lower token usage in chat.
     private val baseSystemPrompt = """
         You are Imi Glass, an AI assistant for smart glasses by IMI Wearables.
         Reply in the same language as the user (Hindi or English).
         Keep answers short and practical (usually 1-2 sentences).
         Give direct answers first; no long introductions.
+        You can see the user's saved Quick Notes, Meeting Minutes (summaries and
+        transcripts), captured photos, and learned profile. When the user asks
+        about their notes, meetings, or anything they saved, answer from that
+        data. If the requested item isn't in the provided data, say so plainly.
         If asked who made you, say you were built by Ajay Mehta at IMI Wearables.
         If uncertain, say so clearly instead of guessing.
     """.trimIndent()
@@ -112,7 +144,13 @@ class GeminiAIClient(
     private fun getSystemPromptWithMemory(): String {
         val userMemory = memoryManager?.getUserMemory()
         val galleryContext = buildGalleryContext()
-        
+        val notesContext = buildNotesContext()
+        val meetingsContext = buildMeetingsContext()
+
+        // Headroom for the largest possible system prompt across all sources.
+        val maxLen = MAX_MEMORY_CONTEXT_CHARS + MAX_GALLERY_CONTEXT_CHARS +
+            MAX_NOTES_CONTEXT_CHARS + MAX_MEETINGS_CONTEXT_CHARS + 700
+
         return if (userMemory != null && !userMemory.isEmpty()) {
             val memoryContext = trimForPrompt(userMemory.toPromptContext(), MAX_MEMORY_CONTEXT_CHARS)
             val relationshipNote = when {
@@ -127,21 +165,25 @@ class GeminiAIClient(
             trimForPrompt("""
             $baseSystemPrompt
             ${if (galleryContext.isNotBlank()) "\n$galleryContext" else ""}
-            
+            ${if (notesContext.isNotBlank()) "\n$notesContext" else ""}
+            ${if (meetingsContext.isNotBlank()) "\n$meetingsContext" else ""}
+
             $memoryContext
             ${if (relationshipNote.isNotEmpty()) "\n$relationshipNote" else ""}
-            
+
             Personalization:
             - Use known preferences naturally.
             - If name is known (${userMemory.userName.ifBlank { "user" }}), use it occasionally.
-            """.trimIndent(), MAX_MEMORY_CONTEXT_CHARS + MAX_GALLERY_CONTEXT_CHARS + 700)
+            """.trimIndent(), maxLen)
         } else {
             trimForPrompt("""
             $baseSystemPrompt
             ${if (galleryContext.isNotBlank()) "\n$galleryContext" else ""}
-            
+            ${if (notesContext.isNotBlank()) "\n$notesContext" else ""}
+            ${if (meetingsContext.isNotBlank()) "\n$meetingsContext" else ""}
+
             Keep replies concise and helpful.
-            """.trimIndent(), MAX_MEMORY_CONTEXT_CHARS + MAX_GALLERY_CONTEXT_CHARS + 500)
+            """.trimIndent(), maxLen)
         }
     }
 
@@ -173,18 +215,33 @@ class GeminiAIClient(
 
         return try {
             val compactPrompt = trimForPrompt(prompt, MAX_CHAT_PROMPT_CHARS)
+            // Ordered list of models to try. We start with the cheapest and, on a
+            // "model not found" (404), walk down to models the key can access.
+            val candidateModels = listOfNotNull(
+                chatModelName,
+                fallbackChatModelName,
+                DEFAULT_CHAT_MODEL
+            ).distinct()
             val response = withContext(Dispatchers.IO) {
-                try {
-                    createGenerativeModel(chatModelName).generateContent(compactPrompt)
-                } catch (primaryError: Exception) {
-                    val fallback = fallbackChatModelName
-                    if (isModelNotFoundError(primaryError) && !fallback.isNullOrBlank() && fallback != chatModelName) {
-                        Log.w(TAG, "Primary model unavailable, falling back to $fallback")
-                        createGenerativeModel(fallback).generateContent(compactPrompt)
-                    } else {
-                        throw primaryError
+                var lastError: Exception? = null
+                var result: com.google.ai.client.generativeai.type.GenerateContentResponse? = null
+                for (modelName in candidateModels) {
+                    try {
+                        result = createGenerativeModel(modelName).generateContent(compactPrompt)
+                        if (modelName != chatModelName) {
+                            Log.w(TAG, "Used fallback chat model: $modelName")
+                        }
+                        break
+                    } catch (e: Exception) {
+                        lastError = e
+                        if (isModelNotFoundError(e)) {
+                            Log.w(TAG, "Model $modelName not available, trying next")
+                            continue
+                        }
+                        throw e
                     }
                 }
+                result ?: throw (lastError ?: IllegalStateException("No chat model available"))
             }
             TokenUsageTracker.track(context, mode, response.usageMetadata)
 

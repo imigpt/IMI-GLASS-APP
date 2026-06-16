@@ -1,14 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:id="@+id/message_container"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:gravity="start|bottom"
     android:orientation="horizontal"
-    android:paddingStart="8dp"
-    android:paddingTop="5dp"
-    android:paddingEnd="8dp"
-    android:paddingBottom="5dp">
+    android:paddingStart="6dp"
+    android:paddingTop="6dp"
+    android:paddingEnd="6dp"
+    android:paddingBottom="6dp">
 
     <TextView
         android:id="@+id/aiAvatar"
@@ -24,83 +25,146 @@
         android:visibility="gone" />
 
     <LinearLayout
-        android:id="@+id/message_card"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:background="@drawable/bg_chat_bubble_ai"
-        android:orientation="vertical"
-        android:paddingTop="2dp"
-        android:paddingBottom="2dp">
+        android:orientation="vertical">
 
-        <FrameLayout
-            android:id="@+id/imageContainer"
+        <LinearLayout
+            android:id="@+id/message_card"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
+            android:background="@drawable/bg_chat_bubble_user_v2"
+            android:orientation="vertical"
+            android:paddingTop="2dp"
+            android:paddingBottom="2dp">
+
+            <FrameLayout
+                android:id="@+id/imageContainer"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:visibility="gone">
+
+                <ImageView
+                    android:id="@+id/messageImage"
+                    android:layout_width="240dp"
+                    android:layout_height="168dp"
+                    android:adjustViewBounds="true"
+                    android:scaleType="centerCrop" />
+
+                <TextView
+                    android:id="@+id/imageBadge"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="top|end"
+                    android:layout_margin="8dp"
+                    android:background="@drawable/badge_background"
+                    android:paddingStart="8dp"
+                    android:paddingTop="3dp"
+                    android:paddingEnd="8dp"
+                    android:paddingBottom="3dp"
+                    android:text="Captured"
+                    android:textColor="@color/text_primary"
+                    android:textSize="10sp"
+                    android:visibility="gone" />
+            </FrameLayout>
+
+            <TextView
+                android:id="@+id/message_text"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:maxWidth="280dp"
+                android:paddingStart="14dp"
+                android:paddingTop="10dp"
+                android:paddingEnd="14dp"
+                android:paddingBottom="6dp"
+                android:text="Message text"
+                android:textColor="@color/text_primary"
+                android:textSize="15sp"
+                android:lineSpacingMultiplier="1.25" />
+
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingStart="14dp"
+                android:paddingEnd="14dp"
+                android:paddingBottom="7dp">
+
+                <TextView
+                    android:id="@+id/imageRefBadge"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginEnd="8dp"
+                    android:text="References image"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="9sp"
+                    android:visibility="gone" />
+
+                <TextView
+                    android:id="@+id/messageTimestamp"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="12:00"
+                    android:textColor="@color/text_tertiary"
+                    android:textSize="9sp" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- AI message action row (copy / like / dislike / share) -->
+        <LinearLayout
+            android:id="@+id/aiActionRow"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:paddingStart="4dp"
+            android:paddingTop="6dp"
+            android:paddingBottom="2dp"
             android:visibility="gone">
 
             <ImageView
-                android:id="@+id/messageImage"
-                android:layout_width="240dp"
-                android:layout_height="168dp"
-                android:adjustViewBounds="true"
-                android:scaleType="centerCrop" />
+                android:id="@+id/btnCopyMessage"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:padding="6dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Copy"
+                android:src="@drawable/ic_copy"
+                app:tint="#CFCFCF" />
 
-            <TextView
-                android:id="@+id/imageBadge"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_gravity="top|end"
-                android:layout_margin="8dp"
-                android:background="@drawable/badge_background"
-                android:paddingStart="8dp"
-                android:paddingTop="3dp"
-                android:paddingEnd="8dp"
-                android:paddingBottom="3dp"
-                android:text="Captured"
-                android:textColor="@color/text_primary"
-                android:textSize="10sp"
-                android:visibility="gone" />
-        </FrameLayout>
+            <ImageView
+                android:id="@+id/btnLikeMessage"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:layout_marginStart="6dp"
+                android:padding="6dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Like"
+                android:src="@drawable/ic_thumb_up"
+                app:tint="#CFCFCF" />
 
-        <TextView
-            android:id="@+id/message_text"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:maxWidth="265dp"
-            android:paddingStart="12dp"
-            android:paddingTop="10dp"
-            android:paddingEnd="12dp"
-            android:paddingBottom="4dp"
-            android:text="Message text"
-            android:textColor="@color/text_primary"
-            android:textSize="14sp" />
+            <ImageView
+                android:id="@+id/btnDislikeMessage"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:layout_marginStart="6dp"
+                android:padding="6dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Dislike"
+                android:src="@drawable/ic_thumb_down"
+                app:tint="#CFCFCF" />
 
-        <LinearLayout
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:gravity="center_vertical"
-            android:orientation="horizontal"
-            android:paddingStart="12dp"
-            android:paddingEnd="12dp"
-            android:paddingBottom="7dp">
-
-            <TextView
-                android:id="@+id/imageRefBadge"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginEnd="8dp"
-                android:text="References image"
-                android:textColor="@color/text_secondary"
-                android:textSize="9sp"
-                android:visibility="gone" />
-
-            <TextView
-                android:id="@+id/messageTimestamp"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="12:00"
-                android:textColor="@color/text_tertiary"
-                android:textSize="9sp" />
+            <ImageView
+                android:id="@+id/btnShareMessage"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:layout_marginStart="6dp"
+                android:padding="6dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Share"
+                android:src="@drawable/ic_share"
+                app:tint="#CFCFCF" />
         </LinearLayout>
     </LinearLayout>
 

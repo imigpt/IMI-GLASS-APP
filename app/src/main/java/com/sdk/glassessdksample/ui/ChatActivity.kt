@@ -11,7 +11,9 @@ import android.graphics.BitmapFactory
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
+import android.view.LayoutInflater
 import android.view.View
+import android.view.ViewGroup
 import android.widget.EditText
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -61,6 +63,10 @@ class ChatActivity : AppCompatActivity() {
         const val EXTRA_IMAGE_PATH = "image_path"
         const val EXTRA_AUTO_VISION = "auto_vision"
         const val EXTRA_VISION_QUERY = "vision_query"
+
+        private const val REQ_AUDIO_FOR_VOICE = 7401
+        private const val MENU_CAPTURE_GLASSES = 9001
+        private const val MENU_ATTACH_GALLERY = 9002
     }
 
     // --- UI Views ---
@@ -75,7 +81,71 @@ class ChatActivity : AppCompatActivity() {
     private lateinit var btnVoiceInput: ImageView
     private lateinit var btnAddAttachment: ImageView
     private lateinit var etSearchConversations: EditText
-    
+
+    // Empty-state landing
+    private lateinit var layoutChatEmpty: View
+    private lateinit var tvGreetingLine1: TextView
+    private lateinit var rvSuggestions: RecyclerView
+
+    // Voice listening UI
+    private lateinit var layoutComposer: View
+    private lateinit var layoutListening: View
+    private lateinit var btnStopListening: ImageView
+    private lateinit var voiceWave: VoiceWaveView
+    private var speechRecognizer: android.speech.SpeechRecognizer? = null
+    private var isListening = false
+
+    // System speech-to-text dialog (reliable fallback / primary on flaky devices)
+    private val speechLauncher = registerForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        showListeningUi(false)
+        if (result.resultCode == RESULT_OK) {
+            val spoken = result.data
+                ?.getStringArrayListExtra(android.speech.RecognizerIntent.EXTRA_RESULTS)
+                ?.firstOrNull()
+                .orEmpty()
+            if (spoken.isNotBlank()) {
+                etChatInput.setText(spoken)
+                etChatInput.setSelection(etChatInput.text.length)
+                sendMessage()
+            }
+        }
+    }
+
+    // Pick an image from the gallery, copy it locally, then analyze inline.
+    private val galleryPickLauncher = registerForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode != RESULT_OK) return@registerForActivityResult
+        val uri = result.data?.data ?: return@registerForActivityResult
+        val typed = etChatInput.text.toString().trim()
+        val query = if (typed.isNotBlank()) typed else "Describe what you see in this image"
+        if (typed.isNotBlank()) etChatInput.setText("")
+        lifecycleScope.launch {
+            val path = withContext(Dispatchers.IO) { copyUriToCache(uri) }
+            if (path != null) {
+                handleInlineImageCapture(path, query)
+            } else {
+                Toast.makeText(this@ChatActivity, "Could not load image", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    private fun copyUriToCache(uri: android.net.Uri): String? {
+        return try {
+            val dir = File(cacheDir, "vision_images").apply { mkdirs() }
+            val outFile = File(dir, "picked_${System.currentTimeMillis()}.jpg")
+            contentResolver.openInputStream(uri)?.use { input ->
+                outFile.outputStream().use { output -> input.copyTo(output) }
+            }
+            if (outFile.exists() && outFile.length() > 0) outFile.absolutePath else null
+        } catch (e: Exception) {
+            Log.e(TAG, "copyUriToCache failed", e)
+            null
+        }
+    }
+
     // Action chips
     private lateinit var chipCreateImage: TextView
     private lateinit var chipSummarize: TextView
@@ -126,6 +196,7 @@ class ChatActivity : AppCompatActivity() {
         setupRecyclerViews()
         setupDrawer()
         setupClickListeners()
+        setupBottomNav()
         registerImageReceiver()
         
         // Create or load first conversation
@@ -160,15 +231,281 @@ class ChatActivity : AppCompatActivity() {
         chipCreateImage = findViewById(R.id.chipCreateImage)
         chipSummarize = findViewById(R.id.chipSummarize)
         chipDeepThinking = findViewById(R.id.chipDeepThinking)
-        
+
+        layoutChatEmpty = findViewById(R.id.layoutChatEmpty)
+        tvGreetingLine1 = findViewById(R.id.tvGreetingLine1)
+        rvSuggestions = findViewById(R.id.rvSuggestions)
+
+        layoutComposer = findViewById(R.id.layoutComposer)
+        layoutListening = findViewById(R.id.layoutListening)
+        btnStopListening = findViewById(R.id.btnStopListening)
+        voiceWave = findViewById(R.id.voiceWave)
+
         prefs = getSharedPreferences("IMI_CHAT_PREFS", MODE_PRIVATE)
+
+        setupGreetingAndSuggestions()
+    }
+
+    /** Greeting uses the stored profile name; suggestions prefill the composer. */
+    private fun setupGreetingAndSuggestions() {
+        val name = resolveUserFirstName()
+        tvGreetingLine1.text = if (name.isNullOrBlank()) "Hey there," else "Hey $name,"
+
+        val suggestions = listOf(
+            ChatSuggestion("Schedule a meeting", "Block time and start meeting"),
+            ChatSuggestion("Summarize my notes", "Get a quick recap"),
+            ChatSuggestion("What can you see?", "Capture and describe from glasses")
+        )
+        rvSuggestions.layoutManager = LinearLayoutManager(this)
+        rvSuggestions.adapter = SuggestionAdapter(suggestions) { suggestion ->
+            etChatInput.setText(suggestion.title)
+            etChatInput.setSelection(etChatInput.text.length)
+            etChatInput.requestFocus()
+        }
+    }
+
+    /** Reads the user's name from the API session, falling back to legacy prefs. */
+    private fun resolveUserFirstName(): String? {
+        val session = com.sdk.glassessdksample.auth.SessionManager(this)
+        val full = session.userName?.takeIf { it.isNotBlank() }
+            ?: getSharedPreferences("user_prefs", MODE_PRIVATE).getString("user_name", null)
+        return full?.trim()?.split(" ")?.firstOrNull()?.takeIf { it.isNotBlank() && !it.equals("User", true) }
+    }
+
+    /** Show the greeting landing only when the active conversation has no messages. */
+    private fun updateEmptyState() {
+        // Don't override the listening UI's composer swap.
+        if (isListening) return
+        val isEmpty = (currentConversation?.messages?.isEmpty() != false)
+        layoutChatEmpty.visibility = if (isEmpty) View.VISIBLE else View.GONE
+        rvChatMessages.visibility = if (isEmpty) View.GONE else View.VISIBLE
+    }
+
+    // ========================================================================
+    // VOICE LISTENING (mic → wavy gradient "Listening" bar)
+    // ========================================================================
+
+    private fun startVoiceListening() {
+        if (isListening) return
+
+        // Mic permission gate
+        if (androidx.core.content.ContextCompat.checkSelfPermission(
+                this, android.Manifest.permission.RECORD_AUDIO
+            ) != android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            androidx.core.app.ActivityCompat.requestPermissions(
+                this, arrayOf(android.Manifest.permission.RECORD_AUDIO), REQ_AUDIO_FOR_VOICE
+            )
+            return
+        }
+
+        if (!android.speech.SpeechRecognizer.isRecognitionAvailable(this)) {
+            Toast.makeText(this, "Voice recognition not available", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        showListeningUi(true)
+
+        speechRecognizer?.destroy()
+        speechRecognizer = android.speech.SpeechRecognizer.createSpeechRecognizer(this).apply {
+            setRecognitionListener(object : android.speech.RecognitionListener {
+                override fun onReadyForSpeech(params: Bundle?) {}
+                override fun onBeginningOfSpeech() {}
+                override fun onRmsChanged(rmsdB: Float) {
+                    // rmsdB roughly -2..10; map to 0f..1f for the wave amplitude.
+                    voiceWave.setAmplitude(((rmsdB + 2f) / 12f))
+                }
+                override fun onBufferReceived(buffer: ByteArray?) {}
+                override fun onEndOfSpeech() {}
+                override fun onError(error: Int) {
+                    Log.w(TAG, "Speech onError: $error (${speechErrorMessage(error)})")
+                    runOnUiThread {
+                        // When the inline recognizer can't hear / mis-binds, fall back
+                        // to the system speech dialog which is far more reliable.
+                        val recoverable = error == android.speech.SpeechRecognizer.ERROR_NO_MATCH ||
+                            error == android.speech.SpeechRecognizer.ERROR_SPEECH_TIMEOUT ||
+                            error == android.speech.SpeechRecognizer.ERROR_CLIENT ||
+                            error == android.speech.SpeechRecognizer.ERROR_RECOGNIZER_BUSY
+                        if (recoverable) {
+                            launchSystemSpeechDialog()
+                        } else {
+                            showListeningUi(false)
+                            Toast.makeText(this@ChatActivity, speechErrorMessage(error), Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }
+                override fun onResults(results: Bundle?) {
+                    val text = results
+                        ?.getStringArrayList(android.speech.SpeechRecognizer.RESULTS_RECOGNITION)
+                        ?.firstOrNull()
+                        .orEmpty()
+                    runOnUiThread {
+                        showListeningUi(false)
+                        if (text.isNotBlank()) {
+                            etChatInput.setText(text)
+                            etChatInput.setSelection(etChatInput.text.length)
+                            sendMessage()
+                        }
+                    }
+                }
+                override fun onPartialResults(partialResults: Bundle?) {
+                    val text = partialResults
+                        ?.getStringArrayList(android.speech.SpeechRecognizer.RESULTS_RECOGNITION)
+                        ?.firstOrNull()
+                    if (!text.isNullOrBlank()) etChatInput.setText(text)
+                }
+                override fun onEvent(eventType: Int, params: Bundle?) {}
+            })
+        }
+
+        val intent = android.content.Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(
+                android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
+            )
+            putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE, java.util.Locale.getDefault().toString())
+            putExtra(android.speech.RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+            putExtra(android.speech.RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+            putExtra(android.speech.RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 2000)
+            putExtra(android.speech.RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 2000)
+            putExtra(android.speech.RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 1500)
+            // Identify the calling app to the system recognizer (required on many devices).
+            putExtra(android.speech.RecognizerIntent.EXTRA_CALLING_PACKAGE, packageName)
+        }
+        try {
+            Log.d(TAG, "🎙️ Voice listening started")
+            speechRecognizer?.startListening(intent)
+        } catch (e: Exception) {
+            Log.e(TAG, "startListening failed", e)
+            Toast.makeText(this, "Couldn't start voice input", Toast.LENGTH_SHORT).show()
+            showListeningUi(false)
+        }
+    }
+
+    // ========================================================================
+    // ADD (+) BUTTON OPTIONS
+    // Mark 2 glasses have a camera → offer "Capture from Glasses" so the user
+    // can snap a photo and ask a question about it (vision flow).
+    // ========================================================================
+
+    private fun showAddOptionsMenu(anchor: View) {
+        val deviceType = DevicePreferenceManager.getDeviceType(this)
+        val popup = android.widget.PopupMenu(this, anchor)
+
+        if (deviceType == DeviceType.MARK2) {
+            popup.menu.add(0, MENU_CAPTURE_GLASSES, 0, "Capture from Glasses")
+        }
+        popup.menu.add(0, MENU_ATTACH_GALLERY, 1, "Add from Gallery")
+
+        popup.setOnMenuItemClickListener { item ->
+            when (item.itemId) {
+                MENU_CAPTURE_GLASSES -> {
+                    captureFromGlassesThenAsk()
+                    true
+                }
+                MENU_ATTACH_GALLERY -> {
+                    pickImageFromGallery()
+                    true
+                }
+                else -> false
+            }
+        }
+        popup.show()
+    }
+
+    /** Capture a photo from the glasses, then let the user type a question about it. */
+    private fun captureFromGlassesThenAsk() {
+        if (isCapturingImage) {
+            Toast.makeText(this, "Already capturing...", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val typed = etChatInput.text.toString().trim()
+        val query = if (typed.isNotBlank()) typed else "Describe what you see in detail"
+        if (typed.isNotBlank()) etChatInput.setText("")
+        captureAndAnalyzeFromGlasses(query)
+    }
+
+    /** Pick an image from the device gallery and analyze it inline. */
+    private fun pickImageFromGallery() {
+        try {
+            val intent = android.content.Intent(android.content.Intent.ACTION_GET_CONTENT).apply {
+                type = "image/*"
+            }
+            galleryPickLauncher.launch(intent)
+        } catch (e: Exception) {
+            Toast.makeText(this, "Could not open gallery", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    /** Reliable system speech-to-text dialog (Google's own recognizer UI). */
+    private fun launchSystemSpeechDialog() {
+        try { speechRecognizer?.cancel() } catch (_: Exception) {}
+        try { speechRecognizer?.destroy() } catch (_: Exception) {}
+        speechRecognizer = null
+
+        val intent = android.content.Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(
+                android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
+            )
+            putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE, java.util.Locale.getDefault().toString())
+            putExtra(android.speech.RecognizerIntent.EXTRA_PROMPT, "Speak now")
+            putExtra(android.speech.RecognizerIntent.EXTRA_CALLING_PACKAGE, packageName)
+        }
+        try {
+            speechLauncher.launch(intent)
+        } catch (e: Exception) {
+            Log.e(TAG, "System speech dialog failed", e)
+            showListeningUi(false)
+            Toast.makeText(this, "Voice input not available on this device", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun speechErrorMessage(error: Int): String = when (error) {
+        android.speech.SpeechRecognizer.ERROR_AUDIO -> "Audio recording error"
+        android.speech.SpeechRecognizer.ERROR_CLIENT -> "Voice client error"
+        android.speech.SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "Mic permission denied"
+        android.speech.SpeechRecognizer.ERROR_NETWORK -> "Network error"
+        android.speech.SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "Network timeout"
+        android.speech.SpeechRecognizer.ERROR_NO_MATCH -> "Didn't catch that — try again"
+        android.speech.SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "Recognizer busy — try again"
+        android.speech.SpeechRecognizer.ERROR_SERVER -> "Speech server error"
+        android.speech.SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "No speech detected"
+        else -> "Voice input error"
+    }
+
+    private fun stopVoiceListening(cancelled: Boolean) {
+        try {
+            if (cancelled) speechRecognizer?.cancel() else speechRecognizer?.stopListening()
+        } catch (_: Exception) {}
+        showListeningUi(false)
+    }
+
+    private fun showListeningUi(listening: Boolean) {
+        isListening = listening
+        layoutListening.visibility = if (listening) View.VISIBLE else View.GONE
+        layoutComposer.visibility = if (listening) View.GONE else View.VISIBLE
+        if (listening) {
+            voiceWave.start()
+        } else {
+            voiceWave.stop()
+            // Restore correct empty/message visibility.
+            updateEmptyState()
+        }
+    }
+
+    private fun setupBottomNav() {
+        val bottomNav = findViewById<com.google.android.material.bottomnavigation.BottomNavigationView>(R.id.bottomNavigation)
+        BottomNavManager.setup(bottomNav, R.id.nav_chat, this)
     }
 
     private fun initServices() {
         geminiClient = GeminiAIClient(
             context = this,
+            // Lowest-cost Gemini model for chat, with a fallback to the model we
+            // know this key can access (vision already uses gemini-2.5-flash).
             chatModelName = GeminiAIClient.CHAT_MODEL_FLASH_LITE,
-            fallbackChatModelName = null
+            fallbackChatModelName = GeminiAIClient.CHAT_MODEL_FALLBACK
         )
         conversationMemory = ConversationMemory(this)
         albumDownloader = AlbumDownloader(this)
@@ -265,16 +602,16 @@ class ChatActivity : AppCompatActivity() {
         }
         
         btnVoiceInput.setOnClickListener {
-            Toast.makeText(this, "Voice input coming soon", Toast.LENGTH_SHORT).show()
+            startVoiceListening()
+        }
+
+        btnStopListening.setOnClickListener {
+            stopVoiceListening(cancelled = true)
         }
         
-        // ✨ CAMERA BUTTON - Inline image capture from glasses!
+        // ✨ ADD BUTTON - shows options (capture from glasses on Mark 2)
         btnAddAttachment.setOnClickListener {
-            if (isCapturingImage) {
-                Toast.makeText(this, "Already capturing...", Toast.LENGTH_SHORT).show()
-                return@setOnClickListener
-            }
-            captureAndAnalyzeFromGlasses("Describe what you see in detail")
+            showAddOptionsMenu(it)
         }
         
         // Action chips
@@ -315,6 +652,7 @@ class ChatActivity : AppCompatActivity() {
         val chatMessage = ChatMessage(text = message, isFromUser = true, isFinal = true)
         conversation.messages.add(chatMessage)
         chatAdapter.addMessage(chatMessage)
+        updateEmptyState()
         scrollToBottom()
         
         etChatInput.setText("")
@@ -698,19 +1036,12 @@ class ChatActivity : AppCompatActivity() {
                 val response = withContext(Dispatchers.IO) {
                     geminiClient.chat(fullPrompt)
                 }
-                
-                // Remove loading message
-                conversation.messages.removeAt(conversation.messages.size - 1)
-                chatAdapter.notifyDataSetChanged()
-                
-                // Add AI response
-                val aiMessage = ChatMessage(
-                    text = response,
-                    isFromUser = false,
-                    isFinal = true
-                )
-                conversation.messages.add(aiMessage)
-                chatAdapter.addMessage(aiMessage)
+
+                // Replace the "Thinking..." bubble in place with the reply
+                // instead of removing it and adding a second bubble.
+                loadingMessage.text = response
+                loadingMessage.isFinal = true
+                chatAdapter.updateLastMessage(response, isFinal = true, isFromUser = false)
                 scrollToBottom()
                 
                 // Record in memory
@@ -815,19 +1146,11 @@ class ChatActivity : AppCompatActivity() {
                     }
                 }
                 
-                // Remove loading message
-                conversation.messages.removeAt(conversation.messages.size - 1)
-                chatAdapter.notifyDataSetChanged()
-                
-                // Add AI response with image reference
-                val aiMessage = ChatMessage(
-                    text = response,
-                    isFromUser = false,
-                    isFinal = true,
-                    referencedImageId = referencedImage.id
-                )
-                conversation.messages.add(aiMessage)
-                chatAdapter.addMessage(aiMessage)
+                // Replace the loading bubble in place with the reply (keeps the
+                // image-reference badge that was set on the loading message).
+                loadingMessage.text = response
+                loadingMessage.isFinal = true
+                chatAdapter.updateLastMessage(response, isFinal = true, isFromUser = false)
                 scrollToBottom()
                 
                 // Record in memory
@@ -961,7 +1284,8 @@ class ChatActivity : AppCompatActivity() {
         
         val position = conversations.indexOf(conversation)
         conversationAdapter.setSelected(position)
-        
+
+        updateEmptyState()
         scrollToBottom()
     }
 
@@ -1009,6 +1333,21 @@ class ChatActivity : AppCompatActivity() {
         saveConversations()
     }
     
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQ_AUDIO_FOR_VOICE) {
+            if (grantResults.isNotEmpty() && grantResults[0] == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                startVoiceListening()
+            } else {
+                Toast.makeText(this, "Mic permission needed for voice input", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         try {
@@ -1016,5 +1355,45 @@ class ChatActivity : AppCompatActivity() {
         } catch (e: Exception) {
             // Already unregistered
         }
+        try {
+            speechRecognizer?.destroy()
+        } catch (_: Exception) {}
+    }
+
+    // ========================================================================
+    // EMPTY-STATE SUGGESTIONS ("Things you can do")
+    // ========================================================================
+
+    data class ChatSuggestion(val title: String, val subtitle: String)
+
+    private class SuggestionAdapter(
+        private val items: List<ChatSuggestion>,
+        private val onClick: (ChatSuggestion) -> Unit
+    ) : RecyclerView.Adapter<SuggestionAdapter.VH>() {
+
+        inner class VH(view: View) : RecyclerView.ViewHolder(view) {
+            val title: TextView = view.findViewById(R.id.tvSuggestionTitle)
+            val subtitle: TextView = view.findViewById(R.id.tvSuggestionSubtitle)
+        }
+
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {
+            val view = LayoutInflater.from(parent.context)
+                .inflate(R.layout.item_chat_suggestion, parent, false)
+            // Add bottom spacing between cards
+            (view.layoutParams as? ViewGroup.MarginLayoutParams)?.let { lp ->
+                lp.bottomMargin = (12 * parent.resources.displayMetrics.density).toInt()
+                view.layoutParams = lp
+            }
+            return VH(view)
+        }
+
+        override fun onBindViewHolder(holder: VH, position: Int) {
+            val item = items[position]
+            holder.title.text = item.title
+            holder.subtitle.text = item.subtitle
+            holder.itemView.setOnClickListener { onClick(item) }
+        }
+
+        override fun getItemCount(): Int = items.size
     }
 }

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A single recent-photo slide inside the Live Gallery slider on the More screen -->
+<ImageView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/ivRecentSlide"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:scaleType="centerCrop"
+    android:background="@drawable/bg_more_live_gallery" />

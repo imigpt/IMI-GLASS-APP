@@ -6,6 +6,7 @@ import android.graphics.BitmapFactory
 import android.util.Log
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
+import com.sdk.glassessdksample.ui.sync.BackendSync
 import java.io.File
 import java.io.FileOutputStream
 
@@ -102,6 +103,8 @@ class QuickNotesManager(private val context: Context) {
         notes.add(note)
         saveNotes(notes)
         Log.d(TAG, "Note added: ${note.title} (created by ${note.createdBy}, hasImage=${note.hasImage()})")
+        BackendSync.pushCreateNote(context, note)
+        if (note.hasImage()) BackendSync.pushNoteImage(context, note.id, note.imagePath!!)
     }
     
     /**
@@ -139,9 +142,11 @@ class QuickNotesManager(private val context: Context) {
         val index = notes.indexOfFirst { it.id == noteId }
         if (index != -1) {
             val oldNote = notes[index]
-            notes[index] = oldNote.copy(title = newTitle, content = newContent)
+            val updated = oldNote.copy(title = newTitle, content = newContent)
+            notes[index] = updated
             saveNotes(notes)
             Log.d(TAG, "Note updated: $noteId")
+            BackendSync.pushUpdateNote(context, updated)
         }
     }
     
@@ -153,9 +158,12 @@ class QuickNotesManager(private val context: Context) {
         val index = notes.indexOfFirst { it.id == noteId }
         if (index != -1) {
             val oldNote = notes[index]
-            notes[index] = oldNote.copy(title = newTitle, content = newContent, imagePath = newImagePath)
+            val updated = oldNote.copy(title = newTitle, content = newContent, imagePath = newImagePath)
+            notes[index] = updated
             saveNotes(notes)
             Log.d(TAG, "Note updated with image: $noteId")
+            BackendSync.pushUpdateNote(context, updated)
+            if (!newImagePath.isNullOrBlank()) BackendSync.pushNoteImage(context, noteId, newImagePath)
         }
     }
     
@@ -168,6 +176,7 @@ class QuickNotesManager(private val context: Context) {
         notes.removeAll { it.id == noteId }
         saveNotes(notes)
         Log.d(TAG, "Note deleted: $noteId")
+        BackendSync.pushDeleteNote(context, noteId)
     }
     
     /**
@@ -214,6 +223,15 @@ class QuickNotesManager(private val context: Context) {
         Log.d(TAG, "All notes cleared")
     }
     
+    /**
+     * Replace the local cache with the authoritative server list (used by [BackendSync]
+     * during the launch pull). Does NOT push back to the server.
+     */
+    fun replaceAllFromServer(serverNotes: List<QuickNote>) {
+        saveNotes(serverNotes)
+        Log.d(TAG, "Local cache replaced with ${serverNotes.size} server notes")
+    }
+
     private fun saveNotes(notes: List<QuickNote>) {
         val json = gson.toJson(notes)
         prefs.edit().putString(KEY_NOTES, json).apply()
