@@ -462,7 +462,7 @@
                     android:orientation="horizontal"
                     android:weightSum="2">
 
-                    <!-- Quick Note -->
+                    <!-- Take Photo -->
                     <com.google.android.material.card.MaterialCardView
                         android:id="@+id/cardCamera"
                         android:layout_width="0dp"
@@ -472,27 +472,22 @@
                         android:layout_weight="1"
                         app:cardBackgroundColor="@android:color/transparent"
                         app:cardCornerRadius="17dp"
-                        app:cardElevation="0dp"
-                        app:strokeColor="#66FF8D28"
-                        app:strokeWidth="0.5dp">
+                        app:cardElevation="0dp">
 
                         <LinearLayout
                             android:id="@+id/btnCamera"
                             android:layout_width="match_parent"
                             android:layout_height="match_parent"
-                            android:background="@drawable/bg_feature_camera"
+                            android:background="@drawable/bg_home_tile"
                             android:clickable="true"
                             android:focusable="true"
                             android:orientation="vertical"
-                            android:paddingStart="10dp"
-                            android:paddingEnd="10dp"
-                            android:paddingTop="19dp"
-                            android:paddingBottom="16dp">
+                            android:padding="16dp">
 
                             <ImageView
-                                android:layout_width="21dp"
-                                android:layout_height="21dp"
-                                android:src="@drawable/ic_note"
+                                android:layout_width="28dp"
+                                android:layout_height="28dp"
+                                android:src="@drawable/ic_camera"
                                 app:tint="#ADADAD" />
 
                             <View
@@ -503,7 +498,7 @@
                             <TextView
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
-                                android:text="Quick Note"
+                                android:text="Take Photo"
                                 android:textColor="#ADADAD"
                                 android:textSize="16sp" />
                         </LinearLayout>
@@ -519,26 +514,21 @@
                         android:layout_weight="1"
                         app:cardBackgroundColor="@android:color/transparent"
                         app:cardCornerRadius="17dp"
-                        app:cardElevation="0dp"
-                        app:strokeColor="#66FF8D28"
-                        app:strokeWidth="0.5dp">
+                        app:cardElevation="0dp">
 
                         <LinearLayout
                             android:id="@+id/btnVideo"
                             android:layout_width="match_parent"
                             android:layout_height="match_parent"
-                            android:background="@drawable/bg_feature_camera"
+                            android:background="@drawable/bg_home_tile"
                             android:clickable="true"
                             android:focusable="true"
                             android:orientation="vertical"
-                            android:paddingStart="10dp"
-                            android:paddingEnd="10dp"
-                            android:paddingTop="19dp"
-                            android:paddingBottom="16dp">
+                            android:padding="16dp">
 
                             <ImageView
-                                android:layout_width="21dp"
-                                android:layout_height="21dp"
+                                android:layout_width="28dp"
+                                android:layout_height="28dp"
                                 android:src="@drawable/ic_controls"
                                 app:tint="#ADADAD" />
 
@@ -574,23 +564,18 @@
                         android:focusable="true"
                         app:cardBackgroundColor="@android:color/transparent"
                         app:cardCornerRadius="17dp"
-                        app:cardElevation="0dp"
-                        app:strokeColor="#66FF8D28"
-                        app:strokeWidth="0.5dp">
+                        app:cardElevation="0dp">
 
                         <LinearLayout
                             android:layout_width="match_parent"
                             android:layout_height="match_parent"
-                            android:background="@drawable/bg_feature_camera"
+                            android:background="@drawable/bg_home_tile"
                             android:orientation="vertical"
-                            android:paddingStart="10dp"
-                            android:paddingEnd="10dp"
-                            android:paddingTop="19dp"
-                            android:paddingBottom="16dp">
+                            android:padding="16dp">
 
                             <ImageView
-                                android:layout_width="21dp"
-                                android:layout_height="21dp"
+                                android:layout_width="28dp"
+                                android:layout_height="28dp"
                                 android:src="@drawable/ic_clock"
                                 app:tint="#ADADAD" />
 
@@ -619,23 +604,18 @@
                         android:focusable="true"
                         app:cardBackgroundColor="@android:color/transparent"
                         app:cardCornerRadius="17dp"
-                        app:cardElevation="0dp"
-                        app:strokeColor="#66FF8D28"
-                        app:strokeWidth="0.5dp">
+                        app:cardElevation="0dp">
 
                         <LinearLayout
                             android:layout_width="match_parent"
                             android:layout_height="match_parent"
-                            android:background="@drawable/bg_feature_camera"
+                            android:background="@drawable/bg_home_tile"
                             android:orientation="vertical"
-                            android:paddingStart="10dp"
-                            android:paddingEnd="10dp"
-                            android:paddingTop="19dp"
-                            android:paddingBottom="16dp">
+                            android:padding="16dp">
 
                             <ImageView
-                                android:layout_width="21dp"
-                                android:layout_height="21dp"
+                                android:layout_width="28dp"
+                                android:layout_height="28dp"
                                 android:src="@drawable/ic_mic"
                                 app:tint="#ADADAD" />
 

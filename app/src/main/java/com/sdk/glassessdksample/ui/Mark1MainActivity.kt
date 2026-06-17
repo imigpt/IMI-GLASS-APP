@@ -15,6 +15,7 @@ import android.provider.Settings
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.util.Log
+import com.sdk.glassessdksample.RemoteConfigManager
 import android.view.View
 import android.view.animation.AnimationUtils
 import android.widget.*
@@ -95,6 +96,11 @@ class Mark1MainActivity : AppCompatActivity(), GeminiLiveService.GeminiLiveCallb
         userMemoryManager = UserMemoryManager(this)
         notesManager = QuickNotesManager(this)
         meetingManager = MeetingMinutesManager(this)
+
+        // Fetch API keys securely from Firebase Remote Config (same as Mark 2's MainActivity)
+        RemoteConfigManager.fetchAndActivate { success ->
+            Log.d(TAG, if (success) "✅ Remote config loaded" else "⚠️ Using cached remote config")
+        }
 
         loadConversationHistory()
         initTts()

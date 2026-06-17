@@ -85,6 +85,10 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private var lastCapturedPhoto: ByteArray? = null // Store last photo for object detection
     private var isCameraCaptureInProgress = false
     private var cameraCaptureTimeoutRunnable: Runnable? = null
+    private var isCameraFallbackInProgress = false
+    private var photoNotifyFallbackRunnable: Runnable? = null
+    private var singleCaptureFrameReceived = false // Guards against extra frames while CoV mode is still winding down
+    private var captureCooldownUntilMs = 0L // Ignore stray frames arriving after a single capture finished
     private var lastSavedPhotoFile: File? = null
     private var glassBatteryLevel: Int? = null // Store glass battery percentage
     private var isWaitingForVisionPhoto = false // Flag to auto-analyze next photo
@@ -1985,8 +1989,11 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                     
                     lastCapturedPhoto = photoBytes
                     isCameraCaptureInProgress = false
+                    isCameraFallbackInProgress = false
                     cameraCaptureTimeoutRunnable?.let { Handler(Looper.getMainLooper()).removeCallbacks(it) }
                     cameraCaptureTimeoutRunnable = null
+                    photoNotifyFallbackRunnable?.let { Handler(Looper.getMainLooper()).removeCallbacks(it) }
+                    photoNotifyFallbackRunnable = null
                     // savePhoto already called in deviceNotifyListener before EventBus post
 
                     // UI Update
@@ -5158,17 +5165,44 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                     0x03 -> {
                         dataBytes?.let { photoData ->
                             try {
+                                // CoV mode keeps the camera continuously streaming for a short
+                                // window after a single take-photo command; ignore any extra
+                                // frames beyond the first one so a single button press only
+                                // results in one saved photo. Live camera mode intentionally
+                                // wants every frame, so it's exempt from these guards.
+                                if (!isLiveCameraActive && System.currentTimeMillis() < captureCooldownUntilMs) {
+                                    Log.d(TAG, "📷 Ignoring stray photo frame during post-capture cooldown")
+                                    return@let
+                                }
+                                if (!isLiveCameraActive && singleCaptureFrameReceived) {
+                                    Log.d(TAG, "📷 Ignoring extra photo frame - single capture already completed")
+                                    return@let
+                                }
+                                if (!isLiveCameraActive) {
+                                    singleCaptureFrameReceived = true
+                                    // Stray frames can keep arriving for a moment even after we
+                                    // ask the glasses to stop - swallow anything in that window.
+                                    captureCooldownUntilMs = System.currentTimeMillis() + 2000
+                                    // Stop CoV streaming immediately instead of waiting out the
+                                    // full 3s delay, so the glasses don't keep sending frames.
+                                    SafeBleCommandHelper.disableCovMode()
+                                    // The glasses stay in an active camera/capture state after
+                                    // taking a photo until explicitly told to exit - without this
+                                    // they keep firing more frames. Tell them to exit right away.
+                                    SafeBleCommandHelper.exitCamera()
+                                }
+
                                 Log.d(TAG, "📷 [Photo Received] Photo from glasses (${photoData.size} bytes) | Live Camera: $isLiveCameraActive")
-                                
+
                                 // Save photo to storage
                                 savePhoto(photoData)
                                 Log.d(TAG, "💾 Photo saved successfully")
-                                
+
                                 // 🔥 IMPORTANT: Broadcast photo to all activities via EventBus
                                 // This allows VisionChatActivity to receive photos even when it's in foreground
                                 Log.d(TAG, "📡 Broadcasting PHOTO_CAPTURED event via EventBus")
                                 EventBus.getDefault().post(BluetoothEvent(BluetoothEvent.EventType.PHOTO_CAPTURED, photoData))
-                                
+
                                 // If live camera is active, analyze immediately
                                 if (isLiveCameraActive) {
                                     Log.d(TAG, "🎥 [Live Camera] ACTIVE - Triggering analysis now")
@@ -5208,13 +5242,19 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                     0x73 -> {
                         Log.d(TAG, "📸 PHOTO_CAPTURED notification from glasses")
                         // Some firmware sends notify first and payload later (or via WiFi endpoint).
+                        // Firmware can fire this notify multiple times for a single capture; cancel any
+                        // previously scheduled fallback check so we never stack multiple fallback triggers
+                        // (which was causing the glasses to take repeated/continuous photos).
+                        photoNotifyFallbackRunnable?.let { Handler(Looper.getMainLooper()).removeCallbacks(it) }
                         if (isCameraCaptureInProgress && lastCapturedPhoto == null) {
-                            Handler(Looper.getMainLooper()).postDelayed({
+                            val runnable = Runnable {
                                 if (isCameraCaptureInProgress && lastCapturedPhoto == null) {
                                     Log.w(TAG, "PHOTO_CAPTURED notify received but no image payload yet - running fallback")
                                     tryCameraFallback()
                                 }
-                            }, 1800)
+                            }
+                            photoNotifyFallbackRunnable = runnable
+                            Handler(Looper.getMainLooper()).postDelayed(runnable, 1800)
                         }
                     }
                     
@@ -5701,6 +5741,11 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         }
 
         isCameraCaptureInProgress = true
+        isCameraFallbackInProgress = false
+        singleCaptureFrameReceived = false
+        captureCooldownUntilMs = 0L // A fresh, deliberate button press always overrides any cooldown
+        photoNotifyFallbackRunnable?.let { Handler(Looper.getMainLooper()).removeCallbacks(it) }
+        photoNotifyFallbackRunnable = null
 
         // Clear previous photo so timeout check works correctly
         lastCapturedPhoto = null
@@ -5741,6 +5786,11 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
      * then direct BLE retry as last resort.
      */
     private fun tryCameraFallback() {
+        if (isCameraFallbackInProgress) {
+            Log.w(TAG, "Camera fallback already in progress - ignoring duplicate trigger")
+            return
+        }
+        isCameraFallbackInProgress = true
         mainScope.launch {
             try {
                 // Attempt 0: Pull from WiFi endpoint if already connected.
@@ -5763,6 +5813,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                     savePhoto(wifiBytes)
                     EventBus.getDefault().post(BluetoothEvent(BluetoothEvent.EventType.PHOTO_CAPTURED, wifiBytes))
                     isCameraCaptureInProgress = false
+                    isCameraFallbackInProgress = false
                     runOnUiThread {
                         Toast.makeText(this@MainActivity, "Photo saved", Toast.LENGTH_SHORT).show()
                     }
@@ -5786,6 +5837,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                     savePhoto(maybeBytes)
                     EventBus.getDefault().post(BluetoothEvent(BluetoothEvent.EventType.PHOTO_CAPTURED, maybeBytes))
                     isCameraCaptureInProgress = false
+                    isCameraFallbackInProgress = false
                     runOnUiThread {
                         Toast.makeText(this@MainActivity, "Photo saved", Toast.LENGTH_SHORT).show()
                         try {
@@ -5804,6 +5856,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 SafeBleCommandHelper.takePhoto(
                     onSuccess = { code ->
                         Log.d(TAG, "✅ Retry camera command sent (code=$code)")
+                        isCameraFallbackInProgress = false
                         runOnUiThread {
                             Toast.makeText(this@MainActivity, "Photo command sent. Check gallery.", Toast.LENGTH_SHORT).show()
                         }
@@ -5811,6 +5864,11 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                     onError = { error ->
                         Log.e(TAG, "❌ Retry also failed: $error")
                         isCameraCaptureInProgress = false
+                        isCameraFallbackInProgress = false
+                        // Make sure the glasses don't stay stuck in an active camera/CoV
+                        // state with nothing left on our side waiting for a photo.
+                        SafeBleCommandHelper.disableCovMode()
+                        SafeBleCommandHelper.exitCamera()
                         runOnUiThread {
                             Toast.makeText(this@MainActivity, "Camera failed. Make sure glasses are in range.", Toast.LENGTH_LONG).show()
                         }
@@ -5819,6 +5877,9 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             } catch (e: Exception) {
                 Log.e(TAG, "❌ Camera fallback error: ${e.message}", e)
                 isCameraCaptureInProgress = false
+                isCameraFallbackInProgress = false
+                SafeBleCommandHelper.disableCovMode()
+                SafeBleCommandHelper.exitCamera()
                 runOnUiThread {
                     Toast.makeText(this@MainActivity, "Camera unavailable", Toast.LENGTH_SHORT).show()
                 }
