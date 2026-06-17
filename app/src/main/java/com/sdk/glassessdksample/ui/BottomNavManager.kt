@@ -30,6 +30,7 @@ object BottomNavManager {
             navigate(activity, item.itemId)
             true
         }
+        NavGlow.positionFor(bottomNav, currentTabId)
     }
 
     private fun navigate(activity: Activity, destinationId: Int) {

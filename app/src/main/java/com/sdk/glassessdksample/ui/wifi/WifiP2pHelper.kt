@@ -40,6 +40,7 @@ class WifiP2pHelper(private val context: Context) {
         private const val MAX_DISCOVERY_RETRIES = 2 // Limit retries to avoid blocking WiFi stack
         private const val GLASS_SERVER_PORT = 80
         private const val CONNECTION_TIMEOUT = 5000
+        private val GLASS_SCAN_PORTS = listOf(80, 8888, 8899, 8080)
     }
     
     // WiFi P2P Manager
@@ -54,13 +55,23 @@ class WifiP2pHelper(private val context: Context) {
     private var isP2pEnabled = false
     private var connectedGlassIp: String? = null
     private var isConnecting = false
-    
+
     // Retry state - save device for auto-reconnect after Internal Error
     private var pendingDevice: WifiP2pDevice? = null
     private var connectionRetryCount = 0
     private val MAX_CONNECTION_RETRIES = 3
-    private var discoveryRetryCount = 0 // Track discovery retry attempts
-    
+    private var discoveryRetryCount = 0
+
+    // Timeout watchdog: fires if CONNECTION_CHANGED never arrives after connect() succeeds
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val connectionTimeoutRunnable = Runnable {
+        if (isConnecting && connectedGlassIp == null) {
+            Log.w(TAG, "⏰ Connection timeout — broadcast never arrived, falling back to subnet scan")
+            isConnecting = false
+            tryGetClientIpFromGroup()
+        }
+    }
+
     // Callback
     private var callback: WifiP2pCallback? = null
     
@@ -70,6 +81,7 @@ class WifiP2pHelper(private val context: Context) {
     interface WifiP2pCallback {
         fun onP2pStateChanged(enabled: Boolean)
         fun onPeersDiscovered(peers: List<WifiP2pDevice>)
+        fun onConnecting(deviceName: String) {}
         fun onGlassConnected(glassIp: String)
         fun onP2pDisconnected()
         fun onP2pError(message: String)
@@ -164,6 +176,7 @@ class WifiP2pHelper(private val context: Context) {
                 
                 if (networkInfo?.isConnected == true) {
                     Log.i(TAG, "✅ P2P Connected!")
+                    mainHandler.removeCallbacks(connectionTimeoutRunnable)
                     requestConnectionInfo()
                 } else {
                     Log.w(TAG, "⚠️ P2P Disconnected")
@@ -286,24 +299,28 @@ class WifiP2pHelper(private val context: Context) {
                 // Filter Glass devices
                 val glassDevices = deviceList.filter { device ->
                     val name = device.deviceName.lowercase()
-                    val isGlass = name.contains("m01") || 
-                                  name.contains("glass") || 
+                    val isGlass = name.contains("m01") ||
+                                  name.contains("glass") ||
                                   name.contains("heycyan") ||
                                   name.contains("cyan") ||
-                                  name.contains("cy01") ||  // <--- CRITICAL FIX: Add CY01 pattern
+                                  name.contains("cy01") ||
                                   name.contains("bond") ||
-                                  name.contains("android")  // Fallback for generic P2P names
+                                  name.contains("sanvnet") ||  // SANVNET GS4 MAX device
+                                  name.contains("gs4") ||      // GS4 variant
+                                  name.contains("android")     // Generic P2P fallback
                     Log.d(TAG, "  - ${device.deviceName} (${device.deviceAddress}) ${if (isGlass) "👓 GLASS" else ""}")
                     isGlass
                 }
-                
+
+                // Pick the best candidate: matched Glass device first, else first peer
+                val targetDevice = glassDevices.firstOrNull() ?: deviceList.firstOrNull()
+
                 callback?.onPeersDiscovered(if (glassDevices.isNotEmpty()) glassDevices else deviceList)
-                
-                // ✅ AUTO-CONNECT: Automatically connect to first Glass device found
-                if (glassDevices.isNotEmpty()) {
-                    val firstGlass = glassDevices.first()
-                    Log.i(TAG, "🔗 AUTO-CONNECT: Connecting to ${firstGlass.deviceName}...")
-                    connectToDevice(firstGlass)
+
+                // ✅ AUTO-CONNECT: only if not already connecting
+                if (targetDevice != null && !isConnecting) {
+                    Log.i(TAG, "🔗 AUTO-CONNECT: Connecting to ${targetDevice.deviceName}...")
+                    connectToDevice(targetDevice)
                 }
             }
         } catch (e: SecurityException) {
@@ -353,7 +370,10 @@ class WifiP2pHelper(private val context: Context) {
                 wifiP2pManager?.connect(channel, config, object : WifiP2pManager.ActionListener {
                     override fun onSuccess() {
                         Log.i(TAG, "✅ Connection request sent")
-                        // Wait for CONNECTION_CHANGED broadcast
+                        callback?.onConnecting(device.deviceName)
+                        // Watchdog: if broadcast never fires in 15s, fall back to scan
+                        mainHandler.removeCallbacks(connectionTimeoutRunnable)
+                        mainHandler.postDelayed(connectionTimeoutRunnable, 15_000)
                     }
                     
                     override fun onFailure(reason: Int) {
@@ -380,6 +400,7 @@ class WifiP2pHelper(private val context: Context) {
                                 }
                             }, 2000)
                         } else {
+                            mainHandler.removeCallbacks(connectionTimeoutRunnable)
                             pendingDevice = null  // Clear on final failure
                             callback?.onP2pError("Connection failed: $reasonStr (after $connectionRetryCount retries)")
                         }
@@ -387,6 +408,7 @@ class WifiP2pHelper(private val context: Context) {
                 })
             } catch (e: SecurityException) {
                 isConnecting = false
+                mainHandler.removeCallbacks(connectionTimeoutRunnable)
                 Log.e(TAG, "Security exception: ${e.message}")
                 callback?.onP2pError("Permission denied for connection")
             }
@@ -441,7 +463,9 @@ class WifiP2pHelper(private val context: Context) {
      */
     private fun tryGetClientIpFromGroup() {
         Log.i(TAG, "🔍 Trying to detect Glass IP from current connection...")
-        
+        android.os.Handler(context.mainLooper).post {
+            callback?.onConnecting("Glass (scanning subnet)")
+        }
         // Start scanning (will check ARP first, then scan)
         scanForGlassAsClient()
     }
@@ -472,23 +496,25 @@ class WifiP2pHelper(private val context: Context) {
             val foundIp = java.util.concurrent.atomic.AtomicReference<String?>(null)
             val latch = java.util.concurrent.CountDownLatch(254)
             
-            // Launch 254 threads to scan ALL possible IPs at once
+            // Launch 254 threads to scan ALL possible IPs at once (tries multiple ports)
             for (i in 1..254) {
                 Thread {
                     if (foundIp.get() == null) {  // Stop if already found
                         val ip = "$subnet.$i"
-                        try {
-                            val socket = Socket()
-                            socket.soTimeout = 300  // 300ms timeout (fast!)
-                            socket.connect(InetSocketAddress(ip, GLASS_SERVER_PORT), 300)
-                            socket.close()
-                            
-                            // Found! Set it atomically
-                            if (foundIp.compareAndSet(null, ip)) {
-                                Log.i(TAG, "✅ FOUND GLASS AT: $ip")
+                        for (port in GLASS_SCAN_PORTS) {
+                            if (foundIp.get() != null) break
+                            try {
+                                val socket = Socket()
+                                socket.soTimeout = 300  // 300ms timeout (fast!)
+                                socket.connect(InetSocketAddress(ip, port), 300)
+                                socket.close()
+                                if (foundIp.compareAndSet(null, ip)) {
+                                    Log.i(TAG, "✅ FOUND GLASS AT: $ip:$port")
+                                }
+                                break
+                            } catch (e: Exception) {
+                                // try next port
                             }
-                        } catch (e: Exception) {
-                            // Connection failed, IP not Glass
                         }
                     }
                     latch.countDown()
@@ -518,18 +544,21 @@ class WifiP2pHelper(private val context: Context) {
     }
     
     /**
-     * Check if Glass server is running on given IP (fast check)
+     * Check if Glass server is running on given IP (tries multiple ports)
      */
     private fun checkGlassServer(ip: String): Boolean {
-        return try {
-            val socket = Socket()
-            socket.soTimeout = 500  // 500ms timeout (fast!)
-            socket.connect(InetSocketAddress(ip, GLASS_SERVER_PORT), 500)
-            socket.close()
-            true
-        } catch (e: Exception) {
-            false
+        for (port in GLASS_SCAN_PORTS) {
+            try {
+                val socket = Socket()
+                socket.soTimeout = 500
+                socket.connect(InetSocketAddress(ip, port), 500)
+                socket.close()
+                return true
+            } catch (e: Exception) {
+                // try next port
+            }
         }
+        return false
     }
     
     /**
@@ -565,6 +594,38 @@ class WifiP2pHelper(private val context: Context) {
     fun getGlassIp(): String? = connectedGlassIp
     
     /**
+     * Remove any existing/stale P2P group before a fresh connection attempt.
+     *
+     * Glass keeps the previous group alive when removeGroup() fails with BUSY,
+     * which blocks the next connection from forming. Calling this first clears
+     * a leftover group so discovery → connect can succeed on repeat captures.
+     */
+    fun removeExistingGroup() {
+        try {
+            wifiP2pManager?.requestGroupInfo(channel) { group ->
+                if (group != null) {
+                    Log.i(TAG, "🧹 Removing stale P2P group before reconnect: ${group.networkName}")
+                    wifiP2pManager?.removeGroup(channel, object : WifiP2pManager.ActionListener {
+                        override fun onSuccess() {
+                            Log.i(TAG, "✅ Stale group removed")
+                            connectedGlassIp = null
+                        }
+                        override fun onFailure(reason: Int) {
+                            Log.w(TAG, "⚠️ Could not remove stale group: $reason")
+                        }
+                    })
+                } else {
+                    Log.d(TAG, "No existing P2P group to remove")
+                }
+            }
+        } catch (e: SecurityException) {
+            Log.e(TAG, "removeExistingGroup security exception: ${e.message}")
+        } catch (e: Exception) {
+            Log.w(TAG, "removeExistingGroup failed: ${e.message}")
+        }
+    }
+
+    /**
      * Disconnect from current P2P group
      */
     fun disconnect() {
@@ -574,7 +635,7 @@ class WifiP2pHelper(private val context: Context) {
                     Log.i(TAG, "✅ Disconnected from group")
                     connectedGlassIp = null
                 }
-                
+
                 override fun onFailure(reason: Int) {
                     Log.w(TAG, "⚠️ Failed to disconnect: $reason")
                 }
@@ -603,6 +664,7 @@ class WifiP2pHelper(private val context: Context) {
      * Clean up resources
      */
     fun cleanup() {
+        mainHandler.removeCallbacks(connectionTimeoutRunnable)
         disconnect()
         unregisterReceiver()
         wifiP2pManager = null
@@ -690,21 +752,23 @@ class WifiP2pHelper(private val context: Context) {
      */
     private fun scanGlassIpSync(): String? {
         val ipsToScan = listOf("192.168.49.1") + (2..20).map { "192.168.49.$it" }
-        
+
         for (ip in ipsToScan) {
-            try {
-                val socket = Socket()
-                socket.soTimeout = 1500
-                socket.connect(InetSocketAddress(ip, GLASS_SERVER_PORT), 1500)
-                socket.close()
-                Log.i(TAG, "✅ Found Glass server at $ip")
-                connectedGlassIp = ip
-                return ip
-            } catch (e: Exception) {
-                // Continue
+            for (port in GLASS_SCAN_PORTS) {
+                try {
+                    val socket = Socket()
+                    socket.soTimeout = 1500
+                    socket.connect(InetSocketAddress(ip, port), 1500)
+                    socket.close()
+                    Log.i(TAG, "✅ Found Glass server at $ip:$port")
+                    connectedGlassIp = ip
+                    return ip
+                } catch (e: Exception) {
+                    // try next port
+                }
             }
         }
-        
+
         Log.w(TAG, "❌ Glass server not found")
         return null
     }

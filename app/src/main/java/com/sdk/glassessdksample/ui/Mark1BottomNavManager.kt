@@ -19,6 +19,7 @@ object Mark1BottomNavManager {
 
     fun setup(activity: AppCompatActivity, nav: BottomNavigationView, selectedItemId: Int) {
         nav.selectedItemId = selectedItemId
+        NavGlow.positionFor(nav, selectedItemId)
 
         nav.setOnItemSelectedListener { item ->
             if (item.itemId == selectedItemId) return@setOnItemSelectedListener true

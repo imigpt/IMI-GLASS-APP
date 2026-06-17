@@ -32,8 +32,13 @@ import com.google.gson.reflect.TypeToken
 import com.sdk.glassessdksample.BuildConfig
 import com.sdk.glassessdksample.R
     import com.sdk.glassessdksample.WakeWordGate
+import android.net.wifi.p2p.WifiP2pDevice
 import com.sdk.glassessdksample.ui.wifi.AlbumDownloader
+import com.sdk.glassessdksample.ui.wifi.WifiP2pHelper
 import com.sdk.glassessdksample.utils.SafeBleCommandHelper
+import com.oudmon.ble.base.communication.LargeDataHandler
+import com.oudmon.ble.base.communication.bigData.resp.GlassesDeviceNotifyListener
+import com.oudmon.ble.base.communication.bigData.resp.GlassesDeviceNotifyRsp
 import kotlinx.coroutines.*
 import java.io.File
 import java.util.concurrent.CountDownLatch
@@ -174,6 +179,11 @@ class ChatActivity : AppCompatActivity() {
     private var lastCapturedImagePath: String? = null
     private var lastCapturedBitmap: Bitmap? = null
     private var cachedGlassIp: String? = null
+
+    // Active WiFi P2P connection — kept alive during the whole HTTP download,
+    // then torn down. Tearing it down too early drops the P2P group and the
+    // phone falls back to the home router, breaking the transfer.
+    private var activeWifiP2pHelper: WifiP2pHelper? = null
     
     // --- Broadcast receiver for images from other activities ---
     private val imageReceiver = object : BroadcastReceiver() {
@@ -744,16 +754,22 @@ class ChatActivity : AppCompatActivity() {
                     return@launch
                 }
                 
-                updateSystemMessage(conversation, "📸 Photo taken! Downloading from glasses...")
-                
-                // Step 2: Wait for photo to save
-                delay(3000)
-                
-                // Step 3: Download image from glasses
+                updateSystemMessage(conversation, "📸 Photo taken! Connecting to glasses WiFi...")
+
+                // Step 2: Wait for CoV mode to fully disable and photo to save before P2P
+                // CoV disable takes ~1-2s; Glass ignores {2,1,4} while CoV is still active
+                delay(4000)
+
+                updateSystemMessage(conversation, "📡 Connecting to glasses to download photo...")
+
+                // Step 3: Download image from glasses (triggers P2P via BLE internally)
                 val imagePath = downloadLatestImage()
                 
                 if (imagePath == null) {
-                    updateSystemMessage(conversation, "⚠️ Could not download image. Check WiFi connection to glasses.")
+                    updateSystemMessage(
+                        conversation,
+                        "⚠️ Couldn't get the photo. Connect your phone to the glasses' Wi-Fi (or open the Gallery once to pair) and try again."
+                    )
                     isCapturingImage = false
                     return@launch
                 }
@@ -895,50 +911,270 @@ class ChatActivity : AppCompatActivity() {
     }
     
     /**
-     * Download the latest image from glasses via HTTP
+     * Download the latest image from glasses via HTTP.
+     *
+     * 1. resolveGlassIp() establishes the WiFi-Direct connection and returns the Glass IP
+     * 2. bind the process to the P2P network so HTTP routes to Glass
+     * 3. fetch the media config and download the newest image
+     * 4. unbind + tear down the P2P group in the finally block
      */
     private suspend fun downloadLatestImage(): String? = withContext(Dispatchers.IO) {
         try {
-            // Try known glass IPs
-            val ipsToTry = mutableListOf<String>()
-            cachedGlassIp?.let { ipsToTry.add(it) }
-            ipsToTry.addAll(listOf("192.168.49.1", "192.168.43.1", "192.168.1.1"))
-            
-            for (ip in ipsToTry) {
-                try {
-                    val files = albumDownloader.fetchConfig(ip)
-                    val imageFiles = files.filter { item ->
-                        val name = item.fileName.lowercase()
-                        name.endsWith(".jpg") || name.endsWith(".jpeg") || name.endsWith(".png")
-                    }
-                    
-                    if (imageFiles.isNotEmpty()) {
-                        // Get the latest image
-                        val latestFile = imageFiles.last()
-                        val outputDir = File(cacheDir, "vision_images")
-                        if (!outputDir.exists()) outputDir.mkdirs()
-                        
-                        val downloadedFile = albumDownloader.downloadFile(ip, latestFile.fileName, outputDir)
-                        if (downloadedFile != null && downloadedFile.exists()) {
-                            // Cache the working IP
-                            cachedGlassIp = ip
-                            prefs.edit().putString("cached_glass_ip", ip).apply()
-                            
-                            Log.d(TAG, "Downloaded image: ${downloadedFile.absolutePath}")
-                            return@withContext downloadedFile.absolutePath
-                        }
-                    }
-                } catch (e: Exception) {
-                    Log.w(TAG, "Failed to fetch from $ip: ${e.message}")
-                    continue
-                }
+            val glassIp = resolveGlassIp()
+            if (glassIp == null) {
+                Log.w(TAG, "No Glass IP found — phone not on Glass WiFi and BLE IP unavailable")
+                return@withContext null
             }
-            
+
+            // Pin the process to the WiFi-Direct network so HTTP traffic routes
+            // to the Glass (192.168.6.x) instead of the home router. Without this,
+            // OkHttp binds to the default WiFi network and the connect fails with
+            // "from /192.168.1.42" even though the P2P group is up.
+            bindProcessToGlassNetwork(glassIp)
+
+            val files = albumDownloader.fetchConfig(glassIp)
+            val imageFiles = files.filter { item ->
+                val name = item.fileName.lowercase()
+                name.endsWith(".jpg") || name.endsWith(".jpeg") || name.endsWith(".png")
+            }
+
+            if (imageFiles.isEmpty()) {
+                Log.w(TAG, "No image files found on Glass at $glassIp")
+                return@withContext null
+            }
+
+            val latestFile = imageFiles.last()
+            val outputDir = File(cacheDir, "vision_images")
+            if (!outputDir.exists()) outputDir.mkdirs()
+
+            val downloadedFile = albumDownloader.downloadFile(glassIp, latestFile.fileName, outputDir)
+            if (downloadedFile != null && downloadedFile.exists()) {
+                cachedGlassIp = glassIp
+                prefs.edit().putString("cached_glass_ip", glassIp).apply()
+                Log.d(TAG, "✅ Downloaded image from $glassIp: ${downloadedFile.absolutePath}")
+                return@withContext downloadedFile.absolutePath
+            }
+
+            Log.w(TAG, "Download returned null for ${latestFile.fileName}")
             null
         } catch (e: Exception) {
             Log.e(TAG, "Error downloading image", e)
             null
+        } finally {
+            // Restore the default network and release the P2P group after the
+            // transfer (whether it succeeded or not).
+            unbindProcessFromGlassNetwork()
+            teardownWifiP2p()
         }
+    }
+
+    /**
+     * Bind the whole process to the WiFi network that can route to the Glass IP.
+     *
+     * When a WiFi-Direct group is formed, Android keeps the home WiFi as the
+     * default network, so sockets opened by OkHttp route to the wrong interface.
+     * We find the network whose routes/addresses match the Glass subnet and pin
+     * the process to it for the duration of the download.
+     */
+    private suspend fun bindProcessToGlassNetwork(glassIp: String) {
+        try {
+            val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+            val glassPrefix = glassIp.substringBeforeLast('.') + "."
+            // The P2P network may take a moment to appear in allNetworks after
+            // the group forms — retry a few times before giving up.
+            repeat(6) { attempt ->
+                for (network in cm.allNetworks) {
+                    val caps = cm.getNetworkCapabilities(network) ?: continue
+                    if (!caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI)) continue
+                    val linkProps = cm.getLinkProperties(network) ?: continue
+                    val matches = linkProps.linkAddresses.any { la ->
+                        (la.address as? java.net.Inet4Address)?.hostAddress?.startsWith(glassPrefix) == true
+                    }
+                    if (matches) {
+                        val ok = cm.bindProcessToNetwork(network)
+                        Log.d(TAG, "🔗 Bound process to Glass network (${linkProps.interfaceName}) success=$ok")
+                        return
+                    }
+                }
+                if (attempt < 5) delay(500)
+            }
+            Log.w(TAG, "Could not find a WiFi network matching $glassPrefix — download may use wrong route")
+        } catch (e: Exception) {
+            Log.w(TAG, "bindProcessToGlassNetwork failed: ${e.message}")
+        }
+    }
+
+    /** Restore the default network binding after a Glass download. */
+    private fun unbindProcessFromGlassNetwork() {
+        try {
+            val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+            cm.bindProcessToNetwork(null)
+            Log.d(TAG, "🔗 Restored default network binding")
+        } catch (e: Exception) {
+            Log.w(TAG, "unbindProcessFromGlassNetwork failed: ${e.message}")
+        }
+    }
+
+    /**
+     * Resolve Glass IP using BLE P2P trigger first, then fallbacks.
+     *
+     * Flow:
+     *   1. Check cached IP (fastest, no radio needed)
+     *   2. BLE commands trigger Glass P2P hotspot + wait 4s for type-8 BLE IP
+     *   3. WiFi P2P discovery+connect via WifiP2pHelper (phone joins Glass network)
+     *   4. Parallel HTTP scan of all known Glass IPs
+     */
+    private suspend fun resolveGlassIp(): String? = withContext(Dispatchers.IO) {
+        // 1. BLE P2P trigger + short wait for type-8 IP notification
+        val bleIp = triggerP2pAndWaitForIp()
+        if (bleIp != null) return@withContext bleIp
+
+        // 2. WiFi P2P: start discovery and connect — phone needs to join Glass network.
+        //    This mirrors what GlassMediaGalleryActivity does via WifiP2pHelper and is
+        //    the path that reliably yields 192.168.6.1.
+        val p2pIp = connectViaWifiP2pAndGetIp()
+        if (p2pIp != null) return@withContext p2pIp
+
+        // 3. Parallel HTTP scan (last resort — only works if phone already on Glass WiFi)
+        Log.d(TAG, "Falling back to parallel IP scan...")
+        albumDownloader.discoverGlassesIP()
+    }
+
+    /**
+     * Use WifiP2pHelper to discover Glass, connect to it, and return its IP.
+     * Runs the full WiFi Direct discovery → connect → IP detection cycle,
+     * the same path the Gallery uses, with a 25-second overall timeout.
+     *
+     * IMPORTANT: on success the helper is kept alive (stored in
+     * [activeWifiP2pHelper]) so the P2P group stays up for the HTTP transfer.
+     * The caller MUST call [teardownWifiP2p] once the download finishes.
+     */
+    private suspend fun connectViaWifiP2pAndGetIp(): String? = withContext(Dispatchers.IO) {
+        var resolvedIp: String? = null
+        val latch = CountDownLatch(1)
+
+        val helper = WifiP2pHelper(this@ChatActivity)
+        val callback = object : WifiP2pHelper.WifiP2pCallback {
+            override fun onP2pStateChanged(enabled: Boolean) {}
+            override fun onPeersDiscovered(peers: List<WifiP2pDevice>) {}
+            override fun onGlassConnected(glassIp: String) {
+                Log.d(TAG, "📡 WiFi P2P gave IP: $glassIp")
+                resolvedIp = glassIp
+                latch.countDown()
+            }
+            override fun onP2pDisconnected() {}
+            override fun onP2pError(message: String) {
+                Log.w(TAG, "WiFi P2P error: $message")
+            }
+        }
+
+        try {
+            withContext(Dispatchers.Main) {
+                helper.setCallback(callback)
+                helper.initialize()
+                // CRITICAL: register the broadcast receiver so PEERS_CHANGED and
+                // CONNECTION_CHANGED events are delivered. Without this, discovery
+                // runs but no peer/connection callbacks ever fire (the bug that
+                // caused chat capture to fail while the Gallery worked).
+                helper.registerReceiver()
+                // Clear any stale group left over from a previous capture —
+                // otherwise the second connection never forms (works once, then
+                // fails). removeGroup is async, so give it a moment below.
+                helper.removeExistingGroup()
+            }
+            delay(1500)
+            withContext(Dispatchers.Main) {
+                helper.startDiscovery()
+            }
+            latch.await(25, TimeUnit.SECONDS)
+        } catch (e: Exception) {
+            Log.w(TAG, "WiFi P2P connect failed: ${e.message}")
+        }
+
+        if (resolvedIp != null) {
+            // Keep the P2P group alive for the HTTP transfer — DO NOT cleanup here.
+            activeWifiP2pHelper = helper
+        } else {
+            // No connection — safe to tear down immediately.
+            withContext(Dispatchers.Main) {
+                try { helper.unregisterReceiver() } catch (_: Exception) {}
+                try { helper.cleanup() } catch (_: Exception) {}
+            }
+        }
+
+        resolvedIp
+    }
+
+    /**
+     * Tear down the active WiFi P2P connection after a download completes.
+     * Safe to call even if no connection was established.
+     */
+    private suspend fun teardownWifiP2p() {
+        val helper = activeWifiP2pHelper ?: return
+        activeWifiP2pHelper = null
+        withContext(Dispatchers.Main) {
+            try { helper.unregisterReceiver() } catch (_: Exception) {}
+            try { helper.cleanup() } catch (_: Exception) {}
+        }
+        Log.d(TAG, "WiFi P2P torn down after download")
+    }
+
+    /**
+     * Send the BLE P2P hotspot command and wait up to 4s for the type-8
+     * notification that tells us the Glass IP.
+     *
+     * Glass sometimes responds with a dropped P2P advertisement that the SDK
+     * ignores ("暂时不处理"), so the type-8 notification may never arrive.
+     * We use a short timeout so that resolveGlassIp() can fall through to
+     * the parallel IP scan quickly rather than blocking for 12 seconds.
+     */
+    private suspend fun triggerP2pAndWaitForIp(): String? = withContext(Dispatchers.IO) {
+        var resolvedIp: String? = null
+        val latch = CountDownLatch(1)
+
+        val listener = object : GlassesDeviceNotifyListener() {
+            override fun parseData(cmdType: Int, rsp: GlassesDeviceNotifyRsp?) {
+                try {
+                    val loadData = rsp?.loadData ?: return
+                    if (loadData.size < 11) return
+                    val notifyType = loadData[6].toInt() and 0xFF
+                    if (notifyType == 8) {
+                        val ip = "${loadData[7].toInt() and 0xFF}" +
+                                 ".${loadData[8].toInt() and 0xFF}" +
+                                 ".${loadData[9].toInt() and 0xFF}" +
+                                 ".${loadData[10].toInt() and 0xFF}"
+                        Log.d(TAG, "📡 BLE type-8 IP for chat download: $ip")
+                        resolvedIp = ip
+                        latch.countDown()
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "BLE parse error: ${e.message}")
+                }
+            }
+        }
+
+        try {
+            LargeDataHandler.getInstance().addOutDeviceListener(3, listener)
+
+            // Reset then start P2P transfer mode (same commands as GlassMediaTransfer)
+            LargeDataHandler.getInstance().glassesControl(byteArrayOf(2, 1, 15)) { _, _ -> }
+            delay(300)
+            LargeDataHandler.getInstance().glassesControl(byteArrayOf(2, 1, 4)) { _, _ -> }
+
+            // Short wait — Glass may not send type-8 if SDK drops the P2P advertisement
+            latch.await(4, TimeUnit.SECONDS)
+        } catch (e: Exception) {
+            Log.w(TAG, "BLE P2P trigger error: ${e.message}")
+        } finally {
+            try { LargeDataHandler.getInstance().removeOutDeviceListener(3) } catch (_: Exception) {}
+        }
+
+        if (resolvedIp != null) {
+            Log.d(TAG, "✅ BLE P2P gave IP: $resolvedIp")
+        } else {
+            Log.d(TAG, "ℹ️ No BLE type-8 within 4s — falling through to IP scan")
+        }
+        resolvedIp
     }
     
     /**

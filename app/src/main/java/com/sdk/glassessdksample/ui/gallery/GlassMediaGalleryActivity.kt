@@ -91,6 +91,7 @@ class GlassMediaGalleryActivity : AppCompatActivity(),
     // Track if we went to WiFi settings
     private var wentToWifiSettings = false
     private var isConnectedToGlass = false
+    private var isDownloadComplete = false  // true once a download session finishes
     private var discoveredDevices = mutableListOf<WifiP2pDevice>()
     private var discoveryRetryJob: Job? = null
     private var connectionProgressDialog: android.app.AlertDialog? = null
@@ -127,20 +128,24 @@ class GlassMediaGalleryActivity : AppCompatActivity(),
                         Log.d(TAG, "🌐 BLE returned Glass IP: $ip")
 
                         runOnUiThread {
-                            updateStatus("📡 Glass IP from BLE: $ip")
-                            Toast.makeText(this@GlassMediaGalleryActivity, "Glass IP: $ip", Toast.LENGTH_SHORT).show()
-
-                            // Stop any background IP scanning since BLE gave the IP
-                            try {
-                                // Use reflection to avoid potential unresolved-call issues during compile
-                                val m = wifiP2pHelper::class.java.getMethod("stopDiscovery")
-                                m.invoke(wifiP2pHelper)
-                            } catch (e: Exception) {
-                                Log.w(TAG, "Error stopping scanner: ${e.message}")
+                            // Guard: ignore duplicate BLE notifications during an active download
+                            if (isConnectedToGlass || isDownloadComplete) {
+                                Log.d(TAG, "Ignoring duplicate BLE IP notification (already connected/done)")
+                                return@runOnUiThread
                             }
 
-                            // Probe common ports and proceed only if server responds
-                            testPortsAndProceed(ip)
+                            updateStatus("📡 Glass IP from BLE: $ip")
+                            isConnectedToGlass = true
+                            discoveryRetryJob?.cancel()
+
+                            // Stop P2P discovery — BLE gave us the IP, no need to scan
+                            wifiP2pHelper.stopDiscovery()
+
+                            // BLE confirmed the IP — Glass HTTP server is on port 80, go straight to download
+                            appendConnectionStep("Device connected via BLE")
+                            appendConnectionStep("Preparing download")
+                            updateConnectionProgress(55)
+                            mainScope.launch { downloadViaHttp(ip) }
                         }
                     }
                     
@@ -590,12 +595,14 @@ class GlassMediaGalleryActivity : AppCompatActivity(),
      * Start connection process
      */
     private fun startConnection() {
+        isDownloadComplete = false  // Reset for new session
+        isConnectedToGlass = false
         showConnectionProgressDialog()
         appendConnectionStep("Connect request started")
         updateConnectionProgress(5)
         updateStatus("📡 Sending BLE command to Glass...")
         btnConnect?.isEnabled = false
-        
+
         // Step 1: Trigger Glass hotspot/P2P mode
         glassMediaTransfer.triggerGlassHotspot()
         
@@ -1446,6 +1453,7 @@ class GlassMediaGalleryActivity : AppCompatActivity(),
                 adapter?.notifyDataSetChanged()
                 layoutProgress?.visibility = View.GONE
                 
+                isDownloadComplete = true
                 if (downloadedCount == 0 && skippedCount > 0) {
                     // Agar sab pehle se tha
                     updateStatus("✅ All files already downloaded!")
@@ -1600,6 +1608,14 @@ class GlassMediaGalleryActivity : AppCompatActivity(),
         }
     }
     
+    override fun onConnecting(deviceName: String) {
+        runOnUiThread {
+            appendConnectionStep("Connecting to $deviceName")
+            updateConnectionProgress(45)
+            updateStatus("🔗 Connecting to Glass device...")
+        }
+    }
+
     override fun onGlassConnected(glassIp: String) {
         runOnUiThread {
             discoveryRetryJob?.cancel()
@@ -1619,6 +1635,13 @@ class GlassMediaGalleryActivity : AppCompatActivity(),
     override fun onP2pDisconnected() {
         runOnUiThread {
             isConnectedToGlass = false
+            if (isDownloadComplete) {
+                // Normal teardown after a successful download — don't restart
+                updateStatus("✅ Download complete. P2P disconnected.")
+                btnConnect?.text = "🔗 Connect to Glass"
+                btnConnect?.isEnabled = true
+                return@runOnUiThread
+            }
             closeConnectionProgressDialog("Disconnected from Glass")
             updateStatus("P2P Disconnected from Glass")
             btnConnect?.text = "🔗 Connect to Glass"
@@ -1645,7 +1668,7 @@ class GlassMediaGalleryActivity : AppCompatActivity(),
      * Debounced discovery retry to avoid rapid reconnect loops.
      */
     private fun scheduleDiscoveryRetry(delayMs: Long) {
-        if (isConnectedToGlass) return
+        if (isConnectedToGlass || isDownloadComplete) return
         if (discoveryRetryJob?.isActive == true) return
 
         discoveryRetryJob = mainScope.launch {

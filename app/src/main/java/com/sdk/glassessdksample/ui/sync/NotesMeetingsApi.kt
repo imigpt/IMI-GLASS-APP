@@ -59,7 +59,13 @@ class NotesMeetingsApi(context: Context) {
         val body = JSONObject()
             .put("title", note.title)
             .put("content", note.content)
-        return request("PUT", "/v1/notes/${note.id}", body) { parseNote(it) }
+        val result = request("PUT", "/v1/notes/${note.id}", body) { parseNote(it) }
+        // If the note doesn't exist on the server yet, create it so data isn't lost.
+        if (result is Result.Err && !result.auth) {
+            Log.d(TAG, "updateNote PUT failed (${result.message}); attempting upsert via POST")
+            return createNote(note)
+        }
+        return result
     }
 
     fun deleteNote(noteId: String): Result<Unit> =
@@ -118,8 +124,34 @@ class NotesMeetingsApi(context: Context) {
             .put("speakerTranscript", meeting.speakerTranscript)
             .put("speakerCount", meeting.speakerCount)
             .put("participants", meeting.participants)
+            // Backend uses "active" (not "isActive") — send both to cover any inconsistency.
+            .put("active", meeting.isActive)
             .put("isActive", meeting.isActive)
-        return request("PUT", "/v1/meetings/${meeting.id}", body) { parseMeeting(it) }
+        val result = request("PUT", "/v1/meetings/${meeting.id}", body) { parseMeeting(it) }
+        // If the meeting doesn't exist on the server yet (e.g. startMeeting push failed due to
+        // network), create it now so the data isn't lost.
+        if (result is Result.Err && !result.auth) {
+            Log.d(TAG, "updateMeeting PUT failed (${result.message}); attempting upsert via POST")
+            return upsertMeeting(meeting)
+        }
+        return result
+    }
+
+    /** Create a meeting on the server including all fields (upsert fallback). */
+    private fun upsertMeeting(meeting: MeetingMinute): Result<MeetingMinute> {
+        val body = JSONObject()
+            .put("id", meeting.id)
+            .put("title", meeting.title)
+            .put("startTime", meeting.startTime)
+            .put("endTime", meeting.endTime)
+            .put("transcript", meeting.transcript)
+            .put("summary", meeting.summary)
+            .put("participants", meeting.participants)
+            .put("speakerCount", meeting.speakerCount)
+            .put("speakerTranscript", meeting.speakerTranscript)
+            .put("active", meeting.isActive)
+            .put("isActive", meeting.isActive)
+        return request("POST", "/v1/meetings", body) { parseMeeting(it) }
     }
 
     fun cancelMeeting(meetingId: String): Result<Unit> =
