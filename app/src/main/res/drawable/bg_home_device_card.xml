@@ -5,13 +5,14 @@
         <shape>
             <gradient
                 android:type="radial"
-                android:gradientRadius="150%p"
-                android:startColor="#33FF7F2E"
-                android:endColor="#141414"
-                android:centerX="0.3"
-                android:centerY="0.4" />
-            <corners android:radius="18dp" />
-            <stroke android:width="1dp" android:color="#FF7F2E" />
+                android:gradientRadius="130%p"
+                android:startColor="#D9803A"
+                android:centerColor="#5A3320"
+                android:endColor="#1A120D"
+                android:centerX="0.30"
+                android:centerY="0.32" />
+            <corners android:radius="20dp" />
+            <stroke android:width="0.5dp" android:color="#D6FF8D28" />
         </shape>
     </item>
 </ripple>

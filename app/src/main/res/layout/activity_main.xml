@@ -462,16 +462,19 @@
                     android:orientation="horizontal"
                     android:weightSum="2">
 
+                    <!-- Quick Note -->
                     <com.google.android.material.card.MaterialCardView
                         android:id="@+id/cardCamera"
                         android:layout_width="0dp"
-                        android:layout_height="156dp"
+                        android:layout_height="130dp"
                         android:layout_marginEnd="6dp"
                         android:layout_marginBottom="6dp"
                         android:layout_weight="1"
                         app:cardBackgroundColor="@android:color/transparent"
-                        app:cardCornerRadius="22dp"
-                        app:cardElevation="0dp">
+                        app:cardCornerRadius="17dp"
+                        app:cardElevation="0dp"
+                        app:strokeColor="#66FF8D28"
+                        app:strokeWidth="0.5dp">
 
                         <LinearLayout
                             android:id="@+id/btnCamera"
@@ -481,94 +484,75 @@
                             android:clickable="true"
                             android:focusable="true"
                             android:orientation="vertical"
-                            android:padding="14dp">
+                            android:paddingStart="10dp"
+                            android:paddingEnd="10dp"
+                            android:paddingTop="19dp"
+                            android:paddingBottom="16dp">
 
                             <ImageView
-                                android:layout_width="32dp"
-                                android:layout_height="32dp"
-                                android:src="@drawable/ic_camera"
-                                app:tint="#ECF5FF" />
+                                android:layout_width="21dp"
+                                android:layout_height="21dp"
+                                android:src="@drawable/ic_note"
+                                app:tint="#ADADAD" />
+
+                            <View
+                                android:layout_width="match_parent"
+                                android:layout_height="0dp"
+                                android:layout_weight="1" />
 
                             <TextView
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
-                                android:layout_marginTop="28dp"
-                                android:text="Camera"
-                                android:textColor="#F3F8FF"
-                                android:textSize="14sp" />
-
-                            <TextView
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:layout_marginTop="2dp"
-                                android:text="Capture the moment"
-                                android:textColor="#AFC3D8"
-                                android:textSize="10sp" />
-
-                            <ImageView
-                                android:layout_width="30dp"
-                                android:layout_height="30dp"
-                                android:layout_gravity="end"
-                                android:layout_marginTop="6dp"
-                                android:background="@drawable/bg_round_arrow_button"
-                                android:padding="8dp"
-                                android:src="@drawable/ic_arrow_right"
-                                app:tint="#D2DFED" />
+                                android:text="Quick Note"
+                                android:textColor="#ADADAD"
+                                android:textSize="16sp" />
                         </LinearLayout>
                     </com.google.android.material.card.MaterialCardView>
 
+                    <!-- Controls -->
                     <com.google.android.material.card.MaterialCardView
                         android:id="@+id/cardVideo"
                         android:layout_width="0dp"
-                        android:layout_height="156dp"
+                        android:layout_height="130dp"
                         android:layout_marginStart="6dp"
                         android:layout_marginBottom="6dp"
                         android:layout_weight="1"
                         app:cardBackgroundColor="@android:color/transparent"
-                        app:cardCornerRadius="22dp"
-                        app:cardElevation="0dp">
+                        app:cardCornerRadius="17dp"
+                        app:cardElevation="0dp"
+                        app:strokeColor="#66FF8D28"
+                        app:strokeWidth="0.5dp">
 
                         <LinearLayout
                             android:id="@+id/btnVideo"
                             android:layout_width="match_parent"
                             android:layout_height="match_parent"
-                            android:background="@drawable/bg_feature_video"
+                            android:background="@drawable/bg_feature_camera"
                             android:clickable="true"
                             android:focusable="true"
                             android:orientation="vertical"
-                            android:padding="14dp">
+                            android:paddingStart="10dp"
+                            android:paddingEnd="10dp"
+                            android:paddingTop="19dp"
+                            android:paddingBottom="16dp">
 
                             <ImageView
-                                android:layout_width="32dp"
-                                android:layout_height="32dp"
-                                android:src="@drawable/ic_video"
-                                app:tint="#ECF5FF" />
+                                android:layout_width="21dp"
+                                android:layout_height="21dp"
+                                android:src="@drawable/ic_controls"
+                                app:tint="#ADADAD" />
+
+                            <View
+                                android:layout_width="match_parent"
+                                android:layout_height="0dp"
+                                android:layout_weight="1" />
 
                             <TextView
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
-                                android:layout_marginTop="28dp"
-                                android:text="Video"
-                                android:textColor="#F3F8FF"
-                                android:textSize="14sp" />
-
-                            <TextView
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:layout_marginTop="2dp"
-                                android:text="Record your world"
-                                android:textColor="#AFC3D8"
-                                android:textSize="10sp" />
-
-                            <ImageView
-                                android:layout_width="30dp"
-                                android:layout_height="30dp"
-                                android:layout_gravity="end"
-                                android:layout_marginTop="6dp"
-                                android:background="@drawable/bg_round_arrow_button"
-                                android:padding="8dp"
-                                android:src="@drawable/ic_arrow_right"
-                                app:tint="#D2DFED" />
+                                android:text="Controls"
+                                android:textColor="#ADADAD"
+                                android:textSize="16sp" />
                         </LinearLayout>
                     </com.google.android.material.card.MaterialCardView>
                 </LinearLayout>
@@ -579,109 +563,93 @@
                     android:orientation="horizontal"
                     android:weightSum="2">
 
+                    <!-- History -->
                     <com.google.android.material.card.MaterialCardView
                         android:id="@+id/cardBattery"
                         android:layout_width="0dp"
-                        android:layout_height="156dp"
+                        android:layout_height="130dp"
                         android:layout_marginEnd="6dp"
                         android:layout_weight="1"
                         android:clickable="true"
                         android:focusable="true"
                         app:cardBackgroundColor="@android:color/transparent"
-                        app:cardCornerRadius="22dp"
-                        app:cardElevation="0dp">
+                        app:cardCornerRadius="17dp"
+                        app:cardElevation="0dp"
+                        app:strokeColor="#66FF8D28"
+                        app:strokeWidth="0.5dp">
 
                         <LinearLayout
                             android:layout_width="match_parent"
                             android:layout_height="match_parent"
-                            android:background="@drawable/bg_feature_battery"
+                            android:background="@drawable/bg_feature_camera"
                             android:orientation="vertical"
-                            android:padding="14dp">
+                            android:paddingStart="10dp"
+                            android:paddingEnd="10dp"
+                            android:paddingTop="19dp"
+                            android:paddingBottom="16dp">
 
                             <ImageView
-                                android:layout_width="32dp"
-                                android:layout_height="32dp"
-                                android:src="@drawable/ic_battery"
-                                app:tint="#ECF5FF" />
+                                android:layout_width="21dp"
+                                android:layout_height="21dp"
+                                android:src="@drawable/ic_clock"
+                                app:tint="#ADADAD" />
+
+                            <View
+                                android:layout_width="match_parent"
+                                android:layout_height="0dp"
+                                android:layout_weight="1" />
 
                             <TextView
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
-                                android:layout_marginTop="28dp"
-                                android:text="Battery"
-                                android:textColor="#F3F8FF"
-                                android:textSize="14sp" />
-
-                            <TextView
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:layout_marginTop="2dp"
-                                android:text="Check power status"
-                                android:textColor="#AFC3D8"
-                                android:textSize="10sp" />
-
-                            <ImageView
-                                android:layout_width="30dp"
-                                android:layout_height="30dp"
-                                android:layout_gravity="end"
-                                android:layout_marginTop="6dp"
-                                android:background="@drawable/bg_round_arrow_button"
-                                android:padding="8dp"
-                                android:src="@drawable/ic_arrow_right"
-                                app:tint="#D2DFED" />
+                                android:text="History"
+                                android:textColor="#ADADAD"
+                                android:textSize="16sp" />
                         </LinearLayout>
                     </com.google.android.material.card.MaterialCardView>
 
+                    <!-- Meetings -->
                     <com.google.android.material.card.MaterialCardView
                         android:id="@+id/cardSettings"
                         android:layout_width="0dp"
-                        android:layout_height="156dp"
+                        android:layout_height="130dp"
                         android:layout_marginStart="6dp"
                         android:layout_weight="1"
                         android:clickable="true"
                         android:focusable="true"
                         app:cardBackgroundColor="@android:color/transparent"
-                        app:cardCornerRadius="22dp"
-                        app:cardElevation="0dp">
+                        app:cardCornerRadius="17dp"
+                        app:cardElevation="0dp"
+                        app:strokeColor="#66FF8D28"
+                        app:strokeWidth="0.5dp">
 
                         <LinearLayout
                             android:layout_width="match_parent"
                             android:layout_height="match_parent"
-                            android:background="@drawable/bg_feature_settings"
+                            android:background="@drawable/bg_feature_camera"
                             android:orientation="vertical"
-                            android:padding="14dp">
+                            android:paddingStart="10dp"
+                            android:paddingEnd="10dp"
+                            android:paddingTop="19dp"
+                            android:paddingBottom="16dp">
 
                             <ImageView
-                                android:layout_width="32dp"
-                                android:layout_height="32dp"
-                                android:src="@drawable/ic_settings"
-                                app:tint="#ECF5FF" />
+                                android:layout_width="21dp"
+                                android:layout_height="21dp"
+                                android:src="@drawable/ic_mic"
+                                app:tint="#ADADAD" />
+
+                            <View
+                                android:layout_width="match_parent"
+                                android:layout_height="0dp"
+                                android:layout_weight="1" />
 
                             <TextView
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
-                                android:layout_marginTop="28dp"
-                                android:text="Settings"
-                                android:textColor="#F3F8FF"
-                                android:textSize="14sp" />
-
-                            <TextView
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:layout_marginTop="2dp"
-                                android:text="Customize IMI"
-                                android:textColor="#AFC3D8"
-                                android:textSize="10sp" />
-
-                            <ImageView
-                                android:layout_width="30dp"
-                                android:layout_height="30dp"
-                                android:layout_gravity="end"
-                                android:layout_marginTop="6dp"
-                                android:background="@drawable/bg_round_arrow_button"
-                                android:padding="8dp"
-                                android:src="@drawable/ic_arrow_right"
-                                app:tint="#D2DFED" />
+                                android:text="Meetings"
+                                android:textColor="#ADADAD"
+                                android:textSize="16sp" />
                         </LinearLayout>
                     </com.google.android.material.card.MaterialCardView>
                 </LinearLayout>

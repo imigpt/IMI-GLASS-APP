@@ -44,8 +44,11 @@ class NotesMeetingsApi(context: Context) {
 
     sealed class Result<out T> {
         data class Ok<T>(val value: T) : Result<T>()
-        /** [auth] is true when the failure was a missing/expired session (caller should stop, not retry). */
-        data class Err(val message: String, val auth: Boolean = false) : Result<Nothing>()
+        /**
+         * [auth] is true when the failure was a missing/expired session (caller should stop, not retry).
+         * [code] is the HTTP status (0 for client-side/network errors) so callers can branch on e.g. 409.
+         */
+        data class Err(val message: String, val auth: Boolean = false, val code: Int = 0) : Result<Nothing>()
     }
 
     // ---------------------------------------------------------------------
@@ -107,7 +110,34 @@ class NotesMeetingsApi(context: Context) {
             .put("id", meeting.id)
             .put("title", meeting.title)
             .put("startTime", meeting.startTime)
-        return request("POST", "/v1/meetings", body) { parseMeeting(it) }
+        val result = request("POST", "/v1/meetings", body) { parseMeeting(it) }
+        // The backend allows only one active meeting per user. If a previous meeting was
+        // never ended server-side (e.g. the end-meeting push failed), every new start gets
+        // 409 ACTIVE_MEETING_EXISTS and nothing can ever be saved again. Clear the stale
+        // active meeting and retry once.
+        if (result is Result.Err && result.code == 409) {
+            Log.w(TAG, "startMeeting got 409; clearing stale active meeting and retrying")
+            clearStaleActiveMeeting(keepId = meeting.id)
+            return request("POST", "/v1/meetings", body) { parseMeeting(it) }
+        }
+        return result
+    }
+
+    /** Returns the user's currently active meeting on the server, or null if none / on error. */
+    private fun getActiveMeeting(): MeetingMinute? =
+        (request("GET", "/v1/meetings/active", null) { parseMeeting(it) } as? Result.Ok)?.value
+
+    /**
+     * Cancels whatever meeting the server currently considers active, unless it is [keepId]
+     * (the one we are about to (re)create). Best-effort: failures are logged, not surfaced.
+     */
+    private fun clearStaleActiveMeeting(keepId: String?) {
+        val active = getActiveMeeting() ?: return
+        if (active.id == keepId) return
+        when (val r = cancelMeeting(active.id)) {
+            is Result.Err -> Log.w(TAG, "Failed to clear stale active meeting ${active.id}: ${r.message}")
+            else -> Log.d(TAG, "Cleared stale active meeting ${active.id}")
+        }
     }
 
     fun appendTranscript(meetingId: String, text: String): Result<MeetingMinute> {
@@ -124,8 +154,6 @@ class NotesMeetingsApi(context: Context) {
             .put("speakerTranscript", meeting.speakerTranscript)
             .put("speakerCount", meeting.speakerCount)
             .put("participants", meeting.participants)
-            // Backend uses "active" (not "isActive") — send both to cover any inconsistency.
-            .put("active", meeting.isActive)
             .put("isActive", meeting.isActive)
         val result = request("PUT", "/v1/meetings/${meeting.id}", body) { parseMeeting(it) }
         // If the meeting doesn't exist on the server yet (e.g. startMeeting push failed due to
@@ -149,9 +177,15 @@ class NotesMeetingsApi(context: Context) {
             .put("participants", meeting.participants)
             .put("speakerCount", meeting.speakerCount)
             .put("speakerTranscript", meeting.speakerTranscript)
-            .put("active", meeting.isActive)
             .put("isActive", meeting.isActive)
-        return request("POST", "/v1/meetings", body) { parseMeeting(it) }
+        val result = request("POST", "/v1/meetings", body) { parseMeeting(it) }
+        // A stale active meeting (from a prior failed end) would block this create with 409.
+        if (result is Result.Err && result.code == 409) {
+            Log.w(TAG, "upsertMeeting got 409; clearing stale active meeting and retrying")
+            clearStaleActiveMeeting(keepId = meeting.id)
+            return request("POST", "/v1/meetings", body) { parseMeeting(it) }
+        }
+        return result
     }
 
     fun cancelMeeting(meetingId: String): Result<Unit> =
@@ -215,8 +249,8 @@ class NotesMeetingsApi(context: Context) {
         transcript = json.optString("transcript"),
         summary = json.optString("summary"),
         participants = json.optString("participants"),
-        // Guide returns `active`; tolerate `isActive` too.
-        isActive = json.optBoolean("active", json.optBoolean("isActive", false)),
+        // Backend standardized on `isActive`; tolerate legacy `active` for old records.
+        isActive = json.optBoolean("isActive", json.optBoolean("active", false)),
         speakerCount = json.optInt("speakerCount", 0),
         speakerTranscript = json.optString("speakerTranscript")
     )
@@ -285,15 +319,16 @@ class NotesMeetingsApi(context: Context) {
                     Result.Ok(map(parsed))
                 } else {
                     if (response.code == 401) {
-                        Result.Err("Session expired", auth = true)
+                        Result.Err("Session expired", auth = true, code = 401)
                     } else {
-                        Result.Err(parseError(raw, response.code))
+                        Log.w(TAG, "${req.method} ${req.url} -> HTTP ${response.code}: ${raw.take(300)}")
+                        Result.Err(parseError(raw, response.code), code = response.code)
                     }
                 }
             }
         } catch (e: Exception) {
             Log.w(TAG, "Request ${req.method} ${req.url} failed: ${e.message}")
-            Result.Err("Network error")
+            Result.Err("Network error: ${e.message}")
         }
     }
 

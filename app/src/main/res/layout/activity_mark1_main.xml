@@ -109,8 +109,8 @@
             <androidx.cardview.widget.CardView
                 android:id="@+id/cardHero"
                 android:layout_width="match_parent"
-                android:layout_height="150dp"
-                app:cardCornerRadius="20dp"
+                android:layout_height="140dp"
+                app:cardCornerRadius="16dp"
                 app:cardElevation="0dp"
                 app:cardBackgroundColor="@android:color/transparent"
                 android:layout_marginBottom="18dp">
@@ -134,7 +134,7 @@
                             android:layout_height="wrap_content"
                             android:text="Say &quot;Hey IMI&quot;"
                             android:textColor="#FFFFFF"
-                            android:textSize="20sp"
+                            android:textSize="22sp"
                             android:textStyle="bold" />
 
                         <TextView
@@ -142,35 +142,40 @@
                             android:layout_height="wrap_content"
                             android:text="No pairing needed"
                             android:textColor="#CCFFFFFF"
-                            android:textSize="13sp"
+                            android:textSize="15sp"
                             android:layout_marginTop="4dp"
-                            android:layout_marginBottom="12dp" />
+                            android:layout_marginBottom="14dp" />
 
-                        <Button
+                        <androidx.appcompat.widget.AppCompatButton
                             android:id="@+id/btnQuickStart"
                             android:layout_width="wrap_content"
-                            android:layout_height="36dp"
+                            android:layout_height="40dp"
                             android:text="Quick Start"
                             android:textColor="#FFFFFF"
-                            android:textSize="13sp"
+                            android:textSize="15sp"
                             android:textStyle="bold"
+                            android:textAllCaps="false"
                             android:background="@drawable/bg_home_btn_orange"
-                            android:paddingStart="20dp"
-                            android:paddingEnd="20dp"
+                            android:backgroundTint="@null"
+                            android:paddingStart="22dp"
+                            android:paddingEnd="22dp"
                             android:stateListAnimator="@null" />
                     </LinearLayout>
 
                     <!-- Right: glasses image -->
-                    <ImageView
-                        android:id="@+id/imgGlasses"
-                        android:layout_width="175dp"
-                        android:layout_height="140dp"
-                        android:src="@drawable/mark1"
-                        android:scaleType="fitEnd"
-                        android:layout_alignParentEnd="true"
-                        android:layout_centerVertical="true" />
 
                     <!-- Battery pill at bottom -->
+
+                    <ImageView
+                        android:id="@+id/imgGlasses"
+                        android:layout_width="210dp"
+                        android:layout_height="150dp"
+                        android:layout_alignParentEnd="true"
+                        android:layout_marginEnd="-21dp"
+                        android:adjustViewBounds="true"
+                        android:scaleType="fitCenter"
+                        android:src="@drawable/mark1" />
+
                     <LinearLayout
                         android:id="@+id/layoutHeroBattery"
                         android:layout_width="wrap_content"
@@ -250,48 +255,52 @@
                                 android:layout_height="wrap_content"
                                 android:layout_weight="1"
                                 android:text="My Device"
-                                android:textColor="#FFFFFF"
-                                android:textSize="14sp"
+                                android:textColor="#E8E8E8"
+                                android:textSize="16sp"
                                 android:textStyle="bold" />
 
                             <ImageView
-                                android:layout_width="16dp"
-                                android:layout_height="16dp"
+                                android:layout_width="22dp"
+                                android:layout_height="22dp"
                                 android:src="@drawable/ic_battery"
-                                android:tint="#FF7F2E" />
+                                android:tint="#CFCFCF" />
                         </LinearLayout>
 
                         <LinearLayout
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:orientation="horizontal"
-                            android:gravity="center_vertical"
+                            android:gravity="bottom"
                             android:layout_marginTop="2dp">
 
                             <TextView
                                 android:id="@+id/tvDeviceBatteryTime"
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
-                                android:text="-- --"
-                                android:textColor="#FF7F2E"
-                                android:textSize="12sp"
+                                android:text="2h 31 min"
+                                android:textColor="#D8D8D8"
+                                android:textSize="18sp"
                                 android:textStyle="bold" />
 
                             <TextView
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
                                 android:text=" Remaining"
-                                android:textColor="#88FFFFFF"
-                                android:textSize="12sp" />
+                                android:textColor="#9A9A9A"
+                                android:textSize="12sp"
+                                android:layout_marginBottom="2dp" />
                         </LinearLayout>
 
                         <ImageView
                             android:layout_width="match_parent"
                             android:layout_height="0dp"
                             android:layout_weight="1"
-                            android:src="@drawable/mark1"
+                            android:src="@drawable/mark1_2"
                             android:scaleType="fitCenter"
-                            android:layout_marginTop="6dp" />
+                            android:adjustViewBounds="true"
+                            android:layout_marginStart="-6dp"
+                            android:layout_marginEnd="-6dp"
+                            android:layout_marginTop="2dp" />
                     </LinearLayout>
                 </androidx.cardview.widget.CardView>
 
@@ -324,19 +333,17 @@
                             android:focusable="true">
 
                             <ImageView
-                                android:layout_width="20dp"
-                                android:layout_height="20dp"
-                                android:src="@drawable/ic_sunny"
-                                android:tint="#E0FFFFFF" />
+                                android:layout_width="24dp"
+                                android:layout_height="24dp"
+                                android:src="@drawable/ic_sunny_png" />
 
                             <TextView
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
                                 android:text="Sunny"
-                                android:textColor="#FFFFFF"
-                                android:textSize="14sp"
-                                android:textStyle="bold"
-                                android:layout_marginStart="8dp" />
+                                android:textColor="#ADADAD"
+                                android:textSize="16sp"
+                                android:layout_marginStart="10dp" />
                         </LinearLayout>
                     </androidx.cardview.widget.CardView>
 
@@ -361,20 +368,18 @@
                             android:focusable="true">
 
                             <ImageView
-                                android:layout_width="20dp"
-                                android:layout_height="20dp"
-                                android:src="@drawable/ic_moon"
-                                android:tint="#AAAAFF" />
+                                android:layout_width="24dp"
+                                android:layout_height="24dp"
+                                android:src="@drawable/ic_silent_mode" />
 
                             <TextView
                                 android:id="@+id/tvMuteLabel"
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
                                 android:text="Silent Mode"
-                                android:textColor="#FFFFFF"
-                                android:textSize="14sp"
-                                android:textStyle="bold"
-                                android:layout_marginStart="8dp" />
+                                android:textColor="#ADADAD"
+                                android:textSize="16sp"
+                                android:layout_marginStart="10dp" />
                         </LinearLayout>
                     </androidx.cardview.widget.CardView>
                 </LinearLayout>
@@ -384,7 +389,7 @@
             <LinearLayout
                 android:id="@+id/rowTiles2"
                 android:layout_width="match_parent"
-                android:layout_height="140dp"
+                android:layout_height="120dp"
                 android:orientation="horizontal"
                 android:layout_marginBottom="10dp">
 
@@ -409,10 +414,10 @@
                         android:focusable="true">
 
                         <ImageView
-                            android:layout_width="26dp"
-                            android:layout_height="26dp"
+                            android:layout_width="28dp"
+                            android:layout_height="28dp"
                             android:src="@drawable/ic_note"
-                            android:tint="#CCFFFFFF" />
+                            android:tint="#ADADAD" />
 
                         <View
                             android:layout_width="match_parent"
@@ -423,9 +428,8 @@
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:text="Quick Note"
-                            android:textColor="#FFFFFF"
-                            android:textSize="15sp"
-                            android:textStyle="bold" />
+                            android:textColor="#ADADAD"
+                            android:textSize="16sp" />
                     </LinearLayout>
                 </androidx.cardview.widget.CardView>
 
@@ -450,10 +454,10 @@
                         android:focusable="true">
 
                         <ImageView
-                            android:layout_width="26dp"
-                            android:layout_height="26dp"
+                            android:layout_width="28dp"
+                            android:layout_height="28dp"
                             android:src="@drawable/ic_controls"
-                            android:tint="#CCFFFFFF" />
+                            android:tint="#ADADAD" />
 
                         <View
                             android:layout_width="match_parent"
@@ -464,9 +468,8 @@
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:text="Controls"
-                            android:textColor="#FFFFFF"
-                            android:textSize="15sp"
-                            android:textStyle="bold" />
+                            android:textColor="#ADADAD"
+                            android:textSize="16sp" />
                     </LinearLayout>
                 </androidx.cardview.widget.CardView>
             </LinearLayout>
@@ -475,7 +478,7 @@
             <LinearLayout
                 android:id="@+id/rowTiles3"
                 android:layout_width="match_parent"
-                android:layout_height="140dp"
+                android:layout_height="120dp"
                 android:orientation="horizontal"
                 android:layout_marginBottom="14dp">
 
@@ -500,10 +503,10 @@
                         android:focusable="true">
 
                         <ImageView
-                            android:layout_width="26dp"
-                            android:layout_height="26dp"
+                            android:layout_width="28dp"
+                            android:layout_height="28dp"
                             android:src="@drawable/ic_clock"
-                            android:tint="#CCFFFFFF" />
+                            android:tint="#ADADAD" />
 
                         <View
                             android:layout_width="match_parent"
@@ -514,9 +517,8 @@
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:text="History"
-                            android:textColor="#FFFFFF"
-                            android:textSize="15sp"
-                            android:textStyle="bold" />
+                            android:textColor="#ADADAD"
+                            android:textSize="16sp" />
                     </LinearLayout>
                 </androidx.cardview.widget.CardView>
 
@@ -541,10 +543,10 @@
                         android:focusable="true">
 
                         <ImageView
-                            android:layout_width="26dp"
-                            android:layout_height="26dp"
+                            android:layout_width="28dp"
+                            android:layout_height="28dp"
                             android:src="@drawable/ic_mic"
-                            android:tint="#CCFFFFFF" />
+                            android:tint="#ADADAD" />
 
                         <View
                             android:layout_width="match_parent"
@@ -555,9 +557,8 @@
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:text="Meetings"
-                            android:textColor="#FFFFFF"
-                            android:textSize="15sp"
-                            android:textStyle="bold" />
+                            android:textColor="#ADADAD"
+                            android:textSize="16sp" />
                     </LinearLayout>
                 </androidx.cardview.widget.CardView>
             </LinearLayout>
