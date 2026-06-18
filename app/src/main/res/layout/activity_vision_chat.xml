@@ -1,157 +1,121 @@
 <?xml version="1.0" encoding="utf-8"?>
-<androidx.coordinatorlayout.widget.CoordinatorLayout
-    xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:app="http://schemas.android.com/apk/res-auto"
+<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#111318">
+    android:background="@drawable/background_with_fog">
 
-    <!-- Toolbar -->
-    <com.google.android.material.appbar.AppBarLayout
-        android:id="@+id/appBarLayout"
+    <!-- Header with dark theme -->
+    <LinearLayout
+        android:id="@+id/headerLayout"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:background="#1A1D24"
-        app:elevation="0dp">
+        android:background="#2A2A2A"
+        android:orientation="vertical"
+        android:padding="16dp"
+        android:elevation="4dp">
 
-        <androidx.appcompat.widget.Toolbar
-            android:id="@+id/toolbar"
-            android:layout_width="match_parent"
-            android:layout_height="56dp"
-            android:paddingStart="4dp"
-            android:paddingEnd="16dp">
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="👓 Vision Chat"
+            android:textColor="#FFFFFF"
+            android:textSize="22sp"
+            android:textStyle="bold" />
 
-            <!-- Back button -->
-            <ImageView
-                android:id="@+id/btnBack"
-                android:layout_width="40dp"
-                android:layout_height="40dp"
-                android:padding="8dp"
-                android:background="?attr/selectableItemBackgroundBorderless"
-                android:src="@drawable/ic_arrow_back"
-                android:contentDescription="Back"
-                app:tint="#FFFFFF" />
+        <TextView
+            android:id="@+id/ipAddressText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Server: Initializing..."
+            android:textColor="#AAAAAA"
+            android:textSize="12sp" />
 
-            <!-- Avatar + Title block -->
-            <LinearLayout
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:layout_marginStart="8dp"
-                android:orientation="horizontal"
-                android:gravity="center_vertical">
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="Say 'chimi' for instant vision analysis"
+            android:textColor="#AAAAAA"
+            android:textSize="12sp"
+            android:textStyle="italic" />
+    </LinearLayout>
 
-                <TextView
-                    android:layout_width="36dp"
-                    android:layout_height="36dp"
-                    android:background="@drawable/bg_chat_avatar"
-                    android:gravity="center"
-                    android:text="IMI"
-                    android:textColor="#FFFFFF"
-                    android:textSize="9sp"
-                    android:textStyle="bold" />
-
-                <LinearLayout
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginStart="10dp"
-                    android:orientation="vertical">
-
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="Vision Chat"
-                        android:textColor="#FFFFFF"
-                        android:textSize="16sp"
-                        android:textStyle="bold" />
-
-                    <TextView
-                        android:id="@+id/ipAddressText"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="Initializing…"
-                        android:textColor="#888888"
-                        android:textSize="11sp" />
-                </LinearLayout>
-            </LinearLayout>
-
-        </androidx.appcompat.widget.Toolbar>
-
-        <!-- Thin divider -->
-        <View
-            android:layout_width="match_parent"
-            android:layout_height="1dp"
-            android:background="#2A2D35" />
-
-    </com.google.android.material.appbar.AppBarLayout>
-
-    <!-- Chat messages -->
+    <!-- Chat Messages -->
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/visionChatRecyclerView"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        app:layout_behavior="@string/appbar_scrolling_view_behavior"
+        android:layout_above="@+id/bottomInfo"
+        android:layout_below="@+id/headerLayout"
         android:clipToPadding="false"
-        android:paddingTop="8dp"
-        android:paddingBottom="8dp" />
+        android:padding="8dp" />
 
-    <!-- Bottom action bar -->
+    <!-- Bottom Info with dark theme -->
     <LinearLayout
         android:id="@+id/bottomInfo"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_gravity="bottom"
-        android:background="#1A1D24"
+        android:layout_alignParentBottom="true"
+        android:background="#2A2A2A"
+        android:elevation="8dp"
         android:orientation="vertical"
-        android:paddingStart="16dp"
-        android:paddingEnd="16dp"
-        android:paddingTop="12dp"
-        android:paddingBottom="16dp"
-        android:elevation="8dp">
+        android:padding="16dp">
 
-        <!-- Top divider -->
-        <View
-            android:layout_width="match_parent"
-            android:layout_height="1dp"
-            android:layout_marginBottom="12dp"
-            android:background="#2A2D35" />
-
-        <!-- Capture button -->
-        <com.google.android.material.button.MaterialButton
+        <!-- Capture Button -->
+        <Button
             android:id="@+id/btnCaptureFromGlasses"
             android:layout_width="match_parent"
-            android:layout_height="48dp"
-            android:text="📸  Capture from Glasses"
+            android:layout_height="wrap_content"
+            android:background="#4CAF50"
+            android:text="📸 Capture from Glasses"
             android:textColor="#FFFFFF"
-            android:textSize="15sp"
+            android:textSize="16sp"
             android:textStyle="bold"
-            android:layout_marginBottom="8dp"
-            app:backgroundTint="#FF6B35"
-            app:cornerRadius="24dp"
-            app:rippleColor="#40FFFFFF" />
+            android:padding="14dp"
+            android:layout_marginBottom="10dp" />
 
-        <!-- Hidden BLE button -->
+        <!-- 🆕 BLE Live Streaming Button - HIDDEN (not needed) -->
         <Button
             android:id="@+id/btnStartBleStream"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:background="#2196F3"
             android:text="🎥 Start Live Stream (BLE)"
+            android:textColor="#FFFFFF"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:padding="14dp"
+            android:layout_marginBottom="10dp"
             android:visibility="gone" />
 
-        <!-- Stop & Return button -->
-        <com.google.android.material.button.MaterialButton
+        <!-- Stop & Return Button -->
+        <Button
             android:id="@+id/btnStopAndReturn"
             android:layout_width="match_parent"
-            android:layout_height="48dp"
-            android:text="⏹  Stop and Return to Gemini Live"
+            android:layout_height="wrap_content"
+            android:background="#F44336"
+            android:text="🛑 Stop and Return to Gemini Live"
             android:textColor="#FFFFFF"
-            android:textSize="14sp"
-            app:backgroundTint="#2A2D35"
-            app:strokeColor="#FF6B35"
-            app:strokeWidth="1dp"
-            app:cornerRadius="24dp"
-            app:rippleColor="#20FF6B35" />
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:padding="14dp"
+            android:layout_marginBottom="10dp" />
 
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="📡 Waiting for images from glasses..."
+            android:textColor="#AAAAAA"
+            android:textSize="12sp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="AI-powered vision analysis with Gemini 2.0"
+            android:textColor="#888888"
+            android:textSize="10sp" />
     </LinearLayout>
 
-</androidx.coordinatorlayout.widget.CoordinatorLayout>
+</RelativeLayout>

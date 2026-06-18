@@ -1792,17 +1792,12 @@ class VisionChatActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         captureButton = findViewById(R.id.btnCaptureFromGlasses)
         val stopButton: Button = findViewById(R.id.btnStopAndReturn)
         val bleStreamButton: Button = findViewById(R.id.btnStartBleStream)
-
-        // Wire back button in new toolbar
-        findViewById<android.widget.ImageView>(R.id.btnBack).setOnClickListener { onBackPressed() }
-
+        
         chatAdapter = VisionChatAdapter(messages)
-        val layoutManager = LinearLayoutManager(this)
-        layoutManager.stackFromEnd = true
-        recyclerView.layoutManager = layoutManager
+        recyclerView.layoutManager = LinearLayoutManager(this)
         recyclerView.adapter = chatAdapter
-
-        statusText.text = "Active"
+        
+        statusText.text = "📷 Tap button to capture from glasses"
         
         // ❌ SKIP introduction message if opening directly or from voice command
         // Only show introduction if user needs manual button instructions
@@ -3419,11 +3414,6 @@ class VisionChatAdapter(private val messages: List<VisionChatMessage>) :
     RecyclerView.Adapter<VisionChatAdapter.MessageViewHolder>() {
 
     class MessageViewHolder(view: View) : RecyclerView.ViewHolder(view) {
-        val root: android.widget.LinearLayout = view.findViewById(R.id.messageRoot)
-        val avatarText: TextView = view.findViewById(R.id.avatarText)
-        val userAvatarSpacer: View = view.findViewById(R.id.userAvatarSpacer)
-        val bubbleColumn: android.widget.LinearLayout = view.findViewById(R.id.bubbleColumn)
-        val bubbleCard: android.widget.LinearLayout = view.findViewById(R.id.bubbleCard)
         val messageText: TextView = view.findViewById(R.id.messageText)
         val timestampText: TextView = view.findViewById(R.id.timestampText)
         val messageImage: android.widget.ImageView = view.findViewById(R.id.messageImage)
@@ -3437,10 +3427,10 @@ class VisionChatAdapter(private val messages: List<VisionChatMessage>) :
     override fun onBindViewHolder(holder: MessageViewHolder, position: Int) {
         val message = messages[position]
         holder.messageText.text = message.text
-
+        
         val timeFormat = SimpleDateFormat("HH:mm", Locale.US)
         holder.timestampText.text = timeFormat.format(Date(message.timestamp))
-
+        
         if (message.imagePath != null) {
             holder.messageImage.visibility = View.VISIBLE
             val bitmap = BitmapFactory.decodeFile(message.imagePath)
@@ -3448,42 +3438,11 @@ class VisionChatAdapter(private val messages: List<VisionChatMessage>) :
         } else {
             holder.messageImage.visibility = View.GONE
         }
-
-        val dp = holder.root.context.resources.displayMetrics.density
-
-        if (message.isUser) {
-            // User bubble: right-aligned, orange
-            holder.root.gravity = android.view.Gravity.END or android.view.Gravity.BOTTOM
-            holder.avatarText.visibility = View.GONE
-            holder.userAvatarSpacer.visibility = View.INVISIBLE
-            holder.bubbleColumn.gravity = android.view.Gravity.END
-
-            val bubble = android.graphics.drawable.GradientDrawable()
-            bubble.cornerRadii = floatArrayOf(18f, 18f, 18f, 18f, 4f, 4f, 18f, 18f).map { it * dp }.toFloatArray()
-            bubble.setColor(0xFFFF6B35.toInt())
-            holder.bubbleCard.background = bubble
-
-            holder.messageText.setTextColor(0xFFFFFFFF.toInt())
-            holder.timestampText.setTextColor(0xCCFFFFFF.toInt())
-        } else {
-            // AI bubble: left-aligned, dark card
-            holder.root.gravity = android.view.Gravity.START or android.view.Gravity.BOTTOM
-            holder.avatarText.visibility = View.VISIBLE
-            holder.userAvatarSpacer.visibility = View.GONE
-            holder.bubbleColumn.gravity = android.view.Gravity.START
-
-            val bubble = android.graphics.drawable.GradientDrawable()
-            bubble.cornerRadii = floatArrayOf(18f, 18f, 18f, 18f, 18f, 18f, 4f, 4f).map { it * dp }.toFloatArray()
-            bubble.setColor(0xFF23262F.toInt())
-            bubble.setStroke((1 * dp).toInt(), 0xFF2E3140.toInt())
-            holder.bubbleCard.background = bubble
-
-            holder.messageText.setTextColor(0xFFE8E8E8.toInt())
-            holder.timestampText.setTextColor(0xFF888888.toInt())
-        }
     }
 
-    override fun getItemViewType(position: Int): Int = if (messages[position].isUser) 0 else 1
+    override fun getItemViewType(position: Int): Int {
+        return if (messages[position].isUser) 0 else 1
+    }
 
     override fun getItemCount() = messages.size
 }

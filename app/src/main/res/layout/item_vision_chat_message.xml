@@ -1,84 +1,46 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Root fills full width; gravity is set at runtime (start=AI, end=User) -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:id="@+id/messageRoot"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:orientation="horizontal"
-    android:paddingStart="12dp"
-    android:paddingEnd="12dp"
-    android:paddingTop="4dp"
-    android:paddingBottom="4dp"
-    android:gravity="bottom">
+    android:orientation="vertical"
+    android:padding="8dp">
 
-    <!-- AI avatar (visible only for AI messages) -->
-    <TextView
-        android:id="@+id/avatarText"
-        android:layout_width="30dp"
-        android:layout_height="30dp"
-        android:layout_marginEnd="8dp"
-        android:background="@drawable/bg_chat_avatar"
-        android:gravity="center"
-        android:text="IMI"
-        android:textColor="#FFFFFF"
-        android:textSize="8sp"
-        android:textStyle="bold"
-        android:visibility="gone" />
-
-    <!-- Bubble + timestamp column -->
     <LinearLayout
-        android:id="@+id/bubbleColumn"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_weight="1"
-        android:orientation="vertical">
+        android:layout_gravity="start"
+        android:background="#E3F2FD"
+        android:orientation="vertical"
+        android:padding="12dp">
 
-        <!-- Image preview (shown above text when image present) -->
+        <!-- Image Preview -->
         <ImageView
             android:id="@+id/messageImage"
-            android:layout_width="220dp"
-            android:layout_height="160dp"
-            android:layout_marginBottom="4dp"
+            android:layout_width="200dp"
+            android:layout_height="200dp"
+            android:layout_marginBottom="8dp"
             android:scaleType="centerCrop"
             android:visibility="gone" />
 
-        <!-- Bubble card -->
-        <LinearLayout
-            android:id="@+id/bubbleCard"
+        <!-- Message Text -->
+        <TextView
+            android:id="@+id/messageText"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:orientation="vertical"
-            android:maxWidth="260dp"
-            android:paddingStart="14dp"
-            android:paddingEnd="14dp"
-            android:paddingTop="10dp"
-            android:paddingBottom="8dp">
+            android:maxWidth="280dp"
+            android:text="Message"
+            android:textColor="#000000"
+            android:textSize="14sp" />
 
-            <TextView
-                android:id="@+id/messageText"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Message"
-                android:textSize="14sp"
-                android:lineSpacingMultiplier="1.3" />
-
-            <TextView
-                android:id="@+id/timestampText"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:layout_gravity="end"
-                android:text="00:00"
-                android:textSize="10sp" />
-        </LinearLayout>
+        <!-- Timestamp -->
+        <TextView
+            android:id="@+id/timestampText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="00:00"
+            android:textColor="#999999"
+            android:textSize="10sp" />
     </LinearLayout>
-
-    <!-- User avatar spacer (keeps symmetry, invisible) -->
-    <View
-        android:id="@+id/userAvatarSpacer"
-        android:layout_width="30dp"
-        android:layout_height="30dp"
-        android:layout_marginStart="8dp"
-        android:visibility="invisible" />
 
 </LinearLayout>
