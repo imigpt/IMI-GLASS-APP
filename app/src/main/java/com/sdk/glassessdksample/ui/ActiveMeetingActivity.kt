@@ -227,8 +227,8 @@ class ActiveMeetingActivity : AppCompatActivity() {
         try {
             // Create audio file path
             val audioDir = getExternalFilesDir(null)
-            audioFilePath = "${audioDir?.absolutePath}/meeting_${System.currentTimeMillis()}.3gp"
-            
+            audioFilePath = "${audioDir?.absolutePath}/meeting_${System.currentTimeMillis()}.m4a"
+
             // Initialize MediaRecorder
             mediaRecorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 MediaRecorder(this)
@@ -236,11 +236,13 @@ class ActiveMeetingActivity : AppCompatActivity() {
                 @Suppress("DEPRECATION")
                 MediaRecorder()
             }
-            
+
             mediaRecorder?.apply {
                 setAudioSource(MediaRecorder.AudioSource.MIC)
-                setOutputFormat(MediaRecorder.OutputFormat.THREE_GPP)
-                setAudioEncoder(MediaRecorder.AudioEncoder.AMR_NB)
+                setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+                setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+                setAudioEncodingBitRate(128000)
+                setAudioSamplingRate(44100)
                 setOutputFile(audioFilePath)
                 prepare()
                 start()
@@ -429,7 +431,7 @@ class ActiveMeetingActivity : AppCompatActivity() {
             val response = model.generateContent(
                 content {
                     text("Transcribe this audio recording completely and accurately. Return only the spoken words, nothing else.")
-                    blob("audio/3gp", audioBytes)
+                    blob("audio/mp4", audioBytes)
                 }
             )
 

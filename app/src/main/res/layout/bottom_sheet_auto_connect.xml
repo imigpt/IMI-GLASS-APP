@@ -56,7 +56,7 @@
         android:layout_marginStart="20dp"
         android:layout_marginEnd="20dp"
         android:layout_marginBottom="20dp"
-        app:cardBackgroundColor="#2A2A2A"
+        app:cardBackgroundColor="#191C1B"
         app:cardCornerRadius="12dp"
         app:cardElevation="0dp">
 
@@ -73,7 +73,7 @@
                 android:src="@drawable/ic_connect"
                 android:scaleType="fitCenter"
                 android:layout_marginEnd="12dp"
-                app:tint="#00D9FF"/>
+                app:tint="#FF7F2E"/>
 
             <LinearLayout
                 android:layout_width="0dp"
@@ -168,7 +168,7 @@
     </LinearLayout>
 
     <!-- Connect button -->
-    <Button
+    <androidx.appcompat.widget.AppCompatButton
         android:id="@+id/btnAutoConnect"
         android:layout_width="match_parent"
         android:layout_height="54dp"
@@ -176,22 +176,28 @@
         android:layout_marginEnd="20dp"
         android:layout_marginBottom="12dp"
         android:background="@drawable/bg_scan_btn_blue"
+        android:backgroundTint="@null"
+        android:stateListAnimator="@null"
         android:text="Connect"
+        android:textAllCaps="false"
         android:textColor="#FFFFFF"
         android:textSize="16sp"
         android:textStyle="bold"
         android:elevation="0dp"/>
 
     <!-- Scan New button -->
-    <Button
+    <androidx.appcompat.widget.AppCompatButton
         android:id="@+id/btnScanNew"
         android:layout_width="match_parent"
         android:layout_height="48dp"
         android:layout_marginStart="20dp"
         android:layout_marginEnd="20dp"
         android:background="@android:color/transparent"
+        android:backgroundTint="@null"
+        android:stateListAnimator="@null"
         android:text="Scan for New Device"
-        android:textColor="#888888"
+        android:textAllCaps="false"
+        android:textColor="#9A9A9A"
         android:textSize="14sp"
         android:elevation="0dp"/>
 

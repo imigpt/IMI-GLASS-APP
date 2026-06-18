@@ -15,7 +15,9 @@ import kotlin.math.sin
 
 /**
  * Scattered-dots constellation animation with IMI center label for the BLE gate screen.
- * Dots drift slowly outward and twinkle to match the reference design.
+ * Dots orbit slowly around the center (parallax swirl — inner dots travel faster than
+ * outer ones), drift gently in and out, and twinkle. Coloured to match the app's
+ * orange theme.
  */
 class DotsOrbitView @JvmOverloads constructor(
     context: Context,
@@ -26,7 +28,7 @@ class DotsOrbitView @JvmOverloads constructor(
     private val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val centerCirclePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
-        color = Color.parseColor("#444444")
+        color = Color.parseColor("#3D2C1E")   // dark warm circle behind IMI
     }
     private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.WHITE
@@ -34,52 +36,76 @@ class DotsOrbitView @JvmOverloads constructor(
         typeface = Typeface.DEFAULT_BOLD
     }
     private val underlinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#AAAAAA")
+        color = Color.parseColor("#FF7F2E")
         style = Paint.Style.FILL
     }
 
-    // Each dot: (angleDeg, radiusFraction, sizeDp, baseAlpha, blueHue)
-    // blueHue=true → blue dot, false → white/grey dot
+    // App theme colours
+    private val colorOrange = Color.parseColor("#FF7F2E")       // primary dots
+    private val colorOrangeLight = Color.parseColor("#FFB07A")  // softer dots
+    private val colorAccent = Color.parseColor("#FFD9B8")       // small warm accents
+
+    // Each dot orbits around the center. tone: 0 = orange, 1 = light orange, 2 = warm accent
     private data class Dot(
         val angleDeg: Float,
         val radiusFraction: Float,
         val sizeDp: Float,
         val baseAlpha: Float,
-        val isBlue: Boolean,
-        var phase: Float = 0f   // twinkle phase offset (0..2π)
+        val tone: Int,
+        var phase: Float = 0f,   // twinkle phase offset (0..2π)
+        var speed: Float = 0.5f  // orbit speed multiplier (parallax)
     )
 
     private val dots = listOf(
-        // Blue dots — prominent
-        Dot(15f,  0.55f, 7f,  0.90f, true),
-        Dot(55f,  0.80f, 9f,  0.95f, true),
-        Dot(90f,  0.65f, 6f,  0.80f, true),
-        Dot(130f, 0.88f, 10f, 1.00f, true),
-        Dot(165f, 0.58f, 7f,  0.85f, true),
-        Dot(200f, 0.75f, 9f,  0.90f, true),
-        Dot(240f, 0.62f, 6f,  0.80f, true),
-        Dot(275f, 0.85f, 8f,  0.95f, true),
-        Dot(310f, 0.55f, 7f,  0.85f, true),
-        Dot(340f, 0.78f, 9f,  0.90f, true),
-        // Lighter blue / smaller
-        Dot(35f,  0.70f, 5f,  0.70f, true),
-        Dot(110f, 0.72f, 5f,  0.65f, true),
-        Dot(185f, 0.68f, 4f,  0.60f, true),
-        Dot(255f, 0.73f, 5f,  0.70f, true),
-        Dot(320f, 0.67f, 4f,  0.65f, true),
-        // White/grey dots — small accent
-        Dot(25f,  0.42f, 4f,  0.50f, false),
-        Dot(75f,  0.38f, 3f,  0.45f, false),
-        Dot(145f, 0.45f, 4f,  0.55f, false),
-        Dot(215f, 0.40f, 3f,  0.45f, false),
-        Dot(290f, 0.43f, 4f,  0.50f, false),
-        Dot(355f, 0.39f, 3f,  0.40f, false),
+        // Primary orange dots — prominent
+        Dot(15f,  0.55f, 7f,  0.90f, 0),
+        Dot(55f,  0.80f, 9f,  0.95f, 0),
+        Dot(90f,  0.65f, 6f,  0.80f, 0),
+        Dot(130f, 0.88f, 10f, 1.00f, 0),
+        Dot(165f, 0.58f, 7f,  0.85f, 0),
+        Dot(200f, 0.75f, 9f,  0.90f, 0),
+        Dot(240f, 0.62f, 6f,  0.80f, 0),
+        Dot(275f, 0.85f, 8f,  0.95f, 0),
+        Dot(310f, 0.55f, 7f,  0.85f, 0),
+        Dot(340f, 0.78f, 9f,  0.90f, 0),
+        Dot(5f,   0.92f, 8f,  0.92f, 0),
+        Dot(70f,  0.50f, 6f,  0.82f, 0),
+        Dot(150f, 0.82f, 9f,  0.95f, 0),
+        Dot(225f, 0.90f, 8f,  0.90f, 0),
+        Dot(300f, 0.70f, 7f,  0.85f, 0),
+        // Softer / smaller light-orange
+        Dot(35f,  0.70f, 5f,  0.70f, 1),
+        Dot(110f, 0.72f, 5f,  0.65f, 1),
+        Dot(185f, 0.68f, 4f,  0.60f, 1),
+        Dot(255f, 0.73f, 5f,  0.70f, 1),
+        Dot(320f, 0.67f, 4f,  0.65f, 1),
+        Dot(50f,  0.95f, 5f,  0.68f, 1),
+        Dot(125f, 0.60f, 5f,  0.66f, 1),
+        Dot(170f, 0.92f, 4f,  0.62f, 1),
+        Dot(280f, 0.60f, 5f,  0.70f, 1),
+        Dot(345f, 0.62f, 4f,  0.64f, 1),
+        // Warm accent dots — small
+        Dot(25f,  0.42f, 4f,  0.50f, 2),
+        Dot(75f,  0.38f, 3f,  0.45f, 2),
+        Dot(145f, 0.45f, 4f,  0.55f, 2),
+        Dot(215f, 0.40f, 3f,  0.45f, 2),
+        Dot(290f, 0.43f, 4f,  0.50f, 2),
+        Dot(355f, 0.39f, 3f,  0.40f, 2),
+        Dot(60f,  0.48f, 3f,  0.42f, 2),
+        Dot(120f, 0.35f, 3f,  0.48f, 2),
+        Dot(190f, 0.50f, 4f,  0.52f, 2),
+        Dot(250f, 0.36f, 3f,  0.44f, 2),
+        Dot(330f, 0.47f, 4f,  0.50f, 2),
     ).also { list ->
-        list.forEachIndexed { i, dot -> dot.phase = (i * 0.6f) % (2f * Math.PI.toFloat()) }
+        list.forEachIndexed { i, dot ->
+            dot.phase = (i * 0.6f) % (2f * Math.PI.toFloat())
+            // Inner dots travel faster than outer ones → parallax swirl
+            dot.speed = 1.15f - dot.radiusFraction
+        }
     }
 
-    private var twinkleAngle = 0f
-    private val animator = ValueAnimator.ofFloat(0f, (2f * Math.PI.toFloat())).apply {
+    private var twinkleAngle = 0f   // 0..2π, drives twinkle
+    private val twinkle = ValueAnimator.ofFloat(0f, (2f * Math.PI.toFloat())).apply {
         duration = 3000
         repeatCount = ValueAnimator.INFINITE
         interpolator = LinearInterpolator()
@@ -89,9 +115,23 @@ class DotsOrbitView @JvmOverloads constructor(
         }
     }
 
+    private var orbitAngle = 0f   // 0..2π, drives the swirl
+    private val orbit = ValueAnimator.ofFloat(0f, (2f * Math.PI.toFloat())).apply {
+        duration = 10000   // one full revolution
+        repeatCount = ValueAnimator.INFINITE
+        interpolator = LinearInterpolator()
+        addUpdateListener {
+            orbitAngle = it.animatedValue as Float
+            invalidate()
+        }
+    }
+
     private val density get() = resources.displayMetrics.density
 
-    init { animator.start() }
+    init {
+        twinkle.start()
+        orbit.start()
+    }
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
@@ -99,25 +139,32 @@ class DotsOrbitView @JvmOverloads constructor(
         val cy = height / 2f
         val maxR = min(cx, cy) * 0.88f
 
-        // Draw scattered dots
+        // Draw orbiting dots
         dots.forEach { dot ->
-            val rad = Math.toRadians(dot.angleDeg.toDouble())
-            val r = maxR * dot.radiusFraction
-            val x = cx + (r * cos(rad)).toFloat()
-            val y = cy + (r * sin(rad)).toFloat()
+            // Orbit: each dot's angle advances by orbitAngle scaled by its speed
+            val angleRad = Math.toRadians(dot.angleDeg.toDouble()) + orbitAngle * dot.speed
+            // Gentle radial breathing so dots drift in and out
+            val breathe = 1f + 0.06f * sin((orbitAngle * 2f + dot.phase).toDouble()).toFloat()
+            val r = maxR * dot.radiusFraction * breathe
+            val x = cx + (r * cos(angleRad)).toFloat()
+            val y = cy + (r * sin(angleRad)).toFloat()
 
             // Twinkle: alpha oscillates gently
-            val twinkle = 0.75f + 0.25f * sin((twinkleAngle + dot.phase).toDouble()).toFloat()
-            val alpha = (dot.baseAlpha * twinkle * 255).toInt().coerceIn(0, 255)
+            val tw = 0.75f + 0.25f * sin((twinkleAngle + dot.phase).toDouble()).toFloat()
+            val alpha = (dot.baseAlpha * tw * 255).toInt().coerceIn(0, 255)
 
             dotPaint.alpha = alpha
-            dotPaint.color = if (dot.isBlue) Color.parseColor("#5BA4FF") else Color.parseColor("#CCCCCC")
+            dotPaint.color = when (dot.tone) {
+                0 -> colorOrange
+                1 -> colorOrangeLight
+                else -> colorAccent
+            }
 
             val radius = dot.sizeDp * density / 2f
             canvas.drawCircle(x, y, radius, dotPaint)
         }
 
-        // Center circle (dark grey pill)
+        // Center circle (dark warm pill)
         val circleRadius = 44f * density
         canvas.drawCircle(cx, cy, circleRadius, centerCirclePaint)
 
@@ -136,11 +183,13 @@ class DotsOrbitView @JvmOverloads constructor(
 
     override fun onDetachedFromWindow() {
         super.onDetachedFromWindow()
-        animator.cancel()
+        twinkle.cancel()
+        orbit.cancel()
     }
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
-        if (!animator.isRunning) animator.start()
+        if (!twinkle.isRunning) twinkle.start()
+        if (!orbit.isRunning) orbit.start()
     }
 }

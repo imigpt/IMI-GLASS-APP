@@ -133,6 +133,11 @@ class GeminiLiveService(
         
         // Echo cancellation and noise suppression
         private const val ENERGY_THRESHOLD = 200.0
+
+        // How many times to silently re-establish a dropped/failed connection
+        // before surfacing the error to the user (covers transient Gemini hiccups
+        // that previously required the user to manually "quick start" again).
+        private const val MAX_AUTO_RECONNECTS = 2
     }
     
     // Active model provider (read from prefs at start)
@@ -144,6 +149,14 @@ class GeminiLiveService(
     private var triedGeminiFallback: Boolean = false
     private var lastSystemInstruction: String = ""
     private var lastApiKey: String = ""
+
+    // When true, the AI proactively greets the user the moment the session is
+    // ready, then keeps listening. Set per-session by startLiveConversation and
+    // preserved across auto-reconnects.
+    private var greetOnConnect: Boolean = false
+    // Counts silent reconnect attempts for the current session (reset on a fresh
+    // start and once a session reaches setupComplete).
+    private var autoReconnects: Int = 0
     
     // Dynamic sample rates based on provider
     private val inputSampleRate: Int get() = if (activeProvider == ModelProvider.GPT_REALTIME) GPT_INPUT_SAMPLE_RATE else GEMINI_INPUT_SAMPLE_RATE
@@ -283,13 +296,16 @@ class GeminiLiveService(
     /**
      * Start the live conversation session
      */
-    fun startLiveConversation(systemInstruction: String = "You are a helpful AI assistant.") {
+    fun startLiveConversation(
+        systemInstruction: String = "You are a helpful AI assistant.",
+        greetOnStart: Boolean = false
+    ) {
         if (webSocket != null) {
             Log.w(TAG, "Live conversation already started")
             callbacks.onError("Conversation already in progress")
             return
         }
-        
+
         // 🆕 Set singleton instance
         instance = this
         Log.d(TAG, "🌐 GeminiLiveService instance set for cross-activity access")
@@ -299,6 +315,9 @@ class GeminiLiveService(
         // Reset Gemini Live model to the primary; fallback re-arms per session.
         activeGeminiModel = GEMINI_MODEL
         triedGeminiFallback = false
+        // Arm the proactive greeting and reset the reconnect budget for this session.
+        greetOnConnect = greetOnStart
+        autoReconnects = 0
         Log.d(TAG, "🔄 Starting with model provider: $activeProvider")
         
         val apiKey = if (activeProvider == ModelProvider.GPT_REALTIME) {
@@ -344,6 +363,47 @@ class GeminiLiveService(
         }
     }
     
+    /**
+     * If this session was started with greetOnStart, nudge the model to open the
+     * conversation with a short spoken greeting and then keep listening. Fires
+     * exactly once per session (cleared immediately so an auto-reconnect that
+     * re-runs setup won't greet twice).
+     */
+    private fun maybeSendGreeting() {
+        if (!greetOnConnect) return
+        greetOnConnect = false
+
+        val ws = webSocket ?: return
+        val greetingInstruction = AiResponsePrefs.buildGreetingInstruction(context)
+
+        try {
+            // Give audio playback/capture a beat to come up before the model speaks.
+            scope.launch {
+                delay(250)
+                if (activeProvider == ModelProvider.GPT_REALTIME) {
+                    val responseCreate = mapOf(
+                        "type" to "response.create",
+                        "response" to mapOf("instructions" to greetingInstruction)
+                    )
+                    ws.send(gson.toJson(responseCreate))
+                } else {
+                    val clientContent = mapOf(
+                        "client_content" to mapOf(
+                            "turns" to listOf(
+                                mapOf("role" to "user", "parts" to listOf(mapOf("text" to greetingInstruction)))
+                            ),
+                            "turn_complete" to true
+                        )
+                    )
+                    ws.send(gson.toJson(clientContent))
+                }
+                Log.d(TAG, "👋 Sent initial greeting trigger")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Failed to send greeting trigger: ${e.message}", e)
+        }
+    }
+
     /**
      * 🆕 Inject text for Gemini to speak naturally
      * This sends a user message asking Gemini to speak the provided text
@@ -795,6 +855,31 @@ class GeminiLiveService(
                     return
                 }
 
+                // Transient hiccup (Gemini occasionally drops the socket mid-setup
+                // or right after connecting). Previously the user had to manually
+                // "quick start" again; instead, silently re-establish the session a
+                // couple of times before surfacing any error. Auth/config problems
+                // are not transient, so don't retry those.
+                val isAuthError = response?.code == 401 || response?.code == 403 ||
+                    t.message?.contains("401", ignoreCase = true) == true
+                if (!isAuthError && autoReconnects < MAX_AUTO_RECONNECTS) {
+                    autoReconnects++
+                    Log.w(TAG, "⚠️ Connection dropped, auto-reconnecting (attempt $autoReconnects/$MAX_AUTO_RECONNECTS)")
+                    this@GeminiLiveService.webSocket = null
+                    isSetupComplete.set(false)
+                    scope.launch {
+                        delay(600) // brief backoff before retrying
+                        try {
+                            connectWebSocket(lastApiKey, lastSystemInstruction)
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Auto-reconnect failed: ${e.message}")
+                            callbacks.onError("Connection failed: ${e.message}")
+                            cleanup()
+                        }
+                    }
+                    return
+                }
+
                 val errorMessage = when {
                     t.message?.contains("network", ignoreCase = true) == true -> "Network disconnected"
                     t.message?.contains("internet", ignoreCase = true) == true -> "No internet connection"
@@ -1060,6 +1145,17 @@ class GeminiLiveService(
                     ),
                     "required" to listOf("action")
                 )
+            ),
+            mapOf(
+                "type" to "function",
+                "name" to "read_notifications",
+                "description" to "Read the user's recent phone notifications. Use this whenever the user asks about their notifications, e.g. 'what notifications do I have', 'any new messages', 'read my notifications', 'koi notification aaya kya'.",
+                "parameters" to mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "limit" to mapOf("type" to "integer", "description" to "How many recent notifications to read (default 5)")
+                    )
+                )
             )
         )
 
@@ -1078,6 +1174,8 @@ QUICK NOTES: When the user asks to "remember this", "add to notes", "note this d
 When the user asks to "take a pic and add to notes", "click photo and save in notes", "capture this and note it", or wants to photograph something AND save it as a note, use the capture_photo_note tool.
 
 MEETING MINUTES: When the user asks to "start meeting minutes", "record this meeting", "start recording the meeting", or similar, use the start_meeting tool to begin recording. If they mention a specific meeting name (e.g., "start meeting minutes for Raghav Meeting"), extract the meeting name and pass it in the 'title' parameter. Otherwise leave title empty for auto-generation.
+
+NOTIFICATIONS: You CAN read the user's phone notifications. When the user asks "what notifications do I have", "any new messages/notifications", "read my notifications", or similar (in any language), call the read_notifications tool and tell them about their recent notifications in a brief, spoken-word style.
 """
 
         if (activeProvider == ModelProvider.GPT_REALTIME) {
@@ -1431,6 +1529,10 @@ MEETING MINUTES: When the user asks to "start meeting minutes", "record this mee
                 "session.created", "session.updated" -> {
                     Log.d(TAG, "✅ Session configured: $eventType")
                     isSetupComplete.set(true)
+                    autoReconnects = 0
+                    // Greet only once, on the initial session.created (session.updated
+                    // can fire again later for config changes).
+                    if (eventType == "session.created") maybeSendGreeting()
                 }
                 
                 // Input audio buffer speech started (VAD detected speech)
@@ -1636,6 +1738,10 @@ MEETING MINUTES: When the user asks to "start meeting minutes", "record this mee
             if (setupComplete != null) {
                 Log.d(TAG, "✅ Gemini session setup complete")
                 isSetupComplete.set(true)
+                // Session reached a healthy state, so the reconnect budget is no
+                // longer needed for this connection.
+                autoReconnects = 0
+                maybeSendGreeting()
                 return
             }
             

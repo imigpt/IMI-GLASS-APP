@@ -39,7 +39,7 @@
                         android:layout_height="wrap_content"
                         android:fontFamily="sans-serif-black"
                         android:text="IMI"
-                        android:textColor="#F6FBFF"
+                        android:textColor="#FFFFFF"
                         android:textSize="36sp"
                         android:textStyle="bold" />
 
@@ -86,10 +86,10 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginBottom="14dp"
-                app:cardBackgroundColor="#22FFFFFF"
+                app:cardBackgroundColor="#191C1B"
                 app:cardCornerRadius="22dp"
                 app:cardElevation="0dp"
-                app:strokeColor="#55FFFFFF"
+                app:strokeColor="#D87D41"
                 app:strokeWidth="0.8dp">
 
                 <LinearLayout
@@ -109,14 +109,14 @@
                             android:layout_height="16dp"
                             android:layout_marginEnd="8dp"
                             android:src="@android:drawable/ic_menu_mylocation"
-                            app:tint="#D7ECFF" />
+                            app:tint="#ADADAD" />
 
                         <TextView
                             android:id="@+id/tvLocationName"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:text="Chaupati, Rajasthan, India"
-                            android:textColor="#E5EEF8"
+                            android:textColor="#FFFFFF"
                             android:textSize="14sp" />
                     </LinearLayout>
 
@@ -144,13 +144,13 @@
                                 android:layout_height="14dp"
                                 android:layout_marginEnd="8dp"
                                 android:src="@drawable/ic_send"
-                                app:tint="#CFE0F0" />
+                                app:tint="#ADADAD" />
 
                             <TextView
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
                                 android:text="Stansted Airport"
-                                android:textColor="#D6E0EC"
+                                android:textColor="#ADADAD"
                                 android:textSize="11sp" />
                         </LinearLayout>
 
@@ -172,14 +172,14 @@
                                 android:layout_height="14dp"
                                 android:layout_marginEnd="8dp"
                                 android:src="@drawable/ic_clock"
-                                app:tint="#CFE0F0" />
+                                app:tint="#ADADAD" />
 
                             <TextView
                                 android:id="@+id/tvCurrentTime"
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
                                 android:text="Fri, Apr 10 - 16:11"
-                                android:textColor="#D6E0EC"
+                                android:textColor="#ADADAD"
                                 android:textSize="11sp" />
                         </LinearLayout>
 
@@ -190,7 +190,7 @@
                             android:background="@drawable/bg_round_arrow_button"
                             android:padding="10dp"
                             android:src="@drawable/ic_arrow_right"
-                            app:tint="#D8E3ED" />
+                            app:tint="#ADADAD" />
                     </LinearLayout>
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
@@ -200,10 +200,10 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginBottom="14dp"
-                app:cardBackgroundColor="#22FFFFFF"
+                app:cardBackgroundColor="#191C1B"
                 app:cardCornerRadius="24dp"
                 app:cardElevation="0dp"
-                app:strokeColor="#55FFFFFF"
+                app:strokeColor="#D87D41"
                 app:strokeWidth="0.8dp">
 
                 <LinearLayout
@@ -231,7 +231,7 @@
                             android:maxLines="1"
                             android:ellipsize="end"
                             android:text="Connect Glass"
-                            android:textColor="#F4F9FF"
+                            android:textColor="#FFFFFF"
                             android:textSize="14sp"
                             android:textStyle="bold" />
 
@@ -251,7 +251,7 @@
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
                                 android:text="Connected"
-                                android:textColor="#D6E5F5"
+                                android:textColor="#ADADAD"
                                 android:textSize="13sp" />
                         </LinearLayout>
 
@@ -274,7 +274,7 @@
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
                                 android:text=" remaining"
-                                android:textColor="#859AB1"
+                                android:textColor="#9A9A9A"
                                 android:textSize="13sp" />
                         </LinearLayout>
 
@@ -303,7 +303,7 @@
                             android:layout_height="wrap_content"
                             android:minHeight="62dp"
                             android:layout_marginBottom="8dp"
-                            android:background="@drawable/bg_button_secondary"
+                            android:background="@drawable/bg_home_secondary_btn"
                             android:gravity="center_vertical"
                             android:orientation="horizontal"
                             android:paddingStart="10dp"
@@ -316,7 +316,7 @@
                                 android:layout_height="20dp"
                                 android:layout_marginEnd="6dp"
                                 android:src="@drawable/ic_eye"
-                                app:tint="#DDEEFF" />
+                                app:tint="#ADADAD" />
 
                             <LinearLayout
                                 android:layout_width="0dp"
@@ -330,7 +330,7 @@
                                     android:ellipsize="end"
                                     android:maxLines="1"
                                     android:text="Quick Wake"
-                                    android:textColor="#F2F8FF"
+                                    android:textColor="#FFFFFF"
                                     android:textSize="11sp" />
 
                                 <TextView
@@ -339,7 +339,7 @@
                                     android:ellipsize="end"
                                     android:maxLines="1"
                                     android:text="Wake instantly"
-                                    android:textColor="#A7B9CB"
+                                    android:textColor="#9A9A9A"
                                     android:textSize="9sp" />
                             </LinearLayout>
                         </LinearLayout>
@@ -350,7 +350,7 @@
                             android:layout_height="wrap_content"
                             android:minHeight="62dp"
                             android:layout_marginBottom="8dp"
-                            android:background="@drawable/bg_button_secondary"
+                            android:background="@drawable/bg_home_secondary_btn"
                             android:gravity="center_vertical"
                             android:orientation="horizontal"
                             android:paddingStart="10dp"
@@ -363,7 +363,7 @@
                                 android:layout_height="20dp"
                                 android:layout_marginEnd="6dp"
                                 android:src="@drawable/ic_mic"
-                                app:tint="#DDEEFF" />
+                                app:tint="#ADADAD" />
 
                             <LinearLayout
                                 android:layout_width="0dp"
@@ -377,7 +377,7 @@
                                     android:ellipsize="end"
                                     android:maxLines="1"
                                     android:text="Voice Command"
-                                    android:textColor="#F2F8FF"
+                                    android:textColor="#FFFFFF"
                                     android:textSize="11sp" />
 
                                 <TextView
@@ -386,7 +386,7 @@
                                     android:ellipsize="end"
                                     android:maxLines="1"
                                     android:text="Hands-free control"
-                                    android:textColor="#A7B9CB"
+                                    android:textColor="#9A9A9A"
                                     android:textSize="9sp" />
                             </LinearLayout>
                         </LinearLayout>
@@ -395,7 +395,7 @@
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:minHeight="62dp"
-                            android:background="@drawable/bg_button_secondary"
+                            android:background="@drawable/bg_home_secondary_btn"
                             android:gravity="center_vertical"
                             android:orientation="horizontal"
                             android:paddingStart="10dp"
@@ -408,7 +408,7 @@
                                 android:layout_height="20dp"
                                 android:layout_marginEnd="6dp"
                                 android:src="@android:drawable/ic_media_pause"
-                                app:tint="#DDEEFF" />
+                                app:tint="#ADADAD" />
 
                             <LinearLayout
                                 android:layout_width="0dp"
@@ -422,7 +422,7 @@
                                     android:ellipsize="end"
                                     android:maxLines="1"
                                     android:text="Interrupt"
-                                    android:textColor="#F2F8FF"
+                                    android:textColor="#FFFFFF"
                                     android:textSize="11sp" />
 
                                 <TextView
@@ -431,7 +431,7 @@
                                     android:ellipsize="end"
                                     android:maxLines="1"
                                     android:text="Smart pause"
-                                    android:textColor="#A7B9CB"
+                                    android:textColor="#9A9A9A"
                                     android:textSize="9sp" />
                             </LinearLayout>
 
@@ -667,7 +667,7 @@
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:text="Let Us Know You"
-                            android:textColor="#F3F8FF"
+                            android:textColor="#FFFFFF"
                             android:textSize="15sp"
                             android:textStyle="bold" />
 
@@ -676,7 +676,7 @@
                             android:layout_height="wrap_content"
                             android:layout_marginTop="2dp"
                             android:text="Answer 15 questions to personalize AI"
-                            android:textColor="#AFC3D8"
+                            android:textColor="#9A9A9A"
                             android:textSize="11sp" />
                     </LinearLayout>
 
@@ -686,7 +686,7 @@
                         android:background="@drawable/bg_round_arrow_button"
                         android:padding="9dp"
                         android:src="@drawable/ic_arrow_right"
-                        app:tint="#D2DFED" />
+                        app:tint="#ADADAD" />
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
 
@@ -851,7 +851,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
                 android:layout_marginBottom="8dp"
-                android:background="@drawable/bg_button_secondary"
+                android:background="@drawable/bg_home_secondary_btn"
                 android:padding="12dp"
                 android:text="GPT Realtime"
                 android:textAllCaps="false"
@@ -864,7 +864,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginBottom="8dp"
-                android:background="@drawable/bg_button_secondary"
+                android:background="@drawable/bg_home_secondary_btn"
                 android:padding="12dp"
                 android:text="Gemini Live"
                 android:textAllCaps="false"

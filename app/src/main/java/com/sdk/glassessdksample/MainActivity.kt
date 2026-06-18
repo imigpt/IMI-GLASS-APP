@@ -135,6 +135,9 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private var lastLiveCameraSpeakTime = 0L
 
     private val aiHistory = mutableListOf<Pair<String, String>>()
+
+    // Session id for ConversationSessionStore (Mark 2 history screen)
+    private var currentSessionId: String? = null
     
     // Pending action for multi-step interactions (Spotify, YouTube, calling, etc.)
     private var pendingAction: ((String) -> Unit)? = null
@@ -1019,6 +1022,33 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     }
 
     /**
+     * Popup shown when the user tries to use the glasses (e.g. take a picture)
+     * while no device is connected. Has a single OK button that closes the popup.
+     */
+    private fun showDeviceNotConnectedDialog() {
+        val view = layoutInflater.inflate(R.layout.dialog_device_not_connected, null)
+        val dialog = android.app.AlertDialog.Builder(this)
+            .setView(view)
+            .setCancelable(true)
+            .create()
+        dialog.window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT))
+
+        // Use the real Mark II glasses photo from assets (same as the home card)
+        try {
+            assets.open("glass1.png").use { stream ->
+                val bitmap = android.graphics.BitmapFactory.decodeStream(stream)
+                view.findViewById<android.widget.ImageView>(R.id.ivDialogGlasses).setImageBitmap(bitmap)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error loading glass1.png for dialog: ${e.message}")
+        }
+
+        view.findViewById<android.widget.TextView>(R.id.btnDeviceNotConnectedOk)
+            .setOnClickListener { dialog.dismiss() }
+        dialog.show()
+    }
+
+    /**
      * Show setup guide if connections are missing
      */
     private fun promptMissingConnections() {
@@ -1259,10 +1289,12 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
         val runtimeContext = buildRuntimeTimeLocationContext()
 
+        val responseStyle = com.sdk.glassessdksample.ui.AiResponsePrefs.buildResponseStyleInstruction(this)
+
         val systemInstruction = """
-            You are Imi Glass, an intelligent AI assistant integrated into smart glasses.
-            Keep your responses very concise (1-2 sentences maximum).
-            Be helpful, friendly, and conversational.
+            You are imi glass, an intelligent AI assistant integrated into smart glasses.
+            $responseStyle
+            Be helpful and conversational.
             Respond in the same language the user speaks.
             You can help with questions, provide information, and assist with tasks.
             
@@ -1295,7 +1327,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 }
 
                 try {
-                    geminiLiveService?.startLiveConversation(systemInstruction)
+                    geminiLiveService?.startLiveConversation(systemInstruction, greetOnStart = true)
                     updateConversation("System", "🎧 Glass Mic Active - Speak naturally!")
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to start Gemini Live after SCO wait: ${e.message}")
@@ -1304,7 +1336,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             } catch (e: Exception) {
                 Log.e(TAG, "Error waiting for SCO before Gemini Live: ${e.message}")
                 try {
-                    geminiLiveService?.startLiveConversation(systemInstruction)
+                    geminiLiveService?.startLiveConversation(systemInstruction, greetOnStart = true)
                 } catch (ex: Exception) { Log.e(TAG, "Fallback startGeminiLive failed: ${ex.message}") }
             }
         }
@@ -1667,6 +1699,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                     if (text.lowercase().matches(Regex(".*(goodbye|good bye|bye bye|stop|exit|bye imi|band karo|alvida).*"))) {
                         Log.d(TAG, "👋 Goodbye command detected in old mode: '$text'")
                         isInConversationMode = false
+                        currentSessionId = null  // next conversation gets a fresh session
                         val goodbye = "Goodbye! Say hey imi to continue our chat."
                         updateConversation("Imi", goodbye)
                         speakOut(goodbye, "GOODBYE")
@@ -2270,14 +2303,16 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 (binding.tvConversation.parent as? android.widget.ScrollView)?.fullScroll(android.view.View.FOCUS_DOWN)
             }
 
-            // Persist immediately after a real AI reply is committed to history.
+            // Persist immediately after every AI reply, matching Mark 1 behaviour.
             val normalizedSpeaker = speaker.trim().lowercase()
             if (normalizedSpeaker in setOf("imi", "ai", "assistant", "model")) {
-                val last = aiHistory.lastOrNull()
-                val modelRoles = setOf("model", "assistant", "ai", "imi")
-                if (last != null && last.first.lowercase() in modelRoles && last.second.trim() == message.trim()) {
-                    saveConversationHistory()
+                saveConversationHistory()
+                // Also write to ConversationSessionStore so the History screen shows Mark 2 turns.
+                val userText = aiHistory.lastOrNull { it.first.lowercase() in setOf("user", "you") }?.second ?: ""
+                if (currentSessionId == null) {
+                    currentSessionId = com.sdk.glassessdksample.ui.ConversationSessionStore.startSession(this@MainActivity)
                 }
+                com.sdk.glassessdksample.ui.ConversationSessionStore.appendTurn(this@MainActivity, currentSessionId, userText, message)
             }
         }
     }
@@ -4510,7 +4545,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         // Setup other buttons - use SafeBleCommandHelper to avoid SDK bug crash
         binding.btnCamera.setOnClickListener {
             if (!checkBLEConnection()) {
-                Toast.makeText(this, "Glasses not connected. Please pair first.", Toast.LENGTH_SHORT).show()
+                showDeviceNotConnectedDialog()
                 return@setOnClickListener
             }
             triggerGlassCameraCapture()
@@ -5717,7 +5752,22 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                     }
                     "Volume $action executed."
                 }
-                
+
+                "read_notifications" -> {
+                    val limit = (args["limit"] as? Number)?.toInt() ?: 5
+                    val notifications = NotificationListener.getRecentNotifications(this)
+                    if (notifications.isEmpty()) {
+                        "You have no recent notifications."
+                    } else {
+                        val total = notifications.size
+                        val summary = StringBuilder("You have $total notification${if (total > 1) "s" else ""}. ")
+                        notifications.take(limit).forEach { notif ->
+                            summary.append("From ${notif.appName}: ${notif.title ?: ""} ${notif.text ?: ""}. ")
+                        }
+                        summary.toString().trim()
+                    }
+                }
+
                 else -> "Unknown function: $toolName"
             }
         } catch (e: Exception) {
@@ -6400,8 +6450,16 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                     }
                     if (historyUpdated) {
                         saveConversationHistory()
+                        // Write to ConversationSessionStore so the History screen shows Gemini Live turns.
+                        if (currentSessionId == null) {
+                            currentSessionId = com.sdk.glassessdksample.ui.ConversationSessionStore.startSession(this@MainActivity)
+                        }
+                        com.sdk.glassessdksample.ui.ConversationSessionStore.appendTurn(
+                            this@MainActivity, currentSessionId, trimmedInput, trimmedOutput
+                        )
                     }
-                    
+                    com.sdk.glassessdksample.ui.sync.ChatSync.pushTurn(this@MainActivity, "Mark 2 Glasses", fullInput, fullOutput)
+
                     val lowerInput = fullInput.lowercase()
                     
                     // 👋 Check for goodbye command to stop AI until wake word triggers again
@@ -6685,7 +6743,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             
             isGeminiLiveMode = false
             isInConversationMode = false
-            
+            currentSessionId = null  // next conversation gets a fresh session
+
             updateConversation("System", "Gemini Live conversation ended")
             
             if (restartWakeWord) {

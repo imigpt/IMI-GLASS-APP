@@ -58,18 +58,67 @@ class AlbumDownloader(private val ctx: Context) {
         )
     }
     
+    // 🌐 The network bound to the Glass (SoftAP / WiFi Direct). When set, ALL HTTP
+    // requests are forced through this interface so traffic actually reaches the Glass
+    // (192.168.6.1) instead of leaking out the phone's home WiFi (which has internet
+    // and is therefore Android's preferred default route).
+    @Volatile private var boundNetwork: android.net.Network? = null
+
     // ⚡ Fast scan client - short timeout for IP discovery
-    private val scanClient = OkHttpClient.Builder()
-        .connectTimeout(1500, TimeUnit.MILLISECONDS)  // ⚡ 1.5s per IP (was 10s)
-        .readTimeout(3, TimeUnit.SECONDS)
-        .build()
+    @Volatile private var scanClient = buildScanClient()
 
     // ⚡ Download client - longer timeout for actual file transfers
-    private val okClient = OkHttpClient.Builder()
-        .connectTimeout(5, TimeUnit.SECONDS)   // ⚡ 5s (was 10s)
-        .readTimeout(30, TimeUnit.SECONDS)     // ⚡ 30s (was 60s)
-        .writeTimeout(15, TimeUnit.SECONDS)    // ⚡ 15s (was 30s)
-        .build()
+    @Volatile private var okClient = buildDownloadClient()
+
+    private fun buildScanClient(): OkHttpClient {
+        val b = OkHttpClient.Builder()
+            .connectTimeout(1500, TimeUnit.MILLISECONDS)  // ⚡ 1.5s per IP (was 10s)
+            .readTimeout(3, TimeUnit.SECONDS)
+        boundNetwork?.let { b.socketFactory(it.socketFactory) }
+        return b.build()
+    }
+
+    private fun buildDownloadClient(): OkHttpClient {
+        val b = OkHttpClient.Builder()
+            .connectTimeout(5, TimeUnit.SECONDS)   // ⚡ 5s (was 10s)
+            .readTimeout(30, TimeUnit.SECONDS)     // ⚡ 30s (was 60s)
+            .writeTimeout(15, TimeUnit.SECONDS)    // ⚡ 15s (was 30s)
+        boundNetwork?.let { b.socketFactory(it.socketFactory) }
+        return b.build()
+    }
+
+    /**
+     * 🌐 Route all HTTP through the given network (the Glass hotspot/WiFi Direct link).
+     * Pass null to go back to the default network. Rebuilds the OkHttp clients so the
+     * new socket factory takes effect immediately.
+     */
+    fun bindToNetwork(network: android.net.Network?) {
+        if (boundNetwork == network) return
+        boundNetwork = network
+        scanClient = buildScanClient()
+        okClient = buildDownloadClient()
+        Log.i(TAG, if (network != null) "🌐 HTTP now bound to Glass network: $network" else "🌐 HTTP unbound (default network)")
+    }
+
+    /** The network HTTP is currently bound to (null = default route). */
+    fun currentBoundNetwork(): android.net.Network? = boundNetwork
+
+    /**
+     * Quick TCP reachability test to [ip]:[port] over the SAME network HTTP uses
+     * (the bound Glass network, or the default route). This is the source of truth for
+     * "can we actually talk to the Glass right now".
+     */
+    suspend fun isReachable(ip: String, port: Int = 80, timeoutMs: Int = 1500): Boolean =
+        withContext(Dispatchers.IO) {
+            try {
+                val sock = boundNetwork?.socketFactory?.createSocket() ?: java.net.Socket()
+                sock.connect(java.net.InetSocketAddress(ip, port), timeoutMs)
+                sock.close()
+                true
+            } catch (_: Exception) {
+                false
+            }
+        }
     
     /**
      * Get gateway IP from current WiFi connection

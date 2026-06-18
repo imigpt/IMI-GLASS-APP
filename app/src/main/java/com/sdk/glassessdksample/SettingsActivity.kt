@@ -3,11 +3,16 @@ package com.sdk.glassessdksample
 import android.content.Intent
 import android.os.Bundle
 import android.provider.Settings
+import android.view.View
+import android.widget.AdapterView
+import android.widget.ArrayAdapter
 import android.widget.ProgressBar
+import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import com.sdk.glassessdksample.databinding.ActivitySettingsBinding
+import com.sdk.glassessdksample.ui.AiResponsePrefs
 import com.sdk.glassessdksample.ui.Mark1BottomNavManager
 import com.sdk.glassessdksample.ui.GeminiLiveService
 import com.sdk.glassessdksample.ui.HotHelper
@@ -26,7 +31,80 @@ class SettingsActivity : AppCompatActivity() {
         setContentView(binding.root)
 
         setupSettings()
+        setupAiPreferences()
         Mark1BottomNavManager.setup(this, binding.bottomNavigation, R.id.nav_profile)
+    }
+
+    /**
+     * Wire the AI Preferences card: answer length, tone, greeting style (+ custom
+     * greeting text) and whether to address the user by name. Selections persist
+     * via [AiResponsePrefs] and feed the live system instruction and greeting.
+     */
+    private fun setupAiPreferences() {
+        bindSpinner(
+            spinner = binding.spinnerResponseLength,
+            labels = AiResponsePrefs.lengthLabels,
+            selectedIndex = AiResponsePrefs.getLength(this).ordinal
+        ) { index -> AiResponsePrefs.setLength(this, AiResponsePrefs.Length.values()[index]) }
+
+        bindSpinner(
+            spinner = binding.spinnerResponseTone,
+            labels = AiResponsePrefs.toneLabels,
+            selectedIndex = AiResponsePrefs.getTone(this).ordinal
+        ) { index -> AiResponsePrefs.setTone(this, AiResponsePrefs.Tone.values()[index]) }
+
+        bindSpinner(
+            spinner = binding.spinnerGreetingStyle,
+            labels = AiResponsePrefs.greetingLabels,
+            selectedIndex = AiResponsePrefs.getGreetingStyle(this).ordinal
+        ) { index ->
+            val style = AiResponsePrefs.GreetingStyle.values()[index]
+            AiResponsePrefs.setGreetingStyle(this, style)
+            binding.layoutCustomGreeting.visibility =
+                if (style == AiResponsePrefs.GreetingStyle.CUSTOM) View.VISIBLE else View.GONE
+        }
+
+        // Custom greeting text.
+        binding.layoutCustomGreeting.visibility =
+            if (AiResponsePrefs.getGreetingStyle(this) == AiResponsePrefs.GreetingStyle.CUSTOM)
+                View.VISIBLE else View.GONE
+        binding.etCustomGreeting.setText(AiResponsePrefs.getCustomGreeting(this))
+        binding.etCustomGreeting.setOnFocusChangeListener { _, hasFocus ->
+            if (!hasFocus) {
+                AiResponsePrefs.setCustomGreeting(this, binding.etCustomGreeting.text.toString())
+            }
+        }
+
+        // Use-my-name switch.
+        binding.switchUseName.isChecked = AiResponsePrefs.getUseName(this)
+        binding.switchUseName.setOnCheckedChangeListener { _, isChecked ->
+            AiResponsePrefs.setUseName(this, isChecked)
+        }
+    }
+
+    /** Populate a spinner with white-on-dark labels and persist the chosen index. */
+    private fun bindSpinner(
+        spinner: Spinner,
+        labels: List<String>,
+        selectedIndex: Int,
+        onSelected: (Int) -> Unit
+    ) {
+        val adapter = ArrayAdapter(this, R.layout.item_spinner_white, labels)
+        adapter.setDropDownViewResource(R.layout.item_spinner_dropdown_white)
+        spinner.adapter = adapter
+        spinner.setSelection(selectedIndex.coerceIn(0, labels.lastIndex), false)
+        spinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                onSelected(position)
+            }
+            override fun onNothingSelected(parent: AdapterView<*>?) {}
+        }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        // Persist any in-progress custom greeting edit when leaving the screen.
+        AiResponsePrefs.setCustomGreeting(this, binding.etCustomGreeting.text.toString())
     }
 
     override fun onResume() {

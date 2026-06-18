@@ -156,6 +156,15 @@ class VisionChatActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     // 🆕 Track ALL processed photos to prevent ANY duplicates
     private val processedPhotos = mutableSetOf<String>()
     private var lastProcessedPhotoName: String? = null
+
+    // 🆕 Snapshot of photos that existed on the Glass BEFORE the current capture.
+    // Used to reliably identify the freshly-captured image (the one NOT in this set),
+    // instead of blindly grabbing the "newest filename" which may still be an old photo
+    // that finished saving before the new one. This is what prevents downloading a
+    // previously-clicked image and ensures every new capture downloads the right photo.
+    private var preCaptureFileNames: MutableSet<String> = mutableSetOf()
+    // True only when preCaptureFileNames was actually read from the Glass (trustworthy).
+    private var preCaptureSnapshotValid: Boolean = false
     
     // 🆕 Processing lock to prevent parallel analysis
     private var isImageAnalysisInProgress = false
@@ -174,7 +183,8 @@ class VisionChatActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private var lastCapturedImageBytes: ByteArray? = null
     private var lastCapturedBitmap: Bitmap? = null
     private var lastImageAnalysisTime: Long = 0
-    private val FOLLOWUP_TIMEOUT_MS = 60000L  // 1 minute for follow-up questions
+    // NOTE: the captured image now persists until the user says "take another picture"
+    // (see canUseLastImage), so there is no follow-up time limit anymore.
     
     // 🆕 Store last vision description for Gemini Live context memory
     private var lastVisionDescription: String? = null
@@ -1567,10 +1577,15 @@ class VisionChatActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             // Gemini Live was stopped - restart it with vision text
             Log.i(TAG, "🔄 Gemini Live not active - restarting with vision text")
             resumeGeminiLiveAndFinish(text)
-            
+
         } else {
-            // Regular mode - just show in UI (no voice)
-            Log.d(TAG, "📝 Vision result (no voice): $text")
+            // 🆕 Standalone mode (opened directly, not via Gemini Live): speak the
+            // description with the local TTS so the user ALWAYS hears the result.
+            // Previously this path was silent, so a direct capture never "told" the
+            // user what it saw.
+            Log.d(TAG, "🔊 Gemini Live unavailable — speaking vision result via TTS")
+            lastSpokenDescription = trimmedText
+            speakOut(text)
         }
     }
     
@@ -1777,12 +1792,17 @@ class VisionChatActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         captureButton = findViewById(R.id.btnCaptureFromGlasses)
         val stopButton: Button = findViewById(R.id.btnStopAndReturn)
         val bleStreamButton: Button = findViewById(R.id.btnStartBleStream)
-        
+
+        // Wire back button in new toolbar
+        findViewById<android.widget.ImageView>(R.id.btnBack).setOnClickListener { onBackPressed() }
+
         chatAdapter = VisionChatAdapter(messages)
-        recyclerView.layoutManager = LinearLayoutManager(this)
+        val layoutManager = LinearLayoutManager(this)
+        layoutManager.stackFromEnd = true
+        recyclerView.layoutManager = layoutManager
         recyclerView.adapter = chatAdapter
-        
-        statusText.text = "📷 Tap button to capture from glasses"
+
+        statusText.text = "Active"
         
         // ❌ SKIP introduction message if opening directly or from voice command
         // Only show introduction if user needs manual button instructions
@@ -1803,6 +1823,11 @@ class VisionChatActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 // 🆕 Start tuning immediately when capture button clicked
                 startThinkingTune()
                 Log.d(TAG, "🎵 Tuning started on capture button click")
+                // 📸 An explicit button press ALWAYS captures a brand-new photo. Clear the
+                // last image (and the stale voice query) so startCaptureProcess() goes down
+                // the real capture path instead of reusing the previous image.
+                userVisionQuery = null
+                clearLastCapturedImage()
                 startCaptureProcess()
             }
         }
@@ -1866,7 +1891,13 @@ class VisionChatActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         
         isProcessing = true
         captureButton.isEnabled = false
-        
+
+        // Reset snapshot state for this fresh capture. snapshotExistingPhotos() (persistent
+        // path) sets it valid again; paths that can't snapshot fall back to the
+        // processed-set heuristic instead of trusting a stale snapshot.
+        preCaptureSnapshotValid = false
+        preCaptureFileNames = mutableSetOf()
+
         // Technical message hidden from user
         Log.d(TAG, "📸 Capture started...")
         
@@ -1892,19 +1923,20 @@ class VisionChatActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 val alreadyOnGlassWifi = isAlreadyConnectedToGlass()
 
                 // ── Step A: probe cached IP (ALWAYS verify before trusting it) ──
+                // The probe must use the SAME network HTTP will use. A plain socket goes
+                // out the default (home WiFi) route and can never reach the Glass, so we
+                // first try to (re)bind a network that routes to the Glass, then probe
+                // through it. This keeps the fast persistent path working across captures.
                 val cachedIpReachable: Boolean = if (cachedGlassIp != null) {
-                    withContext(Dispatchers.IO) {
-                        try {
-                            val sock = java.net.Socket()
-                            sock.connect(java.net.InetSocketAddress(cachedGlassIp, 80), 1500)
-                            sock.close()
-                            Log.i(TAG, "🔗 Cached IP ${cachedGlassIp} is REACHABLE ✅")
-                            true
-                        } catch (_: Exception) {
-                            Log.w(TAG, "🔗 Cached IP ${cachedGlassIp} UNREACHABLE — phone may not be on Glass WiFi yet")
-                            false
-                        }
+                    // ensureGlassNetworkBound probes reachability (direct route, bound
+                    // network, or WifiNetworkSpecifier) and binds HTTP accordingly.
+                    val reachable = ensureGlassNetworkBound(cachedGlassIp!!)
+                    if (reachable) {
+                        Log.i(TAG, "🔗 Cached IP ${cachedGlassIp} is REACHABLE ✅")
+                    } else {
+                        Log.w(TAG, "🔗 Cached IP ${cachedGlassIp} UNREACHABLE — no Glass network available yet")
                     }
+                    reachable
                 } else false
 
                 // If cached IP is stale, clear it so we don't use a wrong address
@@ -1921,20 +1953,8 @@ class VisionChatActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                     Log.i(TAG, "🔗 PERSISTENT: alreadyOnGlass=$alreadyOnGlassWifi cachedReachable=$cachedIpReachable — skipping P2P entirely")
                     updateStatus("⚡ Connected. Taking photo...")
 
-                    // Trigger camera
-                    val maxRetries = if (isContinuousStreaming) 3 else 1
-                    var camOk = false
-                    for (attempt in 1..maxRetries) {
-                        camOk = triggerGlassCamera()
-                        if (camOk) break
-                        if (attempt < maxRetries) delay(2000L)
-                    }
-                    if (!camOk) { showError("Camera trigger failed"); return@launch }
-
-                    val waitTime = if (isContinuousStreaming) 3500L else 2000L
-                    delay(waitTime)
-
-                    // Resolve IP: use verified cache, else scan known IPs (no P2P, no disconnect)
+                    // Resolve IP FIRST (before camera) so we can snapshot the existing
+                    // photos and reliably detect the brand-new one after capture.
                     var ip: String? = if (cachedIpReachable) cachedGlassIp else null
                     if (ip == null) {
                         updateStatus("🔍 Finding Glass IP...")
@@ -1972,6 +1992,24 @@ class VisionChatActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                         Log.i(TAG, "🔗 Glass IP cached: $ip")
                     }
                     glassIpAddress = ip
+
+                    // 📸 Snapshot photos that already exist BEFORE we take the new one,
+                    // so downloadAndAnalyzeImage() can pick out the freshly-captured file.
+                    snapshotExistingPhotos(ip)
+
+                    // Trigger camera
+                    val maxRetries = if (isContinuousStreaming) 3 else 1
+                    var camOk = false
+                    for (attempt in 1..maxRetries) {
+                        camOk = triggerGlassCamera()
+                        if (camOk) break
+                        if (attempt < maxRetries) delay(2000L)
+                    }
+                    if (!camOk) { showError("Camera trigger failed"); return@launch }
+
+                    val waitTime = if (isContinuousStreaming) 3500L else 2000L
+                    delay(waitTime)
+
                     downloadAndAnalyzeImage(ip)
                     return@launch  // ✅ Done — pairing page never shown again
                 }
@@ -1981,7 +2019,7 @@ class VisionChatActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 Log.i(TAG, "📡 First-time pairing: starting P2P discovery...")
                 updateStatus("📡 Connecting to Glass WiFi (one-time setup)...")
 
-                // Step 1: Camera
+                // Step 1: Camera (take the photo now, before pairing)
                 var cameraSuccess = false
                 val maxCameraRetries = if (isContinuousStreaming) 3 else 1
                 for (attempt in 1..maxCameraRetries) {
@@ -2005,7 +2043,7 @@ class VisionChatActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 isWaitingForConnection = true
                 wifiP2pHelper.startDiscovery()
 
-                // P2P callback will call downloadAndAnalyzeImage() automatically.
+                // P2P / BLE callback will call downloadAndAnalyzeImage() automatically.
                 // Once that succeeds, cachedGlassIp will be set so this branch
                 // never runs again.
 
@@ -2071,6 +2109,40 @@ class VisionChatActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
      * Uses AlbumDownloader for HTTP-based transfer
      * NOW: Accepts specific IP to avoid re-scanning failure
      */
+    /**
+     * 📸 Record the set of photo filenames that already exist on the Glass BEFORE
+     * triggering a new capture. downloadAndAnalyzeImage() then waits for a filename
+     * that is NOT in this set — guaranteeing we download the freshly-captured image
+     * and never an old one that happened to be the "newest" at fetch time.
+     *
+     * Returns true only if the list was actually read from the Glass (so the snapshot is
+     * trustworthy). If the Glass wasn't reachable we return false and the caller falls
+     * back to the processed-set heuristic — but at least it KNOWS the snapshot is invalid.
+     */
+    private suspend fun snapshotExistingPhotos(ip: String): Boolean {
+        // The Glass must be reachable over the network HTTP uses, or the list comes back
+        // empty and we'd wrongly think "no photos existed" → grab a random old image.
+        ensureGlassNetworkBound(ip)
+        var attempt = 0
+        while (attempt < 4) {
+            if (albumDownloader.isReachable(ip)) {
+                val items = withContext(Dispatchers.IO) { albumDownloader.fetchConfig(ip) }
+                preCaptureFileNames = items.map { it.fileName }.toMutableSet()
+                preCaptureSnapshotValid = true
+                Log.i(TAG, "📸 Pre-capture snapshot: ${preCaptureFileNames.size} existing photos on Glass")
+                return true
+            }
+            attempt++
+            Log.w(TAG, "📸 Snapshot: Glass not reachable yet (try $attempt/4) — rebinding...")
+            ensureGlassNetworkBound(ip)
+            delay(800)
+        }
+        preCaptureFileNames = mutableSetOf()
+        preCaptureSnapshotValid = false
+        Log.w(TAG, "📸 Snapshot INVALID — Glass unreachable; will fall back to processed-set dedupe")
+        return false
+    }
+
     private suspend fun downloadAndAnalyzeImage(connectedIp: String? = null) {
         // 🔒 LOCK: Prevent parallel processing
         if (isImageAnalysisInProgress) {
@@ -2078,25 +2150,40 @@ class VisionChatActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             return
         }
         isImageAnalysisInProgress = true
-        
+        // Tracks whether we handed off to analyzeImage() (which resets isProcessing itself).
+        // If we return early before that, the finally block MUST reset isProcessing so a
+        // failed capture never permanently blocks "take another picture".
+        var analysisStarted = false
+
         try {
             // 1. IP Address Finalize - use passed IP or discover
-            var ip = connectedIp
-            
-            if (ip == null) {
+            var resolvedIp = connectedIp
+
+            if (resolvedIp == null) {
                 updateStatus("⬇️ Finding Glass server...")
-                ip = withContext(Dispatchers.IO) {
+                resolvedIp = withContext(Dispatchers.IO) {
                     albumDownloader.discoverGlassesIP()
                 }
             }
-            
-            if (ip == null) {
+
+            if (resolvedIp == null) {
                 showError("Could not find Glass server. Check WiFi connection.")
                 return
             }
-            
+
+            // Non-null working IP. This may be RE-RESOLVED below if it turns out to be
+            // unreachable — e.g. the BLE type-8 notification hands us the Glass SoftAP IP
+            // (192.168.6.1) but the phone is actually on the WiFi-Direct group where the
+            // Glass is the group owner (192.168.49.1).
+            var ip: String = resolvedIp
             glassIpAddress = ip
             Log.i(TAG, "✅ Target Glass IP: $ip")
+
+            // 🌐 Make HTTP route to the Glass and not out the phone's home WiFi. This is
+            // BEST-EFFORT: the Glass link (WiFi Direct group / hotspot) can take a few
+            // seconds to come up, so we don't abort here — we re-check on every retry below.
+            updateStatus("📶 Connecting to Glass network...")
+            ensureGlassNetworkBound(ip)
 
             // 🔗 PERSISTENT CONNECTION: Save this IP so next capture is instant
             if (cachedGlassIp != ip) {
@@ -2108,39 +2195,83 @@ class VisionChatActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             } else {
                 persistentConnectionReady = true
             }
-            
+
             // 2. File List Fetch with Retry (IMPORTANT for Fresh Photos)
             updateStatus("📋 Fetching photo list...")
-            
+
             var latestImage: com.sdk.glassessdksample.ui.wifi.MediaItem? = null
             var retries = 0
+            var everReachable = false
             // 🔧 Increased retries: 6 for streaming, 5 for normal (was 4)
             // Gives more time for Glass to save new photo
             val maxRetries = if (isContinuousStreaming) 6 else 5
-            
+
             // Retry if list is empty or no new photos (photo may still be saving)
             while (latestImage == null && retries < maxRetries) {
+                // 🌐 Re-establish the Glass route each loop — the WiFi Direct group / hotspot
+                // may only finish forming a few seconds after the camera trigger.
+                if (!everReachable) {
+                    everReachable = ensureGlassNetworkBound(ip)
+
+                    // 🔁 If the supplied IP isn't reachable, it's very likely the WRONG IP
+                    // for the CURRENT connection mode (BLE reports the SoftAP 192.168.6.1
+                    // but we're on the WiFi-Direct group where the Glass = 192.168.49.1).
+                    // Re-discover whichever known Glass IP actually answers right now —
+                    // this is the robustness the normal chat gets for free via
+                    // groupOwnerAddress, and it's what fixes "Couldn't reach Glass at …".
+                    if (!everReachable) {
+                        val rediscovered = withContext(Dispatchers.IO) {
+                            albumDownloader.discoverGlassesIP()
+                        }
+                        if (rediscovered != null) {
+                            if (rediscovered != ip) {
+                                Log.i(TAG, "🔁 Re-resolved Glass IP: $ip → $rediscovered (original unreachable)")
+                                ip = rediscovered
+                                glassIpAddress = ip
+                                cachedGlassIp = ip
+                                persistentConnectionReady = true
+                                getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                                    .edit().putString(KEY_GLASS_IP, ip).apply()
+                            }
+                            everReachable = true
+                        }
+                    }
+                }
+
                 val mediaItems = withContext(Dispatchers.IO) {
                     albumDownloader.fetchConfig(ip)
                 }
                 
                 if (mediaItems.isNotEmpty()) {
-                    // ✅ ALWAYS pick the VERY FIRST photo (newest) - sorted by filename descending
-                    // Filename format: IMG_YYYYMMDD_HHMMSS.jpg -> newest = highest timestamp
+                    // ✅ Keep the Glass media.config ORDER (oldest → newest). The newest
+                    // photo is the LAST image entry. This MATCHES the proven normal-chat
+                    // path (imageFiles.last()) which always downloads the most recent
+                    // capture. We deliberately DON'T sort by filename: different glass
+                    // firmwares use prefixes/formats that do NOT sort chronologically,
+                    // which is exactly what caused a random/old image to be picked here.
                     val photoList = mediaItems
                         .filter { it.fileName.endsWith(".jpg", true) || it.fileName.endsWith(".jpeg", true) || it.fileName.endsWith(".png", true) }
-                        .sortedByDescending { it.fileName } // Newest first
-                    
+
                     if (photoList.isNotEmpty()) {
-                        val newestPhoto = photoList.first() // ALWAYS take newest
-                        
-                        // 🆕 CRITICAL FIX: Robust duplicate check against entire history (Set)
-                        // If we've seen this filename before, it's an OLD photo. Keep waiting.
-                        if (!processedPhotos.contains(newestPhoto.fileName)) {
-                            latestImage = newestPhoto
-                            Log.d(TAG, "🆕 Found NEW UNPROCESSED photo: ${newestPhoto.fileName}")
+                        // 🆕 CRITICAL FIX: Pick the freshly-captured image.
+                        // The new photo is whatever file did NOT exist before this capture
+                        // (snapshot diff) — this is independent of filename ordering. Among
+                        // those candidates we take the LAST one (= newest in config order),
+                        // exactly like the normal chat. When the snapshot is INVALID
+                        // (Glass was unreachable before capture), fall back to the newest
+                        // not-yet-analyzed file.
+                        val candidates = if (preCaptureSnapshotValid) {
+                            photoList.filter { it.fileName !in preCaptureFileNames }
                         } else {
-                            Log.d(TAG, "⏸️ Newest photo ${newestPhoto.fileName} is ALREADY PROCESSED - waiting for new capture...")
+                            photoList.filter { it.fileName !in processedPhotos }
+                        }
+                        val freshPhoto = candidates.lastOrNull()
+
+                        if (freshPhoto != null) {
+                            latestImage = freshPhoto
+                            Log.d(TAG, "🆕 Found freshly-captured photo: ${freshPhoto.fileName} (snapshotValid=$preCaptureSnapshotValid, candidates=${candidates.size})")
+                        } else {
+                            Log.d(TAG, "⏸️ New photo not saved yet (newest=${photoList.last().fileName}) - waiting for capture to finish...")
                             // latestImage remains null, loop continues
                         }
                     }
@@ -2156,7 +2287,13 @@ class VisionChatActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             }
             
             if (latestImage == null) {
-                showError("No NEW photo found. All photos already analyzed.")
+                if (!everReachable) {
+                    // We never got a route to the Glass — this is a connectivity problem,
+                    // not a "no new photo" problem. Give an actionable message.
+                    showError("Couldn't reach Glass at $ip. Make sure the Glass WiFi/hotspot is on and your phone is connected to it, then try again.")
+                } else {
+                    showError("No NEW photo found. All photos already analyzed.")
+                }
                 return
             }
             
@@ -2214,6 +2351,7 @@ class VisionChatActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             
             // 4. Send to AI for analysis
             updateStatus("🔍 Analyzing with AI...")
+            analysisStarted = true
             analyzeImage(imageBytes)
             
             // 🎥 Auto-start continuous streaming after first analysis (if enabled)
@@ -2229,21 +2367,19 @@ class VisionChatActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         } finally {
             // 🔓 Release analysis lock
             isImageAnalysisInProgress = false
-            
-            // 🔧 CRITICAL FIX: Always check if isProcessing needs reset
-            // If we returned early (no photo, duplicate, etc.) without calling analyzeImage(),
-            // we need to reset isProcessing here. Check if analyzeImage was NOT reached.
-            // If status shows error or "No NEW photo", reset flags here.
-            val statusMessage = statusText.text.toString()
-            if (statusMessage.contains("Error") || 
-                statusMessage.contains("No NEW photo") ||
-                statusMessage.contains("Duplicate") ||
-                statusMessage.contains("not find")) {
-                Log.d(TAG, "🔧 Resetting isProcessing due to early return/error")
+
+            // 🔧 CRITICAL: If we returned early (no photo, camera fail, unreachable, etc.)
+            // without handing off to analyzeImage(), reset isProcessing HERE. Otherwise a
+            // failed capture leaves isProcessing=true forever and silently blocks the next
+            // command (including "take another picture").
+            if (!analysisStarted) {
+                Log.d(TAG, "🔧 Resetting isProcessing (capture ended before analysis)")
                 isProcessing = false
                 captureButton.isEnabled = true
                 stopThinkingTune()
-                updateStatus("📷 Tap button to capture from glasses")
+                if (!isContinuousStreaming) {
+                    updateStatus("📷 Tap button to capture from glasses")
+                }
             }
         }
     }
@@ -2450,15 +2586,14 @@ class VisionChatActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     }
     
     /**
-     * 🆕 Check if we can reuse the last captured image for follow-up questions
-     * Valid if: image exists AND within timeout (1 minute)
+     * 🆕 Check if we can reuse the last captured image for follow-up questions.
+     *
+     * BEHAVIOR: Once a photo is captured it stays "active" — every follow-up question is
+     * answered from THIS picture. It is only replaced when the user explicitly says
+     * "take another picture". So there is intentionally NO time-based expiry here.
      */
     private fun canUseLastImage(): Boolean {
-        if (lastCapturedBitmap == null || lastCapturedImageBytes == null) {
-            return false
-        }
-        val timeSinceCapture = System.currentTimeMillis() - lastImageAnalysisTime
-        return timeSinceCapture < FOLLOWUP_TIMEOUT_MS
+        return lastCapturedBitmap != null && lastCapturedImageBytes != null
     }
     
     /**
@@ -2755,7 +2890,166 @@ class VisionChatActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             Log.e(TAG, "Error disconnecting WiFi: ${e.message}")
         }
     }
-    
+
+    // 🌐 Active WifiNetworkSpecifier callback for the Glass hotspot (kept alive for the
+    // duration of the transfer; releasing it drops the connection).
+    private var glassNetworkCallback: ConnectivityManager.NetworkCallback? = null
+
+    /**
+     * 🌐 Make sure HTTP to the Glass actually reaches it.
+     *
+     * The phone is almost always ALSO connected to home/office WiFi (which has internet),
+     * so Android's default route prefers that — every request to 192.168.6.1 then leaks
+     * out the wrong interface and times out. This binds AlbumDownloader's HTTP to the
+     * Glass network (only the HTTP, not the whole process — Gemini Live keeps internet).
+     *
+     * Strategy (cheapest → most aggressive):
+     *  0. If [targetIp] is ALREADY reachable on current routing — e.g. an active WiFi
+     *     Direct group installs a connected route that ConnectivityManager doesn't even
+     *     surface as a Network — just use default routing. No binding needed. This is the
+     *     normal working case and must NOT be blocked.
+     *  1. Else, if a connected Network has a route to [targetIp]'s subnet (manually-joined
+     *     Glass hotspot, etc.) → bind HTTP to it and verify.
+     *  2. Else, request the Glass hotspot via WifiNetworkSpecifier (API 29+) and bind to
+     *     the network the system hands back (works even while home WiFi stays up).
+     *
+     * @return true if the Glass is reachable (bound or via existing routes).
+     */
+    private suspend fun ensureGlassNetworkBound(targetIp: String): Boolean {
+        val cm = connectivityManager
+            ?: (getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager)
+            ?: return false
+
+        // ── 0. Already reachable with the current binding? (WiFi Direct route, manual
+        //       hotspot join, or an earlier successful bind) → done, nothing to do. ──
+        if (albumDownloader.isReachable(targetIp)) {
+            Log.i(TAG, "🌐 $targetIp reachable with current binding — OK")
+            return true
+        }
+
+        // ── 1. Try binding to each connected Network that routes to the Glass subnet ──
+        for (net in cm.allNetworks) {
+            val lp = cm.getLinkProperties(net) ?: continue
+            val matches = lp.linkAddresses.any { la ->
+                val a = la.address
+                a is java.net.Inet4Address && inSameSubnet(a, java.net.InetAddress.getByName(targetIp), la.prefixLength)
+            }
+            if (!matches) continue
+            Log.i(TAG, "🌐 Binding HTTP to candidate network for $targetIp: $net")
+            albumDownloader.bindToNetwork(net)
+            if (albumDownloader.isReachable(targetIp)) return true
+            albumDownloader.bindToNetwork(null)
+        }
+
+        // ── 2. Request the Glass hotspot via WifiNetworkSpecifier (API 29+), but only
+        //       fire ONE request — subsequent retries reuse the in-flight/active one. ──
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            Log.w(TAG, "🌐 No route to $targetIp and pre-Android-10 — cannot auto-bind")
+            return false
+        }
+        if (glassNetworkCallback != null) {
+            // A specifier request is already active/bound; just report current reachability.
+            return albumDownloader.isReachable(targetIp)
+        }
+
+        val ssid = withContext(Dispatchers.IO) { findGlassSsid() }
+        if (ssid == null) {
+            Log.w(TAG, "🌐 Glass hotspot SSID not visible in WiFi scan — cannot auto-connect")
+            return false
+        }
+
+        Log.i(TAG, "🌐 Requesting Glass hotspot '$ssid' via WifiNetworkSpecifier...")
+        updateStatus("📶 Connecting to Glass WiFi ($ssid)...")
+        // On success AlbumDownloader is bound to the new network; fetchConfig() will use it.
+        if (!requestGlassHotspot(cm, ssid, targetIp)) return false
+        return albumDownloader.isReachable(targetIp)
+    }
+
+    private fun inSameSubnet(a: java.net.InetAddress, b: java.net.InetAddress, prefixLen: Int): Boolean {
+        val ab = a.address; val bb = b.address
+        if (ab.size != bb.size) return false
+        var bits = prefixLen
+        for (i in ab.indices) {
+            if (bits <= 0) break
+            val mask = if (bits >= 8) 0xFF else (0xFF shl (8 - bits)) and 0xFF
+            if ((ab[i].toInt() and mask) != (bb[i].toInt() and mask)) return false
+            bits -= 8
+        }
+        return true
+    }
+
+    /** Scan visible WiFi for an SSID that looks like a Glass transfer hotspot. */
+    @Suppress("MissingPermission")
+    private fun findGlassSsid(): String? {
+        return try {
+            val wifi = applicationContext.getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
+            wifi.startScan()
+            val patterns = listOf("CY01", "M01", "Glass", "HeyCyan", "Cyan", "SANVNET", "GS4", "IMI")
+            wifi.scanResults
+                ?.mapNotNull { it.SSID?.takeIf { s -> s.isNotBlank() } }
+                ?.firstOrNull { ssid -> patterns.any { ssid.contains(it, ignoreCase = true) } }
+                ?.also { Log.i(TAG, "🌐 Glass hotspot SSID found in scan: $it") }
+        } catch (e: Exception) {
+            Log.w(TAG, "findGlassSsid error: ${e.message}")
+            null
+        }
+    }
+
+    /** Connect to [ssid] via WifiNetworkSpecifier and bind HTTP to it. Suspends until ready. */
+    @android.annotation.SuppressLint("NewApi")
+    private suspend fun requestGlassHotspot(cm: ConnectivityManager, ssid: String, targetIp: String): Boolean {
+        // Release any previous request first
+        glassNetworkCallback?.let { runCatching { cm.unregisterNetworkCallback(it) } }
+        glassNetworkCallback = null
+
+        // These transfer hotspots are typically OPEN (no passphrase); if secured, the
+        // system surfaces a one-time approval dialog.
+        val specifier = android.net.wifi.WifiNetworkSpecifier.Builder()
+            .setSsid(ssid)
+            .build()
+        val request = NetworkRequest.Builder()
+            .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+            .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) // Glass AP has no internet
+            .setNetworkSpecifier(specifier)
+            .build()
+
+        return withTimeoutOrNull(20_000L) {
+            kotlinx.coroutines.suspendCancellableCoroutine<Boolean> { cont ->
+                val cb = object : ConnectivityManager.NetworkCallback() {
+                    override fun onAvailable(network: android.net.Network) {
+                        Log.i(TAG, "🌐 Glass hotspot connected via specifier: $network")
+                        albumDownloader.bindToNetwork(network)
+                        if (cont.isActive) cont.resumeWith(Result.success(true))
+                    }
+                    override fun onUnavailable() {
+                        Log.w(TAG, "🌐 Glass hotspot request unavailable (declined/not found)")
+                        if (cont.isActive) cont.resumeWith(Result.success(false))
+                    }
+                }
+                glassNetworkCallback = cb
+                try {
+                    cm.requestNetwork(request, cb)
+                } catch (e: Exception) {
+                    Log.e(TAG, "requestNetwork error: ${e.message}")
+                    if (cont.isActive) cont.resumeWith(Result.success(false))
+                }
+                cont.invokeOnCancellation { runCatching { cm.unregisterNetworkCallback(cb) } }
+            }
+        } ?: run {
+            Log.w(TAG, "🌐 Glass hotspot connect timed out")
+            false
+        }
+    }
+
+    /** Drop the bound Glass network so normal traffic resumes. */
+    private fun releaseGlassNetwork() {
+        glassNetworkCallback?.let { cb ->
+            runCatching { connectivityManager?.unregisterNetworkCallback(cb) }
+        }
+        glassNetworkCallback = null
+        albumDownloader.bindToNetwork(null)
+    }
+
     private fun updateStatus(text: String) {
         runOnUiThread {
             statusText.text = text
@@ -2889,6 +3183,83 @@ class VisionChatActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     }
     
     /**
+     * 🛑 Detect a "stop vision chat" command → exit back to the home/Gemini Live chat.
+     */
+    private fun isStopCommand(text: String): Boolean {
+        val t = text.lowercase().trim()
+        return t == "stop" ||
+               t.contains("stop vision") ||
+               t.contains("stop chat") ||
+               t.contains("stop it") ||
+               t.contains("close vision") ||
+               t.contains("exit vision") ||
+               t.contains("band karo") ||
+               t.contains("bas karo") ||
+               t.contains("ruk jao") ||
+               t.contains("ruk jaao")
+    }
+
+    /**
+     * 📸 Detect a "take another picture" command → capture a FRESH photo.
+     * Only these explicit phrases cause a new capture; every other vision question is
+     * answered from the picture already taken.
+     */
+    private fun isTakeAnotherCommand(text: String): Boolean {
+        val t = text.lowercase().trim()
+        return t.contains("take another") ||
+               t.contains("another picture") ||
+               t.contains("another photo") ||
+               t.contains("another image") ||
+               t.contains("click another") ||
+               t.contains("capture another") ||
+               t.contains("one more") ||
+               t.contains("next photo") ||
+               t.contains("next picture") ||
+               t.contains("next image") ||
+               // 🆕 "X again" / re-capture phrasings — these were previously falling through
+               // to the reuse branch, so "capture again"/"again" re-analysed the SAME image
+               // instead of clicking a new one.
+               t.contains("again") ||           // take/capture/click/photo again, look again, etc.
+               t.contains("recapture") ||
+               t.contains("re-capture") ||
+               // 🆕 Plain capture commands → in Vision Chat these mean "grab a fresh photo"
+               t.contains("take photo") ||
+               t.contains("take a photo") ||
+               t.contains("take picture") ||
+               t.contains("take a picture") ||
+               t.contains("capture photo") ||
+               t.contains("capture picture") ||
+               t.contains("click photo") ||
+               t.contains("click picture") ||
+               t.contains("snap") ||
+               // Hindi (romanized) re-capture phrasings
+               t.contains("naya photo") ||
+               t.contains("naya picture") ||
+               t.contains("nayi photo") ||
+               t.contains("nayi tasveer") ||
+               t.contains("ek aur photo") ||
+               t.contains("ek aur tasveer") ||
+               t.contains("ek aur") ||
+               t.contains("aur ek") ||
+               t.contains("dusri photo") ||
+               t.contains("dusri picture") ||
+               t.contains("phir se") ||          // phir se dekho / phir se lo
+               t.contains("fir se") ||
+               t.contains("dobara") ||
+               t.contains("dubara") ||
+               t.contains("photo lo") ||
+               t.contains("picture lo") ||
+               t.contains("photo le") ||
+               t.contains("click karo") ||
+               t == "another" ||
+               t == "next" ||
+               t == "capture" ||
+               t == "click" ||
+               t == "naya" ||
+               t == "agle"
+    }
+
+    /**
      * 🆕 Register as secondary listener to GeminiLiveService
      * This allows VisionChat to intercept voice commands while open
      */
@@ -2919,64 +3290,51 @@ class VisionChatActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         override fun onUserTranscription(text: String, isFinal: Boolean) {
             // Only process FINAL transcriptions to avoid false triggers
             if (!isFinal) return
-            
+
             Log.d(TAG, "👂 VisionChat received user transcription: '$text' (final=$isFinal)")
-            
-            // 🆕 NEW: Check for "click another" / "another image" / "view" commands
-            val lowerText = text.lowercase()
-            val isClickAnotherCommand = lowerText.contains("click another") ||
-                                       lowerText.contains("another image") ||
-                                       lowerText.contains("another photo") ||
-                                       lowerText.contains("another picture") || // Added
-                                       lowerText.contains("take another") || // Added
-                                       lowerText.contains("capture another") || // Added
-                                       lowerText.contains("one more") || // Added
-                                       lowerText.contains("again") || // Added
-                                       lowerText.contains("next photo") ||
-                                       lowerText.contains("next image") ||
-                                       lowerText.contains("next picture") || // Added
-                                       (lowerText.trim() == "view") ||
-                                       (lowerText.trim() == "another") ||
-                                       (lowerText.trim() == "next")
-            
-            // Check if this is a vision trigger command OR click another command
-            if (isVisionTrigger(text) || isClickAnotherCommand) {
-                Log.i(TAG, "🎯 VISION TRIGGER DETECTED in VisionChat! Command: '$text'")
-                
-                // 🔇 MUTE Gemini Live again for new vision processing
+
+            // ── 1. STOP → leave Vision Chat, return to home/Gemini Live chat ──
+            if (isStopCommand(text)) {
+                Log.i(TAG, "🛑 STOP command detected in VisionChat: '$text'")
+                runOnUiThread { handleStopCommand() }
+                return
+            }
+
+            // ── 2. TAKE ANOTHER PICTURE → capture a FRESH photo ──
+            if (isTakeAnotherCommand(text)) {
+                Log.i(TAG, "📸 'Take another picture' command detected: '$text'")
                 GeminiLiveService.getInstance()?.muteOutput()
-                Log.d(TAG, "🔇 Gemini Live re-muted for follow-up vision command")
-                
-                // Run on UI thread
                 runOnUiThread {
-                    // Don't trigger if already processing
                     if (isProcessing) {
-                        Log.w(TAG, "⚠️ Already processing, ignoring trigger")
+                        Log.w(TAG, "⚠️ Already processing, ignoring 'take another'")
                         return@runOnUiThread
                     }
-                    
-                    // Clear previous image and capture new one
-                    Log.i(TAG, "📸 Capturing NEW photo from voice command in VisionChat!")
-                    
-                    // Update query (keep original for "click another" type commands)
-                    if (isClickAnotherCommand) {
-                        userVisionQuery = "What do you see now?" // Generic query for follow-up
-                    } else {
-                        userVisionQuery = text
-                    }
-                    
-                    // Show feedback
+                    userVisionQuery = "What do you see now?"
                     Toast.makeText(this@VisionChatActivity, "📸 Capturing new photo...", Toast.LENGTH_SHORT).show()
-                    
-                    // Clear the last captured image to force new capture
-                    clearLastCapturedImage()
-                    
-                    // Start thinking tune
+                    clearLastCapturedImage()   // force a brand-new capture
                     startThinkingTune()
-                    
-                    // Capture new photo
                     startCaptureProcess()
                 }
+                return
+            }
+
+            // ── 3. Any other vision question → answer from the CURRENT picture ──
+            //     (no new capture). startCaptureProcess() reuses the last image when one
+            //     exists; if none has been taken yet it captures the first one.
+            if (isVisionTrigger(text)) {
+                Log.i(TAG, "💬 Vision question — answering from current picture: '$text'")
+                GeminiLiveService.getInstance()?.muteOutput()
+                runOnUiThread {
+                    if (isProcessing) {
+                        Log.w(TAG, "⚠️ Already processing, ignoring question")
+                        return@runOnUiThread
+                    }
+                    userVisionQuery = text
+                    // NOTE: intentionally do NOT clear the last image — we want to reuse it.
+                    startThinkingTune()
+                    startCaptureProcess()   // reuses last image if available, else first capture
+                }
+                return
             }
         }
     }
@@ -3027,12 +3385,15 @@ class VisionChatActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         }
         
         // Cleanup WiFi monitoring
-        networkCallback?.let { 
+        networkCallback?.let {
             try {
                 connectivityManager?.unregisterNetworkCallback(it)
             } catch (e: Exception) { }
         }
-        
+
+        // 🌐 Release the Glass hotspot network binding
+        releaseGlassNetwork()
+
         // Cleanup WiFi P2P
         wifiP2pHelper.cleanup()
         
@@ -3058,6 +3419,11 @@ class VisionChatAdapter(private val messages: List<VisionChatMessage>) :
     RecyclerView.Adapter<VisionChatAdapter.MessageViewHolder>() {
 
     class MessageViewHolder(view: View) : RecyclerView.ViewHolder(view) {
+        val root: android.widget.LinearLayout = view.findViewById(R.id.messageRoot)
+        val avatarText: TextView = view.findViewById(R.id.avatarText)
+        val userAvatarSpacer: View = view.findViewById(R.id.userAvatarSpacer)
+        val bubbleColumn: android.widget.LinearLayout = view.findViewById(R.id.bubbleColumn)
+        val bubbleCard: android.widget.LinearLayout = view.findViewById(R.id.bubbleCard)
         val messageText: TextView = view.findViewById(R.id.messageText)
         val timestampText: TextView = view.findViewById(R.id.timestampText)
         val messageImage: android.widget.ImageView = view.findViewById(R.id.messageImage)
@@ -3071,10 +3437,10 @@ class VisionChatAdapter(private val messages: List<VisionChatMessage>) :
     override fun onBindViewHolder(holder: MessageViewHolder, position: Int) {
         val message = messages[position]
         holder.messageText.text = message.text
-        
+
         val timeFormat = SimpleDateFormat("HH:mm", Locale.US)
         holder.timestampText.text = timeFormat.format(Date(message.timestamp))
-        
+
         if (message.imagePath != null) {
             holder.messageImage.visibility = View.VISIBLE
             val bitmap = BitmapFactory.decodeFile(message.imagePath)
@@ -3082,11 +3448,42 @@ class VisionChatAdapter(private val messages: List<VisionChatMessage>) :
         } else {
             holder.messageImage.visibility = View.GONE
         }
+
+        val dp = holder.root.context.resources.displayMetrics.density
+
+        if (message.isUser) {
+            // User bubble: right-aligned, orange
+            holder.root.gravity = android.view.Gravity.END or android.view.Gravity.BOTTOM
+            holder.avatarText.visibility = View.GONE
+            holder.userAvatarSpacer.visibility = View.INVISIBLE
+            holder.bubbleColumn.gravity = android.view.Gravity.END
+
+            val bubble = android.graphics.drawable.GradientDrawable()
+            bubble.cornerRadii = floatArrayOf(18f, 18f, 18f, 18f, 4f, 4f, 18f, 18f).map { it * dp }.toFloatArray()
+            bubble.setColor(0xFFFF6B35.toInt())
+            holder.bubbleCard.background = bubble
+
+            holder.messageText.setTextColor(0xFFFFFFFF.toInt())
+            holder.timestampText.setTextColor(0xCCFFFFFF.toInt())
+        } else {
+            // AI bubble: left-aligned, dark card
+            holder.root.gravity = android.view.Gravity.START or android.view.Gravity.BOTTOM
+            holder.avatarText.visibility = View.VISIBLE
+            holder.userAvatarSpacer.visibility = View.GONE
+            holder.bubbleColumn.gravity = android.view.Gravity.START
+
+            val bubble = android.graphics.drawable.GradientDrawable()
+            bubble.cornerRadii = floatArrayOf(18f, 18f, 18f, 18f, 18f, 18f, 4f, 4f).map { it * dp }.toFloatArray()
+            bubble.setColor(0xFF23262F.toInt())
+            bubble.setStroke((1 * dp).toInt(), 0xFF2E3140.toInt())
+            holder.bubbleCard.background = bubble
+
+            holder.messageText.setTextColor(0xFFE8E8E8.toInt())
+            holder.timestampText.setTextColor(0xFF888888.toInt())
+        }
     }
 
-    override fun getItemViewType(position: Int): Int {
-        return if (messages[position].isUser) 0 else 1
-    }
+    override fun getItemViewType(position: Int): Int = if (messages[position].isUser) 0 else 1
 
     override fun getItemCount() = messages.size
 }

@@ -5,6 +5,8 @@ import android.animation.AnimatorSet
 import android.animation.ObjectAnimator
 import android.animation.ValueAnimator
 import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothHeadset
 import android.bluetooth.BluetoothProfile
 import android.content.*
 import android.content.pm.PackageManager
@@ -84,6 +86,19 @@ class Mark1MainActivity : AppCompatActivity(), GeminiLiveService.GeminiLiveCallb
         }
     }
 
+    // Re-show the BLE gate whenever the glasses disconnect or Bluetooth is turned off,
+    // and dismiss it again once they reconnect.
+    private val bluetoothStateReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            when (intent?.action) {
+                BluetoothHeadset.ACTION_CONNECTION_STATE_CHANGED,
+                BluetoothDevice.ACTION_ACL_CONNECTED,
+                BluetoothDevice.ACTION_ACL_DISCONNECTED,
+                BluetoothAdapter.ACTION_STATE_CHANGED -> checkBleAndShowGate()
+            }
+        }
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // LIFECYCLE
     // ─────────────────────────────────────────────────────────────────────────
@@ -117,6 +132,17 @@ class Mark1MainActivity : AppCompatActivity(), GeminiLiveService.GeminiLiveCallb
         EventBus.getDefault().register(this)
         LocalBroadcastManager.getInstance(this)
             .registerReceiver(batteryReceiver, IntentFilter(BatteryStatusStore.ACTION_BATTERY_UPDATED))
+        ContextCompat.registerReceiver(
+            this,
+            bluetoothStateReceiver,
+            IntentFilter().apply {
+                addAction(BluetoothHeadset.ACTION_CONNECTION_STATE_CHANGED)
+                addAction(BluetoothDevice.ACTION_ACL_CONNECTED)
+                addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED)
+                addAction(BluetoothAdapter.ACTION_STATE_CHANGED)
+            },
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        )
         binding.bottomNavigation.selectedItemId = R.id.nav_home
         checkBleAndShowGate()
     }
@@ -125,6 +151,7 @@ class Mark1MainActivity : AppCompatActivity(), GeminiLiveService.GeminiLiveCallb
         super.onPause()
         EventBus.getDefault().unregister(this)
         LocalBroadcastManager.getInstance(this).unregisterReceiver(batteryReceiver)
+        try { unregisterReceiver(bluetoothStateReceiver) } catch (_: Exception) {}
         saveConversationHistory()
     }
 
@@ -173,6 +200,14 @@ class Mark1MainActivity : AppCompatActivity(), GeminiLiveService.GeminiLiveCallb
         binding.layoutBleGate.visibility = View.VISIBLE
         binding.layoutBleChecking.visibility = View.VISIBLE
         binding.layoutBleNotConnected.visibility = View.GONE
+        // Hide the bottom nav while the BLE gate is covering the screen;
+        // hideBleGate() restores it once glasses are connected.
+        binding.bottomNavigation.visibility = View.GONE
+        // Stop the AI chatbot while the gate is shown — no assistant without glasses.
+        // stopConversation() restarts wake-word listening, so stop it last to leave
+        // the assistant fully off; hideBleGate() restarts it once connected.
+        if (isGeminiLiveActive) stopConversation()
+        stopWakeWordListening()
 
         Handler(Looper.getMainLooper()).postDelayed({
             if (isGlassConnected()) {
@@ -312,7 +347,7 @@ class Mark1MainActivity : AppCompatActivity(), GeminiLiveService.GeminiLiveCallb
             startPulseAnimation()
         }
 
-        geminiLiveService?.startLiveConversation(systemInstruction)
+        geminiLiveService?.startLiveConversation(systemInstruction, greetOnStart = true)
     }
 
     private fun stopConversation() {
@@ -338,11 +373,12 @@ class Mark1MainActivity : AppCompatActivity(), GeminiLiveService.GeminiLiveCallb
         val memory = userMemoryManager.getUserMemory()
         val notes = notesManager?.getNotesContextForAI() ?: ""
         val history = buildHistorySummary()
+        val responseStyle = com.sdk.glassessdksample.ui.AiResponsePrefs.buildResponseStyleInstruction(this)
 
         val sb = StringBuilder()
-        sb.append("You are IMI, an intelligent AI assistant built into smart glasses. ")
-        sb.append("You speak naturally, concisely, and helpfully. ")
-        sb.append("You are aware of your environment through what the user shares with you.\n\n")
+        sb.append("You are imi glass, an intelligent AI assistant built into smart glasses. ")
+        sb.append("$responseStyle ")
+        sb.append("Be helpful and conversational. You are aware of your environment through what the user shares with you.\n\n")
 
         if (!memory.isEmpty()) {
             sb.append("## User Profile\n")
@@ -376,7 +412,7 @@ class Mark1MainActivity : AppCompatActivity(), GeminiLiveService.GeminiLiveCallb
     private fun buildHistorySummary(): String {
         val recent = conversationHistory.takeLast(10)
         if (recent.isEmpty()) return ""
-        return recent.joinToString("\n") { (user, ai) -> "User: $user\nIMI: $ai" }
+        return recent.joinToString("\n") { (user, ai) -> "User: $user\nimi glass: $ai" }
     }
 
     private fun addToHistory(userText: String, aiText: String) {
@@ -690,6 +726,7 @@ class Mark1MainActivity : AppCompatActivity(), GeminiLiveService.GeminiLiveCallb
 
     override fun onTurnComplete(fullInput: String, fullOutput: String) {
         addToHistory(fullInput, fullOutput)
+        com.sdk.glassessdksample.ui.sync.ChatSync.pushTurn(this, "Mark 1 Glasses", fullInput, fullOutput)
 
         if (isSingleShotMode()) {
             runOnUiThread { stopConversation() }

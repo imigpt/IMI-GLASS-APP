@@ -67,6 +67,144 @@
                     app:trackTint="#FF7F2E" />
             </LinearLayout>
 
+            <!-- AI RESPONSE PREFERENCES SECTION LABEL -->
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="AI Preferences"
+                android:textColor="#DDFFFFFF"
+                android:textSize="15sp"
+                android:layout_marginBottom="10dp" />
+
+            <!-- AI RESPONSE PREFERENCES CARD -->
+            <androidx.cardview.widget.CardView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                app:cardCornerRadius="22dp"
+                app:cardElevation="0dp"
+                app:cardBackgroundColor="#CC1A1A1A"
+                android:layout_marginBottom="16dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="18dp">
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="Customize how Imi talks to you — answer length, tone, and how it greets you."
+                        android:textColor="#AAFFFFFF"
+                        android:textSize="12sp"
+                        android:layout_marginBottom="16dp" />
+
+                    <!-- Answer length -->
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Answer length"
+                        android:textColor="#FFFFFF"
+                        android:textSize="14sp"
+                        android:textStyle="bold"
+                        android:layout_marginBottom="4dp" />
+
+                    <Spinner
+                        android:id="@+id/spinnerResponseLength"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:popupBackground="#2A2A2A"
+                        android:layout_marginBottom="16dp" />
+
+                    <!-- Tone -->
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Tone"
+                        android:textColor="#FFFFFF"
+                        android:textSize="14sp"
+                        android:textStyle="bold"
+                        android:layout_marginBottom="4dp" />
+
+                    <Spinner
+                        android:id="@+id/spinnerResponseTone"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:popupBackground="#2A2A2A"
+                        android:layout_marginBottom="16dp" />
+
+                    <!-- Greeting style -->
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Greeting"
+                        android:textColor="#FFFFFF"
+                        android:textSize="14sp"
+                        android:textStyle="bold"
+                        android:layout_marginBottom="4dp" />
+
+                    <Spinner
+                        android:id="@+id/spinnerGreetingStyle"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:popupBackground="#2A2A2A"
+                        android:layout_marginBottom="14dp" />
+
+                    <!-- Custom greeting (shown only when "Custom" is selected) -->
+                    <LinearLayout
+                        android:id="@+id/layoutCustomGreeting"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:visibility="gone"
+                        android:layout_marginBottom="14dp">
+
+                        <EditText
+                            android:id="@+id/etCustomGreeting"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:hint="e.g. Hey, Imi here — what's up?"
+                            android:textColor="#FFFFFF"
+                            android:textColorHint="#77FFFFFF"
+                            android:textSize="14sp"
+                            android:inputType="textCapSentences"
+                            android:maxLines="2"
+                            android:background="@android:color/transparent"
+                            android:paddingTop="8dp"
+                            android:paddingBottom="8dp" />
+
+                        <View
+                            android:layout_width="match_parent"
+                            android:layout_height="1dp"
+                            android:background="#33FFFFFF" />
+                    </LinearLayout>
+
+                    <!-- Use my name in greeting -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:gravity="center_vertical">
+
+                        <TextView
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="Use my name in greeting"
+                            android:textColor="#FFFFFF"
+                            android:textSize="14sp" />
+
+                        <androidx.appcompat.widget.SwitchCompat
+                            android:id="@+id/switchUseName"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:checked="true"
+                            app:thumbTint="#FFFFFF"
+                            app:trackTint="#FF7F2E" />
+                    </LinearLayout>
+                </LinearLayout>
+            </androidx.cardview.widget.CardView>
+
             <!-- USAGE LIMITS SECTION LABEL -->
             <TextView
                 android:layout_width="wrap_content"

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Warm amber glow at the top that fades into the card so the popup reads as one solid surface -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <gradient
+        android:angle="270"
+        android:startColor="#66FF7F2E"
+        android:centerColor="#22B5560F"
+        android:endColor="#00000000"
+        android:type="linear" />
+    <corners
+        android:topLeftRadius="22dp"
+        android:topRightRadius="22dp" />
+</shape>

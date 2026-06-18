@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:background="@drawable/bg_dialog_device_card"
+    android:clipToOutline="true">
+
+    <!-- Amber glow + glasses, blended into the card -->
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="96dp"
+        android:background="@drawable/bg_dialog_device_header">
+
+        <ImageView
+            android:id="@+id/ivDialogGlasses"
+            android:layout_width="150dp"
+            android:layout_height="74dp"
+            android:layout_gravity="center"
+            android:scaleType="fitCenter"
+            android:contentDescription="IMI Mark II glasses" />
+
+        <!-- Bluetooth badge -->
+        <FrameLayout
+            android:layout_width="32dp"
+            android:layout_height="32dp"
+            android:layout_gravity="top|end"
+            android:layout_marginTop="12dp"
+            android:layout_marginEnd="12dp"
+            android:background="@drawable/bg_close_circle">
+
+            <ImageView
+                android:layout_width="18dp"
+                android:layout_height="18dp"
+                android:layout_gravity="center"
+                android:src="@drawable/ic_bluetooth"
+                app:tint="@color/home_accent_orange"
+                android:contentDescription="Bluetooth" />
+        </FrameLayout>
+    </FrameLayout>
+
+    <!-- Title -->
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:gravity="center"
+        android:text="No Device Connected"
+        android:textColor="@color/text_primary"
+        android:textSize="19sp"
+        android:textStyle="bold" />
+
+    <!-- Message -->
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:layout_marginStart="26dp"
+        android:layout_marginEnd="26dp"
+        android:gravity="center"
+        android:lineSpacingExtra="2dp"
+        android:text="Your IMI Mark II glasses are not connected. Please connect first, then try again."
+        android:textColor="@color/text_secondary"
+        android:textSize="13sp" />
+
+    <!-- Divider -->
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:layout_marginTop="16dp"
+        android:background="#33D87D41" />
+
+    <!-- OK action -->
+    <TextView
+        android:id="@+id/btnDeviceNotConnectedOk"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:padding="13dp"
+        android:gravity="center"
+        android:text="OK"
+        android:textColor="@color/home_accent_orange"
+        android:textSize="16sp"
+        android:textStyle="bold"
+        android:letterSpacing="0.04"
+        android:clickable="true"
+        android:focusable="true"
+        android:background="?attr/selectableItemBackground" />
+
+</LinearLayout>
