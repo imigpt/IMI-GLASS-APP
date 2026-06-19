@@ -165,6 +165,17 @@
                 android:contentDescription="Share"
                 android:src="@drawable/ic_share"
                 app:tint="#CFCFCF" />
+
+            <ImageView
+                android:id="@+id/btnSearchWeb"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:layout_marginStart="6dp"
+                android:padding="6dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Search on Web"
+                android:src="@drawable/ic_search"
+                app:tint="#CFCFCF" />
         </LinearLayout>
     </LinearLayout>
 

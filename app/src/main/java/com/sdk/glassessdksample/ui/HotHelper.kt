@@ -16,6 +16,8 @@ import android.content.BroadcastReceiver
 import android.content.Intent
 import android.content.IntentFilter
 import android.media.AudioManager
+import com.sdk.glassessdksample.ListeningService
+import com.sdk.glassessdksample.MainActivity
 import com.sdk.glassessdksample.wakeword.HeyImiWakeWordDetector
 import com.sdk.glassessdksample.wakeword.SnowboyWakeWordDetector
 import com.sdk.glassessdksample.wakeword.WakeWordEngine
@@ -302,6 +304,21 @@ class HotHelper private constructor(private val context: Context) {
         EventBus.getDefault().post(
             BluetoothEvent(BluetoothEvent.EventType.VOICE_TEXT, "wake up")
         )
+
+        // If MainActivity is not in the foreground (EventBus unregisters on onStop),
+        // bring it back directly so the conversation can start even when minimised / screen off.
+        if (!EventBus.getDefault().hasSubscriberForEvent(BluetoothEvent::class.java)) {
+            Log.i(TAG, "📲 No EventBus subscriber — launching MainActivity from background")
+            try {
+                val intent = Intent(context, MainActivity::class.java).apply {
+                    action = ListeningService.ACTION_WAKE_WORD_DETECTED
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                }
+                context.startActivity(intent)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to launch MainActivity from background: ${e.message}")
+            }
+        }
     }
 
     /**

@@ -11,8 +11,27 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
+/** A structured AI chat summary, as returned by the `/v1/chat-summaries` endpoints. */
+data class ChatSummary(
+    val id: String,
+    val title: String,
+    val type: String,
+    val content: String,
+    val keyPoints: List<String>,
+    val actionItems: List<String>,
+    val participants: List<String>,
+    val tags: List<String>,
+    val startTime: Long,
+    val endTime: Long?,
+    val duration: Long,
+    val isPinned: Boolean,
+    val isArchived: Boolean,
+    val createdAt: String,
+    val updatedAt: String
+)
+
 /**
- * Networking layer for the IMI Glass Chat Summaries API (`POST /v1/chat-summaries`).
+ * Networking layer for the IMI Glass Chat Summaries API (`/v1/chat-summaries`).
  * Each conversation turn is posted as a self-contained summary so no session
  * management is required on the client side.
  */
@@ -73,6 +92,94 @@ class ChatApi(context: Context) {
         return request("POST", "/v1/chat-summaries", body) { }
     }
 
+    /** GET /v1/chat-summaries — every summary for the current user. */
+    fun listAll(): Result<List<ChatSummary>> =
+        request("GET", "/v1/chat-summaries", null) { parseList(it) }
+
+    /** GET /v1/chat-summaries/active — summaries that are not archived. */
+    fun listActive(): Result<List<ChatSummary>> =
+        request("GET", "/v1/chat-summaries/active", null) { parseList(it) }
+
+    /** GET /v1/chat-summaries/pinned */
+    fun listPinned(): Result<List<ChatSummary>> =
+        request("GET", "/v1/chat-summaries/pinned", null) { parseList(it) }
+
+    /** GET /v1/chat-summaries/type/{type} — [type] is "MEETING_SUMMARY" or "QUICK_NOTES". */
+    fun listByType(type: String): Result<List<ChatSummary>> =
+        request("GET", "/v1/chat-summaries/type/$type", null) { parseList(it) }
+
+    /** GET /v1/chat-summaries/stats -> { total, meetings, quickNotes } */
+    fun getStats(): Result<Triple<Int, Int, Int>> =
+        request("GET", "/v1/chat-summaries/stats", null) {
+            Triple(it.optInt("total", 0), it.optInt("meetings", 0), it.optInt("quickNotes", 0))
+        }
+
+    /** GET /v1/chat-summaries/{id} */
+    fun getById(summaryId: String): Result<ChatSummary> =
+        request("GET", "/v1/chat-summaries/$summaryId", null) { parseSummary(it) }
+
+    /** PATCH /v1/chat-summaries/{id} — all fields optional, only provided ones are updated. */
+    fun updateSummary(
+        summaryId: String,
+        title: String? = null,
+        content: String? = null,
+        keyPoints: List<String>? = null,
+        actionItems: List<String>? = null,
+        participants: List<String>? = null,
+        tags: List<String>? = null,
+        endTime: Long? = null
+    ): Result<ChatSummary> {
+        val body = JSONObject()
+        title?.let { body.put("title", it) }
+        content?.let { body.put("content", it) }
+        keyPoints?.let { body.put("keyPoints", JSONArray(it)) }
+        actionItems?.let { body.put("actionItems", JSONArray(it)) }
+        participants?.let { body.put("participants", JSONArray(it)) }
+        tags?.let { body.put("tags", JSONArray(it)) }
+        endTime?.let { body.put("endTime", it) }
+        return request("PATCH", "/v1/chat-summaries/$summaryId", body) { parseSummary(it) }
+    }
+
+    /** DELETE /v1/chat-summaries/{id} */
+    fun deleteSummary(summaryId: String): Result<Unit> =
+        request("DELETE", "/v1/chat-summaries/$summaryId", null) { }
+
+    /** POST /v1/chat-summaries/{id}/pin — toggles pin status. */
+    fun togglePin(summaryId: String): Result<Boolean> =
+        request("POST", "/v1/chat-summaries/$summaryId/pin", JSONObject()) { it.optBoolean("isPinned") }
+
+    /** POST /v1/chat-summaries/{id}/archive — toggles archive status. */
+    fun toggleArchive(summaryId: String): Result<Boolean> =
+        request("POST", "/v1/chat-summaries/$summaryId/archive", JSONObject()) { it.optBoolean("isArchived") }
+
+    private fun parseList(json: JSONObject): List<ChatSummary> {
+        val data = json.optJSONArray("data") ?: JSONArray()
+        return (0 until data.length()).mapNotNull { i -> data.optJSONObject(i)?.let { parseSummary(it) } }
+    }
+
+    private fun parseSummary(json: JSONObject): ChatSummary = ChatSummary(
+        id = json.optString("id"),
+        title = json.optString("title"),
+        type = json.optString("type"),
+        content = json.optString("content"),
+        keyPoints = json.optJSONArray("keyPoints").toStringList(),
+        actionItems = json.optJSONArray("actionItems").toStringList(),
+        participants = json.optJSONArray("participants").toStringList(),
+        tags = json.optJSONArray("tags").toStringList(),
+        startTime = json.optLong("startTime"),
+        endTime = if (json.isNull("endTime")) null else json.optLong("endTime"),
+        duration = json.optLong("duration"),
+        isPinned = json.optBoolean("isPinned", false),
+        isArchived = json.optBoolean("isArchived", false),
+        createdAt = json.optString("createdAt"),
+        updatedAt = json.optString("updatedAt")
+    )
+
+    private fun JSONArray?.toStringList(): List<String> {
+        if (this == null) return emptyList()
+        return (0 until length()).map { optString(it) }
+    }
+
     private fun <T> request(
         method: String,
         path: String,
@@ -87,6 +194,8 @@ class ChatApi(context: Context) {
             .addHeader("Authorization", "Bearer $token")
         when (method) {
             "POST" -> builder.post(reqBody ?: EMPTY_BODY)
+            "PATCH" -> builder.patch(reqBody ?: EMPTY_BODY)
+            "DELETE" -> builder.delete()
             else -> builder.get()
         }
         return execute(builder.build(), map)

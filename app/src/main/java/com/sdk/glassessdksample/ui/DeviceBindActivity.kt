@@ -203,7 +203,6 @@ class DeviceBindActivity : BaseActivity() {
         if (event.type == BluetoothEvent.EventType.CONNECTED) {
             dismissConnectingDialog()
             Log.d("DeviceBindActivity", "✅ BLE Connected. Starting classic connection flow...")
-            Toast.makeText(this, "✅ Glass Connected (Data)", Toast.LENGTH_SHORT).show()
             mainHandler.postDelayed({ connectedDeviceAddress?.let { startClassicConnectionFlow(it) } }, 500)
         }
     }
@@ -212,7 +211,6 @@ class DeviceBindActivity : BaseActivity() {
     private fun handleHfpConnectionSuccess() {
         mainHandler.removeCallbacksAndMessages(null)
         Log.d("DeviceBindActivity", "🎧 HFP Connected (no forced SCO in bind flow)")
-        Toast.makeText(this, "🎧 Glass audio profile connected", Toast.LENGTH_SHORT).show()
         Log.d("DeviceBindActivity", "✅ Both BLE and Audio connections active")
         setDeviceAliasIfSupported()
         cleanUpReceivers()

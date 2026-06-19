@@ -1,5 +1,6 @@
 package com.sdk.glassessdksample
 
+import com.sdk.glassessdksample.ui.BluetoothEvent
 import com.sdk.glassessdksample.ui.HotHelper
 import android.app.Notification
 import android.app.NotificationChannel
@@ -11,11 +12,17 @@ import android.content.Intent
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import android.util.Log
 import androidx.core.app.NotificationCompat
+import org.greenrobot.eventbus.EventBus
+import org.greenrobot.eventbus.Subscribe
+import org.greenrobot.eventbus.ThreadMode
 
 class ListeningService : Service() {
     companion object {
         const val ACTION_STOP = "com.sdk.ACTION_STOP_LISTENING"
+        const val ACTION_WAKE_WORD_DETECTED = "com.sdk.glassessdksample.ACTION_WAKE_WORD_DETECTED"
+        private const val TAG = "ListeningService"
         private const val CHANNEL_ID = "imi_listening_channel"
         private const val NOTIF_ID = 1001
     }
@@ -33,6 +40,10 @@ class ListeningService : Service() {
             "HeyIMI::ListeningWakeLock"
         )
         wakeLock?.acquire()
+
+        // Subscribe to wake word events so we can forward them to MainActivity even
+        // when the Activity is stopped (minimised / screen off).
+        EventBus.getDefault().register(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -52,7 +63,28 @@ class ListeningService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        EventBus.getDefault().unregister(this)
         wakeLock?.let { if (it.isHeld) it.release() }
+    }
+
+    /**
+     * Receive HotHelper's wake-word event on the background thread.
+     * If MainActivity is alive it will also receive this (it subscribes in onStart/onStop).
+     * But when it's stopped we bring it back to the foreground here.
+     */
+    @Subscribe(threadMode = ThreadMode.BACKGROUND)
+    fun onBluetoothEvent(event: BluetoothEvent) {
+        if (event.type == BluetoothEvent.EventType.VOICE_TEXT) {
+            val text = event.data as? String ?: return
+            if (text.trim().lowercase() == "wake up") {
+                Log.i(TAG, "🔥 Wake word received in ListeningService — bringing MainActivity to foreground")
+                val activityIntent = Intent(applicationContext, MainActivity::class.java).apply {
+                    action = ACTION_WAKE_WORD_DETECTED
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                }
+                startActivity(activityIntent)
+            }
+        }
     }
 
     private fun createNotificationChannel() {

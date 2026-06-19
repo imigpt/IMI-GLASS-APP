@@ -4,6 +4,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.graphics.BitmapFactory
 import android.view.Gravity
 import android.view.LayoutInflater
@@ -57,6 +58,7 @@ class ChatAdapter(
         val btnLike: ImageView? = itemView.findViewById(R.id.btnLikeMessage)
         val btnDislike: ImageView? = itemView.findViewById(R.id.btnDislikeMessage)
         val btnShare: ImageView? = itemView.findViewById(R.id.btnShareMessage)
+        val btnSearchWeb: ImageView? = itemView.findViewById(R.id.btnSearchWeb)
     }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ChatViewHolder {
@@ -164,6 +166,7 @@ class ChatAdapter(
             holder.aiActionRow?.visibility = View.VISIBLE
             holder.btnCopy?.setOnClickListener { copyToClipboard(context, message.text) }
             holder.btnShare?.setOnClickListener { shareText(context, message.text) }
+            holder.btnSearchWeb?.setOnClickListener { searchOnWeb(context, message.text) }
             holder.btnLike?.setOnClickListener {
                 Toast.makeText(context, "Thanks for the feedback", Toast.LENGTH_SHORT).show()
             }
@@ -192,6 +195,12 @@ class ChatAdapter(
             putExtra(Intent.EXTRA_TEXT, text)
         }
         context.startActivity(Intent.createChooser(intent, "Share via"))
+    }
+
+    private fun searchOnWeb(context: Context, text: String) {
+        val query = Uri.encode(text.take(500))
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com/search?q=$query"))
+        context.startActivity(intent)
     }
 
     override fun getItemCount(): Int = messages.size

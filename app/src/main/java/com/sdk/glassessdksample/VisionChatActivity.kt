@@ -47,6 +47,7 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import android.net.Uri
 import android.os.Build
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.app.ActivityCompat
@@ -3417,6 +3418,8 @@ class VisionChatAdapter(private val messages: List<VisionChatMessage>) :
         val messageText: TextView = view.findViewById(R.id.messageText)
         val timestampText: TextView = view.findViewById(R.id.timestampText)
         val messageImage: android.widget.ImageView = view.findViewById(R.id.messageImage)
+        val searchWebRow: android.view.View? = view.findViewById(R.id.searchWebRow)
+        val btnSearchWebVision: TextView? = view.findViewById(R.id.btnSearchWebVision)
     }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): MessageViewHolder {
@@ -3427,16 +3430,28 @@ class VisionChatAdapter(private val messages: List<VisionChatMessage>) :
     override fun onBindViewHolder(holder: MessageViewHolder, position: Int) {
         val message = messages[position]
         holder.messageText.text = message.text
-        
+
         val timeFormat = SimpleDateFormat("HH:mm", Locale.US)
         holder.timestampText.text = timeFormat.format(Date(message.timestamp))
-        
+
         if (message.imagePath != null) {
             holder.messageImage.visibility = View.VISIBLE
             val bitmap = BitmapFactory.decodeFile(message.imagePath)
             holder.messageImage.setImageBitmap(bitmap)
         } else {
             holder.messageImage.visibility = View.GONE
+        }
+
+        // Show "Search on Web" button only for non-empty AI messages
+        if (!message.isUser && message.text.isNotBlank()) {
+            holder.searchWebRow?.visibility = View.VISIBLE
+            holder.searchWebRow?.setOnClickListener {
+                val query = Uri.encode(message.text.take(500))
+                val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com/search?q=$query"))
+                it.context.startActivity(intent)
+            }
+        } else {
+            holder.searchWebRow?.visibility = View.GONE
         }
     }
 

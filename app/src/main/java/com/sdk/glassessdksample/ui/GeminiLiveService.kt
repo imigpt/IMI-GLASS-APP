@@ -310,6 +310,12 @@ class GeminiLiveService(
         instance = this
         Log.d(TAG, "🌐 GeminiLiveService instance set for cross-activity access")
 
+        // Always start a new session unmuted — isMuted may be left true from a
+        // previous session that called muteOutput() for vision chat and then ended
+        // before unmuteOutput() was called (e.g. user said goodbye mid-vision).
+        isMuted.set(false)
+        Log.d(TAG, "🔊 Output unmuted for new session")
+
         // Re-read model preference at start
         activeProvider = getSavedModelProvider(context)
         // Reset Gemini Live model to the primary; fallback re-arms per session.
@@ -622,20 +628,26 @@ class GeminiLiveService(
     // 2. Check if Bluetooth audio is available
     val isBluetoothAvailable = audioManager?.isBluetoothScoAvailableOffCall == true
     val isBluetoothOn = audioManager?.isBluetoothScoOn == true
-    
+
     Log.d(TAG, "🎧 System Bluetooth Audio Status:")
     Log.d(TAG, "   - Available: $isBluetoothAvailable")
     Log.d(TAG, "   - Active: $isBluetoothOn")
-    
-    // 3. Start Bluetooth SCO if available (but don't wait - Android handles it)
-    if (isBluetoothAvailable && !isBluetoothOn) {
+
+    // 3. Always cycle SCO off→on so the glasses speaker is correctly routed on
+    //    every session (including the 2nd, 3rd, … after "goodbye" + wake-word).
+    //    Skipping this when isBluetoothOn==true caused audio to play on the phone
+    //    speaker instead of the glasses on subsequent sessions.
+    if (isBluetoothAvailable) {
         try {
+            if (isBluetoothOn) {
+                // Force a clean re-handshake so the output route is refreshed.
+                audioManager?.stopBluetoothSco()
+                delay(80)
+            }
             audioManager?.startBluetoothSco()
             audioManager?.isBluetoothScoOn = true
-            Log.d(TAG, "📡 Bluetooth SCO start requested")
-            
-            // Give it a short moment for connection (non-blocking)
-            delay(50) // Ultra-fast startup - 50ms only
+            Log.d(TAG, "📡 Bluetooth SCO (re-)started for this session")
+            delay(80)
         } catch (e: Exception) {
             Log.w(TAG, "SCO start attempt: ${e.message}")
         }
@@ -741,7 +753,27 @@ class GeminiLiveService(
             .setTransferMode(AudioTrack.MODE_STREAM)
             .build()
 
-        // 9. Check final audio routing
+        // 9. Route AudioTrack output to the Bluetooth SCO device explicitly.
+        //    Without this, Android may send audio to the phone speaker on the 2nd+
+        //    session because USAGE_MEDIA doesn't automatically follow SCO re-routes.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            try {
+                val outputDevices = audioManager?.getDevices(AudioManager.GET_DEVICES_OUTPUTS) ?: arrayOf()
+                val btOutputDevice = outputDevices.firstOrNull {
+                    it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO
+                }
+                if (btOutputDevice != null) {
+                    val success = audioTrack?.setPreferredDevice(btOutputDevice)
+                    Log.d(TAG, "🎯 AudioTrack preferred output → ${btOutputDevice.productName}, success=$success")
+                } else {
+                    Log.d(TAG, "ℹ️ No BT SCO output device found — using system default routing")
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to set AudioTrack preferred device: ${e.message}")
+            }
+        }
+
+        // 10. Check final audio routing
         val finalDevice = audioRecord?.routedDevice
         val deviceName = finalDevice?.productName ?: "default"
         val deviceType = when (finalDevice?.type) {
@@ -1984,7 +2016,8 @@ NOTIFICATIONS: You CAN read the user's phone notifications. When the user asks "
             isRecording.set(false)
             isPlaying.set(false)
             isAIPlaying.set(false)
-            
+            isMuted.set(false) // always clear mute on cleanup so next session starts unmuted
+
             // 🆕 Clear singleton instance
             instance = null
             

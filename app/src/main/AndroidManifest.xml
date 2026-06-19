@@ -122,7 +122,8 @@
         <!-- MAIN SCREEN (Mark 2) -->
         <activity
             android:name=".MainActivity"
-            android:exported="true" />
+            android:exported="true"
+            android:launchMode="singleTop" />
 
         <!-- TOP-LEVEL CAMERA TAB -->
         <activity
@@ -273,9 +274,15 @@
                     android:resource="@xml/file_paths" />
             </provider>
 
-            <!-- BACKGROUND LISTENING SERVICE -->
+            <!-- BACKGROUND LISTENING SERVICE (wake-word detection) -->
             <service
                 android:name=".ListeningService"
+                android:exported="false"
+                android:foregroundServiceType="microphone" />
+
+            <!-- GEMINI LIVE BACKGROUND SERVICE (keeps AI audio alive when minimised / screen off) -->
+            <service
+                android:name=".GeminiBackgroundService"
                 android:exported="false"
                 android:foregroundServiceType="microphone" />
 

@@ -2,12 +2,18 @@ package com.sdk.glassessdksample
 
 import com.sdk.glassessdksample.RemoteConfigManager
 import android.Manifest
+import android.animation.ObjectAnimator
+import android.animation.ValueAnimator
+import android.app.Dialog
 import android.content.BroadcastReceiver
+import android.content.ComponentName
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.ServiceConnection
 import android.content.pm.PackageManager
+import android.graphics.drawable.ColorDrawable
 import android.media.AudioManager
 // removed ToneGenerator import (no beep fallback)
 import android.media.MediaPlayer
@@ -24,6 +30,12 @@ import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.util.Log
+import android.view.View
+import android.view.WindowManager
+import android.view.animation.AccelerateDecelerateInterpolator
+import android.view.animation.DecelerateInterpolator
+import android.widget.ProgressBar
+import android.widget.TextView
 import android.widget.Toast
 import android.view.accessibility.AccessibilityManager
 import android.accessibilityservice.AccessibilityServiceInfo
@@ -75,6 +87,24 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private var visionClient: GeminiAIClient? = null // For image analysis
     private lateinit var userMemoryManager: com.sdk.glassessdksample.ui.UserMemoryManager  // Auto-learning AI memory
     private var geminiLiveService: GeminiLiveService? = null // Gemini Live API for bidirectional audio
+
+    // Background service that keeps GeminiLiveService alive when minimised / screen off
+    private var geminiBgService: GeminiBackgroundService.LocalBinder? = null
+    private var isGeminiBgServiceBound = false
+    private val geminiBgConnection: ServiceConnection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
+            geminiBgService = binder as? GeminiBackgroundService.LocalBinder
+            isGeminiBgServiceBound = true
+            Log.d(TAG, "✅ GeminiBackgroundService bound")
+            // If GeminiLiveService was already created before bind completed, register it.
+            geminiLiveService?.let { geminiBgService?.setGeminiLiveService(it) }
+        }
+        override fun onServiceDisconnected(name: ComponentName?) {
+            geminiBgService = null
+            isGeminiBgServiceBound = false
+            Log.w(TAG, "⚠️ GeminiBackgroundService disconnected")
+        }
+    }
 
     private var isListening = false
     private var isInConversationMode = false
@@ -178,7 +208,12 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     
     // Meeting Minutes Manager for recording and summarizing meetings
     private var meetingManager: MeetingMinutesManager? = null
-    
+
+    // Animated "Connecting..." popup shown while glass BLE/audio handshake completes
+    private var glassConnectingDialog: Dialog? = null
+    private val glassConnectingAnimators = mutableListOf<ObjectAnimator>()
+    private val glassConnectingHandler = Handler(Looper.getMainLooper())
+
     private val mainScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val REQUEST_RECORD_AUDIO_CODE = 201
     private val REQUEST_READ_CONTACTS = 302
@@ -268,6 +303,16 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         // Initialize Meeting Minutes Manager for meeting transcription
         meetingManager = MeetingMinutesManager(this)
         
+        // Start + bind the background service that keeps Gemini Live alive
+        // when the app is minimised or the screen turns off.
+        val bgIntent = Intent(this, GeminiBackgroundService::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(bgIntent)
+        } else {
+            startService(bgIntent)
+        }
+        bindService(bgIntent, geminiBgConnection, 1) // Context.BIND_AUTO_CREATE = 1
+
         // Initialize Gemini Live Service for bidirectional audio streaming
         initializeGeminiLive()
         
@@ -540,12 +585,39 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         if (EventBus.getDefault().isRegistered(this)) {
             EventBus.getDefault().unregister(this)
         }
-        
+
         // Disabled for Play policy compliance: avoid background foreground-service usage.
     }
-    
+
+    /**
+     * Called when ListeningService brings this Activity back to the foreground after
+     * detecting the wake word while the app was minimised or the screen was off.
+     * launchMode="singleTop" in the manifest ensures this fires instead of onCreate.
+     */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        if (intent.action == ListeningService.ACTION_WAKE_WORD_DETECTED) {
+            Log.d(TAG, "🔥 onNewIntent: wake word received from background — starting Gemini Live")
+            // Post the same EventBus event that the normal foreground path uses so all
+            // existing state-guards (mute check, BLE check, etc.) apply consistently.
+            EventBus.getDefault().post(
+                com.sdk.glassessdksample.ui.BluetoothEvent(
+                    com.sdk.glassessdksample.ui.BluetoothEvent.EventType.VOICE_TEXT,
+                    "wake up"
+                )
+            )
+        }
+    }
+
     override fun onResume() {
         super.onResume()
+
+        // Re-bind to the background service if we lost the connection
+        // (e.g. Activity was recreated after screen-off / config change).
+        if (!isGeminiBgServiceBound) {
+            val bgIntent = Intent(this, GeminiBackgroundService::class.java)
+            bindService(bgIntent, geminiBgConnection, 1) // Context.BIND_AUTO_CREATE = 1
+        }
 
         // Update Live Gallery photo count badge
         try {
@@ -578,6 +650,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
     override fun onDestroy() {
         // OPTIMIZATION: Clean up BEFORE super.onDestroy to prevent leaks
+        dismissGlassConnectingPopup()
         try {
             scoConnectionReceiver?.let { unregisterReceiver(it) }
         } catch (e: Exception) {
@@ -603,9 +676,24 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             Log.w(TAG, "Error disabling glass headset on destroy: ${e.message}")
         }
 
-        // Clean up Gemini Live Service
+        // Unbind from GeminiBackgroundService (the service itself keeps running).
+        // We do NOT call stopService here — the background service must stay alive
+        // when the Activity is destroyed (minimised / screen off / config change).
         try {
-            geminiLiveService?.destroy()
+            if (isGeminiBgServiceBound) {
+                unbindService(geminiBgConnection)
+                isGeminiBgServiceBound = false
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Error unbinding GeminiBackgroundService: ${e.message}")
+        }
+
+        // Clean up Gemini Live Service — but only if background service is gone too.
+        // Normally we leave it running inside the background service.
+        try {
+            if (!isGeminiBgServiceBound) {
+                geminiLiveService?.destroy()
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Error destroying Gemini Live: ${e.message}")
         }
@@ -1880,11 +1968,109 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         }
     }
     
+    private fun showGlassConnectingPopup() {
+        if (isFinishing || isDestroyed) return
+
+        dismissGlassConnectingPopup()
+
+        val content = layoutInflater.inflate(R.layout.dialog_connecting_glasses, null)
+        content.findViewById<TextView>(R.id.tvConnectingTitle).text = "Connecting"
+        content.findViewById<TextView>(R.id.tvConnectingSubtitle).text = "Hold steady while we sync your glasses"
+        val statusText = content.findViewById<TextView>(R.id.tvConnectingState)
+        statusText.text = "Establishing secure link"
+        val pulseRingOne = content.findViewById<View>(R.id.pulseRingOne)
+        val pulseRingTwo = content.findViewById<View>(R.id.pulseRingTwo)
+        val iconHolder = content.findViewById<View>(R.id.connectingIconHolder)
+        val spinner = content.findViewById<ProgressBar>(R.id.progressConnecting)
+
+        val dialog = Dialog(this, R.style.ConnectingDialogStyle)
+        dialog.setContentView(content)
+        dialog.setCancelable(false)
+        dialog.setCanceledOnTouchOutside(false)
+        dialog.window?.apply {
+            setBackgroundDrawable(ColorDrawable(android.graphics.Color.TRANSPARENT))
+            val maxWidth = (resources.displayMetrics.density * 360f).toInt()
+            val preferredWidth = (resources.displayMetrics.widthPixels * 0.84f).toInt()
+            setLayout(preferredWidth.coerceAtMost(maxWidth), WindowManager.LayoutParams.WRAP_CONTENT)
+            attributes = attributes.apply { dimAmount = 0.62f }
+        }
+
+        dialog.show()
+        glassConnectingDialog = dialog
+
+        glassConnectingAnimators.addAll(
+            listOf(
+                ObjectAnimator.ofFloat(pulseRingOne, View.SCALE_X, 0.72f, 1.28f).apply {
+                    duration = 1650L; interpolator = DecelerateInterpolator()
+                },
+                ObjectAnimator.ofFloat(pulseRingOne, View.SCALE_Y, 0.72f, 1.28f).apply {
+                    duration = 1650L; interpolator = DecelerateInterpolator()
+                },
+                ObjectAnimator.ofFloat(pulseRingOne, View.ALPHA, 0.58f, 0f).apply {
+                    duration = 1650L; interpolator = DecelerateInterpolator()
+                },
+                ObjectAnimator.ofFloat(pulseRingTwo, View.SCALE_X, 0.72f, 1.28f).apply {
+                    duration = 1650L; startDelay = 760L; interpolator = DecelerateInterpolator()
+                },
+                ObjectAnimator.ofFloat(pulseRingTwo, View.SCALE_Y, 0.72f, 1.28f).apply {
+                    duration = 1650L; startDelay = 760L; interpolator = DecelerateInterpolator()
+                },
+                ObjectAnimator.ofFloat(pulseRingTwo, View.ALPHA, 0.52f, 0f).apply {
+                    duration = 1650L; startDelay = 760L; interpolator = DecelerateInterpolator()
+                },
+                ObjectAnimator.ofFloat(iconHolder, View.TRANSLATION_Y, 0f, -10f, 0f).apply {
+                    duration = 1700L; interpolator = AccelerateDecelerateInterpolator()
+                },
+                ObjectAnimator.ofFloat(iconHolder, View.SCALE_X, 1f, 1.06f, 1f).apply {
+                    duration = 1700L; interpolator = AccelerateDecelerateInterpolator()
+                },
+                ObjectAnimator.ofFloat(iconHolder, View.SCALE_Y, 1f, 1.06f, 1f).apply {
+                    duration = 1700L; interpolator = AccelerateDecelerateInterpolator()
+                },
+                ObjectAnimator.ofFloat(spinner, View.ALPHA, 0.66f, 1f, 0.66f).apply {
+                    duration = 1200L; interpolator = AccelerateDecelerateInterpolator()
+                }
+            )
+        )
+        glassConnectingAnimators.forEach {
+            it.repeatCount = ValueAnimator.INFINITE
+            it.repeatMode = ValueAnimator.RESTART
+            it.start()
+        }
+
+        var dotCount = 0
+        val dotRunnable = object : Runnable {
+            override fun run() {
+                if (glassConnectingDialog?.isShowing != true) return
+                dotCount = (dotCount + 1) % 4
+                statusText.text = "Establishing secure link${".".repeat(dotCount)}"
+                glassConnectingHandler.postDelayed(this, 480)
+            }
+        }
+        glassConnectingHandler.post(dotRunnable)
+
+        glassConnectingHandler.postDelayed({ dismissGlassConnectingPopup() }, 6000)
+    }
+
+    private fun dismissGlassConnectingPopup() {
+        glassConnectingHandler.removeCallbacksAndMessages(null)
+        glassConnectingAnimators.forEach {
+            try { it.cancel() } catch (e: Exception) { Log.w(TAG, "Failed to cancel connecting animation: ${e.message}") }
+        }
+        glassConnectingAnimators.clear()
+        try {
+            if (glassConnectingDialog?.isShowing == true) glassConnectingDialog?.dismiss()
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to dismiss connecting popup: ${e.message}")
+        }
+        glassConnectingDialog = null
+    }
+
     @Subscribe(threadMode = ThreadMode.MAIN)
     fun onBluetoothEvent(event: BluetoothEvent) {
         when (event.type) {
             BluetoothEvent.EventType.CONNECTED -> {
-                Toast.makeText(this, "Glass Connected", Toast.LENGTH_SHORT).show()
+                showGlassConnectingPopup()
                 startWakeWordDetectorIfReady("bluetooth-event-connected")
                 // Warm SCO on glass connect so mic is ready for wake detection
                 try {
@@ -4550,7 +4736,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             }
             triggerGlassCameraCapture()
         }
-        binding.btnVideo.setOnClickListener { SafeBleCommandHelper.startRecording() }
+        binding.btnVideo.setOnClickListener { startActivity(Intent(this, SettingsActivity::class.java)) }
         
         // Glass Gallery button
         binding.btnGlassGallery.setOnClickListener { openGlassMediaGallery() }
@@ -4604,10 +4790,11 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             startActivity(Intent(this, ProfileActivity::class.java))
         }
 
-        // Settings card - Open dedicated settings tab screen
-        binding.cardSettings.setOnClickListener {
-            startActivity(Intent(this, SettingsActivity::class.java))
-        }
+        // Meetings card - Open meeting recording and summaries
+        binding.cardSettings.setOnClickListener { openMeetingMinutes() }
+
+        // History card - Open conversation history
+        try { binding.cardBattery.setOnClickListener { openConversationHistory() } } catch (e: Exception) {}
         
         // Upload settings removed per user request
         
@@ -6616,6 +6803,10 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         })
         
         Log.d(TAG, "✅ Gemini Live Service initialized")
+
+        // Hand the instance to the background service so it stays alive
+        // even when this Activity is paused / screen is off.
+        geminiLiveService?.let { geminiBgService?.setGeminiLiveService(it) }
     }
     
     // ADD this new function to enable glass headset automatically:
