@@ -97,14 +97,8 @@ class SignUpActivity : AppCompatActivity() {
     }
 
     private fun goToNextScreen() {
-        // Mirror SplashActivity routing: onboarding first, then device selection.
-        val prefs = getSharedPreferences("IMI_PREFS", MODE_PRIVATE)
-        val hasCompletedOnboarding = prefs.getBoolean("onboarding_completed", false)
-        val intent = if (hasCompletedOnboarding) {
-            Intent(this, com.sdk.glassessdksample.ui.DeviceSelectionActivity::class.java)
-        } else {
-            Intent(this, com.sdk.glassessdksample.ui.OnboardingActivity::class.java)
-        }
+        // Onboarding screen hidden: go straight to device selection.
+        val intent = Intent(this, com.sdk.glassessdksample.ui.DeviceSelectionActivity::class.java)
         intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
         startActivity(intent)
         finish()

@@ -1,19 +1,25 @@
 package com.sdk.glassessdksample
 
 import com.sdk.glassessdksample.ui.BluetoothEvent
+import com.sdk.glassessdksample.ui.DeviceType
+import com.sdk.glassessdksample.ui.DevicePreferenceManager
 import com.sdk.glassessdksample.ui.HotHelper
+import com.sdk.glassessdksample.ui.Mark1MainActivity
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import org.greenrobot.eventbus.EventBus
 import org.greenrobot.eventbus.Subscribe
 import org.greenrobot.eventbus.ThreadMode
@@ -32,18 +38,35 @@ class ListeningService : Service() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
-        startForeground(NOTIF_ID, buildNotification())
 
-        val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
-        wakeLock = powerManager.newWakeLock(
-            PowerManager.PARTIAL_WAKE_LOCK,
-            "HeyIMI::ListeningWakeLock"
-        )
-        wakeLock?.acquire()
+        // foregroundServiceType="microphone": startForeground() throws on
+        // Android 14+ if RECORD_AUDIO isn't granted. Guard so a stray start (OS
+        // restart of a sticky service, or a start before the user granted the
+        // mic) can never crash the app.
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) !=
+            PackageManager.PERMISSION_GRANTED) {
+            Log.w(TAG, "⏹️ RECORD_AUDIO not granted — cannot run microphone FGS, stopping self")
+            stopSelf()
+            return
+        }
 
-        // Subscribe to wake word events so we can forward them to MainActivity even
-        // when the Activity is stopped (minimised / screen off).
-        EventBus.getDefault().register(this)
+        try {
+            startForeground(NOTIF_ID, buildNotification())
+
+            val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+            wakeLock = powerManager.newWakeLock(
+                PowerManager.PARTIAL_WAKE_LOCK,
+                "HeyIMI::ListeningWakeLock"
+            )
+            wakeLock?.acquire()
+
+            // Subscribe to wake word events so we can forward them to MainActivity even
+            // when the Activity is stopped (minimised / screen off).
+            EventBus.getDefault().register(this)
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ startForeground failed — stopping self: ${e.message}", e)
+            stopSelf()
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -77,8 +100,13 @@ class ListeningService : Service() {
         if (event.type == BluetoothEvent.EventType.VOICE_TEXT) {
             val text = event.data as? String ?: return
             if (text.trim().lowercase() == "wake up") {
-                Log.i(TAG, "🔥 Wake word received in ListeningService — bringing MainActivity to foreground")
-                val activityIntent = Intent(applicationContext, MainActivity::class.java).apply {
+                val targetActivity = if (DevicePreferenceManager.getDeviceType(applicationContext) == DeviceType.MARK1) {
+                    Mark1MainActivity::class.java
+                } else {
+                    MainActivity::class.java
+                }
+                Log.i(TAG, "🔥 Wake word received in ListeningService — bringing ${targetActivity.simpleName} to foreground")
+                val activityIntent = Intent(applicationContext, targetActivity).apply {
                     action = ACTION_WAKE_WORD_DETECTED
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
                 }

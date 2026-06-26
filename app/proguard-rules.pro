@@ -36,3 +36,6 @@
 
 # Specifically keep the class that the SDK reflects into
 -keep class com.oudmon.ble.base.communication.bigData.resp.GlassesDeviceNotifyRsp { *; }
+
+# JTransforms (JTransforms/JLargeArrays) references JDK-internal sun.misc.Cleaner, not present on Android
+-dontwarn sun.misc.Cleaner

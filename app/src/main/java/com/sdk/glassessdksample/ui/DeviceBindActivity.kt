@@ -44,6 +44,11 @@ import org.greenrobot.eventbus.ThreadMode
 
 class DeviceBindActivity : BaseActivity() {
 
+    private fun hasBluetoothConnectPermission(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return true
+        return ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+    }
+
     private lateinit var binding: ActivityDeviceBindBinding
     private val deviceList = mutableListOf<SmartWatch>()
     private var isScanning = false
@@ -102,6 +107,10 @@ class DeviceBindActivity : BaseActivity() {
             Log.d("DeviceBindActivity", "Profile proxy connected for profile: $profile")
             if (profile == BluetoothProfile.HEADSET) {
                 headsetProxy = proxy as BluetoothHeadset
+                if (!hasBluetoothConnectPermission()) {
+                    Log.e("DeviceBindActivity", "Cannot attempt HFP connection, BLUETOOTH_CONNECT not granted.")
+                    return
+                }
                 val classicDevice = connectedDeviceAddress?.let { BluetoothAdapter.getDefaultAdapter().getRemoteDevice(it) }
                 if (classicDevice != null) {
                     mainHandler.post { attemptHfpConnection(classicDevice) }
@@ -220,6 +229,7 @@ class DeviceBindActivity : BaseActivity() {
     @SuppressLint("MissingPermission")
     private fun setDeviceAliasIfSupported() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
+        if (!hasBluetoothConnectPermission()) return
         val address = connectedDeviceAddress ?: return
         try {
             val device = BluetoothAdapter.getDefaultAdapter().getRemoteDevice(address)
@@ -381,6 +391,10 @@ class DeviceBindActivity : BaseActivity() {
 
     @SuppressLint("MissingPermission")
     private fun startClassicConnectionFlow(deviceMac: String) {
+        if (!hasBluetoothConnectPermission()) {
+            Log.e("DeviceBindActivity", "Cannot start classic connection flow, BLUETOOTH_CONNECT not granted.")
+            return
+        }
         val classicDevice = BluetoothAdapter.getDefaultAdapter().getRemoteDevice(deviceMac)
         Log.d("DeviceBindActivity", "Starting classic flow. Bond state: ${classicDevice.bondState}")
         when (classicDevice.bondState) {
@@ -406,6 +420,10 @@ class DeviceBindActivity : BaseActivity() {
 
     @SuppressLint("MissingPermission")
     private fun getHeadsetProxyAndConnect(classicDevice: BluetoothDevice) {
+        if (!hasBluetoothConnectPermission()) {
+            Log.e("DeviceBindActivity", "Cannot get headset proxy, BLUETOOTH_CONNECT not granted.")
+            return
+        }
         Log.d("DeviceBindActivity", "Getting Headset profile proxy for ${classicDevice.address}")
         BluetoothAdapter.getDefaultAdapter().getProfileProxy(this, profileListener, BluetoothProfile.HEADSET)
     }

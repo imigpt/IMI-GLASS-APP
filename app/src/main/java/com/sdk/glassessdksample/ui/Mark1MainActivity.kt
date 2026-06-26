@@ -67,11 +67,17 @@ class Mark1MainActivity : AppCompatActivity(), GeminiLiveService.GeminiLiveCallb
     private var tts: TextToSpeech? = null
     private var itunesMediaPlayer: MediaPlayer? = null
     private val musicProgressHandler = Handler(Looper.getMainLooper())
+    private val wakeWordHandler = Handler(Looper.getMainLooper())
     private var pulseAnimator: AnimatorSet? = null
 
     private var isGeminiLiveActive = false
     private var wakeWordStarted = false
     private var isAiMuted = false
+    // Set by onNewIntent() when the wake word brought this Activity to the foreground,
+    // so the next onResume() doesn't re-run the BLE gate and stomp on the conversation
+    // that's already starting (it would otherwise stop/restart the wake-word detector
+    // and even tear down an active Gemini Live session).
+    private var skipNextBleGateCheck = false
 
     private val conversationHistory = mutableListOf<Pair<String, String>>()
     private val gson = Gson()
@@ -127,6 +133,25 @@ class Mark1MainActivity : AppCompatActivity(), GeminiLiveService.GeminiLiveCallb
         checkBleAndShowGate()
     }
 
+    /**
+     * Called when ListeningService brings this Activity back to the foreground after
+     * detecting the wake word while the app was minimised or the screen was off.
+     * launchMode="singleTop" in the manifest ensures this fires instead of onCreate.
+     */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        if (intent.action == ListeningService.ACTION_WAKE_WORD_DETECTED) {
+            skipNextBleGateCheck = true
+            // Trigger the conversation directly instead of re-posting to EventBus:
+            // ListeningService is also subscribed to BluetoothEvent and would react to
+            // a re-posted "wake up" by calling startActivity() again, which re-enters
+            // onNewIntent and posts again — an infinite wake-word loop.
+            if (!isGeminiLiveActive && !isAiMuted) {
+                playChimeThenStartConversation()
+            }
+        }
+    }
+
     override fun onResume() {
         super.onResume()
         EventBus.getDefault().register(this)
@@ -144,7 +169,11 @@ class Mark1MainActivity : AppCompatActivity(), GeminiLiveService.GeminiLiveCallb
             ContextCompat.RECEIVER_NOT_EXPORTED
         )
         binding.bottomNavigation.selectedItemId = R.id.nav_home
-        checkBleAndShowGate()
+        if (skipNextBleGateCheck) {
+            skipNextBleGateCheck = false
+        } else {
+            checkBleAndShowGate()
+        }
     }
 
     override fun onPause() {
@@ -157,6 +186,7 @@ class Mark1MainActivity : AppCompatActivity(), GeminiLiveService.GeminiLiveCallb
 
     override fun onDestroy() {
         super.onDestroy()
+        wakeWordHandler.removeCallbacksAndMessages(null)
         tts?.stop()
         tts?.shutdown()
         itunesMediaPlayer?.release()
@@ -279,7 +309,26 @@ class Mark1MainActivity : AppCompatActivity(), GeminiLiveService.GeminiLiveCallb
     // WAKE WORD
     // ─────────────────────────────────────────────────────────────────────────
 
+    /**
+     * Re-arm wake-word listening after a short settle delay. Used when a
+     * conversation has just ended: the tail of the AI's audio / the stop
+     * chime / the user's last words are still echoing in the mic, and starting
+     * the detector immediately re-triggers "Hey IMI" on that residual audio
+     * (worse now that the Mark 1 threshold is lowered). The delay lets the
+     * audio environment settle before we start scoring frames again.
+     */
+    private fun startWakeWordListeningDelayed(delayMs: Long = 1_200L) {
+        wakeWordHandler.removeCallbacksAndMessages(null)
+        wakeWordHandler.postDelayed({
+            if (!isAiMuted && !isGeminiLiveActive) {
+                startWakeWordListening()
+            }
+        }, delayMs)
+    }
+
     private fun startWakeWordListening() {
+        // Cancel any pending delayed re-arm so we don't double-start.
+        wakeWordHandler.removeCallbacksAndMessages(null)
         if (isAiMuted || wakeWordStarted) return
         wakeWordStarted = true
 
@@ -294,10 +343,20 @@ class Mark1MainActivity : AppCompatActivity(), GeminiLiveService.GeminiLiveCallb
             Log.w(TAG, "Could not start ListeningService: ${e.message}")
         }
 
-        HotHelper.getInstance(applicationContext).start()
+        HotHelper.getInstance(applicationContext).apply {
+            // Mark 1 has a less sensitive mic pickup, so lower the wake-word
+            // threshold below the engine default (~0.42) to make "Hey IMI"
+            // easier to trigger. Tuned from on-device logs: ambient speech/noise
+            // tops out around smooth≈0.22, while a real "Hey IMI" lands at
+            // smooth≈0.39 — so 0.27 sits in the gap (easy to trigger, low false
+            // positives).
+            setThreshold(0.27f)
+            start()
+        }
     }
 
     private fun stopWakeWordListening() {
+        wakeWordHandler.removeCallbacksAndMessages(null)
         wakeWordStarted = false
         HotHelper.getInstance(applicationContext).stop()
     }
@@ -362,10 +421,10 @@ class Mark1MainActivity : AppCompatActivity(), GeminiLiveService.GeminiLiveCallb
             binding.btnQuickStart.text = "Quick Start"
         }
 
-        if (!isAiMuted && isGlassConnected()) {
-            startWakeWordListening()
-        } else if (!isAiMuted) {
-            startWakeWordListening()
+        // Re-arm after a settle delay so the tail of the conversation audio /
+        // stop chime doesn't immediately re-trigger the wake word.
+        if (!isAiMuted) {
+            startWakeWordListeningDelayed()
         }
     }
 
@@ -572,7 +631,12 @@ class Mark1MainActivity : AppCompatActivity(), GeminiLiveService.GeminiLiveCallb
 
         binding.btnSunny.setOnClickListener {
             animateTilePress(it) {
-                startActivity(Intent(this, DeviceBindActivity::class.java))
+                if (isGeminiLiveActive) {
+                    stopConversation()
+                    Toast.makeText(this, "AI conversation stopped", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(this, "No active conversation", Toast.LENGTH_SHORT).show()
+                }
             }
         }
 
@@ -726,7 +790,11 @@ class Mark1MainActivity : AppCompatActivity(), GeminiLiveService.GeminiLiveCallb
 
     override fun onTurnComplete(fullInput: String, fullOutput: String) {
         addToHistory(fullInput, fullOutput)
-        com.sdk.glassessdksample.ui.sync.ChatSync.pushTurn(this, "Mark 1 Glasses", fullInput, fullOutput)
+        com.sdk.glassessdksample.ui.sync.ChatSync.pushTurn(
+            this, "Mark 1 Glasses", fullInput, fullOutput,
+            channel = com.sdk.glassessdksample.ui.sync.ChatSync.Channel.VOICE,
+            sessionId = currentSessionId
+        )
 
         if (isSingleShotMode()) {
             runOnUiThread { stopConversation() }

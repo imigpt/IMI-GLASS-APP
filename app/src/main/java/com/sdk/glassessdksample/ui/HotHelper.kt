@@ -305,18 +305,23 @@ class HotHelper private constructor(private val context: Context) {
             BluetoothEvent(BluetoothEvent.EventType.VOICE_TEXT, "wake up")
         )
 
-        // If MainActivity is not in the foreground (EventBus unregisters on onStop),
+        // If the home Activity is not in the foreground (EventBus unregisters on onStop),
         // bring it back directly so the conversation can start even when minimised / screen off.
         if (!EventBus.getDefault().hasSubscriberForEvent(BluetoothEvent::class.java)) {
-            Log.i(TAG, "📲 No EventBus subscriber — launching MainActivity from background")
+            val targetActivity = if (DevicePreferenceManager.getDeviceType(context) == DeviceType.MARK1) {
+                Mark1MainActivity::class.java
+            } else {
+                MainActivity::class.java
+            }
+            Log.i(TAG, "📲 No EventBus subscriber — launching ${targetActivity.simpleName} from background")
             try {
-                val intent = Intent(context, MainActivity::class.java).apply {
+                val intent = Intent(context, targetActivity).apply {
                     action = ListeningService.ACTION_WAKE_WORD_DETECTED
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
                 }
                 context.startActivity(intent)
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to launch MainActivity from background: ${e.message}")
+                Log.e(TAG, "Failed to launch ${targetActivity.simpleName} from background: ${e.message}")
             }
         }
     }

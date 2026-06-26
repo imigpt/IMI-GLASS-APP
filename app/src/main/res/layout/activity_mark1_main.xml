@@ -335,12 +335,13 @@
                             <ImageView
                                 android:layout_width="24dp"
                                 android:layout_height="24dp"
-                                android:src="@drawable/ic_sunny_png" />
+                                android:src="@drawable/ic_stop_square"
+                                app:tint="#ADADAD" />
 
                             <TextView
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
-                                android:text="Sunny"
+                                android:text="AI Stop"
                                 android:textColor="#ADADAD"
                                 android:textSize="16sp"
                                 android:layout_marginStart="10dp" />

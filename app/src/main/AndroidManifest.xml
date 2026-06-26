@@ -92,13 +92,13 @@
         </activity>
 
         <!-- AUTHENTICATION SCREENS -->
-        <activity
+        <!-- <activity
             android:name=".LoginActivity"
             android:exported="false" />
         
         <activity
             android:name=".SignUpActivity"
-            android:exported="false" />
+            android:exported="false" /> -->
         
         <activity
             android:name=".VerifyCodeActivity"
@@ -117,7 +117,8 @@
         <!-- MARK 1 HOME -->
         <activity
             android:name=".ui.Mark1MainActivity"
-            android:exported="false" />
+            android:exported="false"
+            android:launchMode="singleTop" />
 
         <!-- MAIN SCREEN (Mark 2) -->
         <activity

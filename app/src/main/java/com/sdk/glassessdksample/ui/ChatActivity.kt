@@ -867,6 +867,14 @@ class ChatActivity : AppCompatActivity() {
                 )
                 conversation.imageIds.add(imageId)
                 conversationMemory.recordMessage(analysisResult, isFromUser = false, hasImage = true, imageId = imageId)
+
+                // Push the vision interaction (photo question + AI description) to the backend.
+                com.sdk.glassessdksample.ui.sync.VisionSync.pushDescription(
+                    this@ChatActivity,
+                    fileName = java.io.File(imagePath).name,
+                    description = analysisResult,
+                    userQuery = userQuery
+                )
                 
                 conversation.updatePreview()
                 conversationAdapter.notifyDataSetChanged()
@@ -1283,6 +1291,12 @@ class ChatActivity : AppCompatActivity() {
                 // Record in memory
                 conversationMemory.recordMessage(response, isFromUser = false)
 
+                // Push this text-chat turn to the backend (channel = TEXT).
+                com.sdk.glassessdksample.ui.sync.ChatSync.pushTurn(
+                    this@ChatActivity, "Text Chat", userMessage, response,
+                    channel = com.sdk.glassessdksample.ui.sync.ChatSync.Channel.TEXT
+                )
+
                 // ✨ Auto-learn from what the user said – no manual input needed
                 memoryManager.learnFromUserMessage(userMessage)
                 memoryManager.incrementMessageStats(isNewConversation = false)
@@ -1391,6 +1405,12 @@ class ChatActivity : AppCompatActivity() {
                 
                 // Record in memory
                 conversationMemory.recordMessage(response, isFromUser = false, hasImage = true, imageId = referencedImage.id)
+
+                // Push this text-chat turn (referencing a prior image) to the backend.
+                com.sdk.glassessdksample.ui.sync.ChatSync.pushTurn(
+                    this@ChatActivity, "Text Chat", userMessage, response,
+                    channel = com.sdk.glassessdksample.ui.sync.ChatSync.Channel.TEXT
+                )
 
                 // ✨ Auto-learn from what the user said
                 memoryManager.learnFromUserMessage(userMessage)

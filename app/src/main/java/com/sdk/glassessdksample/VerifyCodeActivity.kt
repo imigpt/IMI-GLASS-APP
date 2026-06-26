@@ -115,15 +115,8 @@ class VerifyCodeActivity : AppCompatActivity() {
         val sharedPreferences = getSharedPreferences("IMI_PREFS", MODE_PRIVATE)
         sharedPreferences.edit().putBoolean("is_logged_in", true).apply()
         
-        // Check if onboarding is completed
-        val hasCompletedOnboarding = sharedPreferences.getBoolean("onboarding_completed", false)
-        
-        // Navigate to appropriate screen
-        val intent = if (hasCompletedOnboarding) {
-            Intent(this, MainActivity::class.java)
-        } else {
-            Intent(this, com.sdk.glassessdksample.ui.OnboardingActivity::class.java)
-        }
+        // Onboarding screen hidden: go straight to the main screen.
+        val intent = Intent(this, MainActivity::class.java)
         intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
         startActivity(intent)
         finish()

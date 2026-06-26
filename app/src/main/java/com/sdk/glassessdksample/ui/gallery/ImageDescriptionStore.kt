@@ -98,6 +98,9 @@ object ImageDescriptionStore {
         entries.add(0, DescEntry(fileName, System.currentTimeMillis(), description))
         writeAll(context, entries)
         Log.d(TAG, "Vault saved: $fileName")
+
+        // Mirror the AI description to the backend vision record (fire-and-forget).
+        com.sdk.glassessdksample.ui.sync.VisionSync.pushDescription(context, fileName, description)
     }
 
     /** All entries, most-recent first. */

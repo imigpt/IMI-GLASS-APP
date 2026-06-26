@@ -68,6 +68,9 @@ object LiveGalleryManager {
             // ── Notify gallery: saved successfully ───────────────────────────
             broadcast(context, ACTION_PHOTO_SAVED,
                 "✅ Photo saved from $source", file.absolutePath, source)
+
+            // ── Mirror to backend (fire-and-forget; no-op if not logged in) ──
+            com.sdk.glassessdksample.ui.sync.VisionSync.pushPhoto(context, file, source)
             file
         } catch (e: Exception) {
             Log.e(TAG, "❌ Failed to save photo to Live Gallery: ${e.message}", e)

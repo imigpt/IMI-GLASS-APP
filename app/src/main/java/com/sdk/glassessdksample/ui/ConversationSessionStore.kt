@@ -98,6 +98,7 @@ object ConversationSessionStore {
         val sessions = getSessions(context)
         sessions.add(session)
         save(context, sessions)
+        com.sdk.glassessdksample.ui.sync.ConversationSync.pushStartSession(context, session.id, now)
         return session.id
     }
 
@@ -121,6 +122,9 @@ object ConversationSessionStore {
             session.lastUpdatedAt = System.currentTimeMillis()
             while (session.messages.size > MAX_MESSAGES_PER_SESSION) session.messages.removeAt(0)
             save(context, sessions)
+            com.sdk.glassessdksample.ui.sync.ConversationSync.pushTurn(
+                context, session.id, userText, aiText
+            )
         } catch (e: Exception) {
             Log.w(TAG, "Failed to append turn: ${e.message}")
         }
@@ -129,5 +133,6 @@ object ConversationSessionStore {
     fun clearAll(context: Context) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit().remove(KEY_SESSIONS).apply()
+        com.sdk.glassessdksample.ui.sync.ConversationSync.pushClearAll(context)
     }
 }

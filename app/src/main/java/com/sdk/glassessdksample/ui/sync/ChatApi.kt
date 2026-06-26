@@ -67,7 +67,11 @@ class ChatApi(context: Context) {
         aiText: String,
         startTime: Long = System.currentTimeMillis(),
         endTime: Long = System.currentTimeMillis(),
-        tags: List<String> = emptyList()
+        tags: List<String> = emptyList(),
+        channel: String? = null,
+        surface: String? = null,
+        sessionId: String? = null,
+        tokensUsed: Int? = null
     ): Result<Unit> {
         val content = buildString {
             if (userText.isNotBlank()) append("[User] ").append(userText)
@@ -87,6 +91,11 @@ class ChatApi(context: Context) {
             put("tags", JSONArray(tags))
             put("startTime", startTime)
             put("endTime", endTime)
+            // Part 3 enhancements — all optional; backend defaults channel to "TEXT".
+            channel?.let { put("channel", it) }
+            surface?.let { put("surface", it) }
+            sessionId?.let { put("sessionId", it) }
+            tokensUsed?.let { put("tokensUsed", it) }
         }
 
         return request("POST", "/v1/chat-summaries", body) { }
@@ -95,6 +104,10 @@ class ChatApi(context: Context) {
     /** GET /v1/chat-summaries — every summary for the current user. */
     fun listAll(): Result<List<ChatSummary>> =
         request("GET", "/v1/chat-summaries", null) { parseList(it) }
+
+    /** GET /v1/chat-summaries/session/{sessionId} — every summary for one session. */
+    fun listBySession(sessionId: String): Result<List<ChatSummary>> =
+        request("GET", "/v1/chat-summaries/session/$sessionId", null) { parseList(it) }
 
     /** GET /v1/chat-summaries/active — summaries that are not archived. */
     fun listActive(): Result<List<ChatSummary>> =

@@ -33,8 +33,8 @@ android {
         applicationId = "com.aselea.imiglass"
         minSdk = 24
         targetSdk = 35
-        versionCode = 9
-        versionName = "1.8"
+        versionCode = 10
+        versionName = "1.9"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
 
         vectorDrawables {
@@ -74,6 +74,14 @@ android {
         exclude "META-INF/INDEX.LIST"
         exclude "META-INF/AL2.0"
         exclude "META-INF/LGPL2.1"
+
+        // 16 KB page-size support (required for Android 15+ / Play Store).
+        // Keep native libs uncompressed and page-aligned in the APK so the
+        // 16 KB-aligned .so files (incl. the patched glasses SDK codecs) load
+        // correctly on devices with 16 KB memory pages.
+        jniLibs {
+            useLegacyPackaging = false
+        }
     }
 
     compileOptions {
@@ -149,7 +157,7 @@ dependencies {
     // - melspectrogram.onnx
     // - embedding_model.onnx  
     // - hey_imi_model.onnx
-    implementation "com.microsoft.onnxruntime:onnxruntime-android:1.20.0"
+    implementation "com.microsoft.onnxruntime:onnxruntime-android:1.22.0"
     implementation "com.github.wendykierp:JTransforms:3.1"
     
     // OPTION 2: Picovoice Porcupine (Comment out if using ONNX)

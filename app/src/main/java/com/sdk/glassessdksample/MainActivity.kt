@@ -305,13 +305,14 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         
         // Start + bind the background service that keeps Gemini Live alive
         // when the app is minimised or the screen turns off.
-        val bgIntent = Intent(this, GeminiBackgroundService::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(bgIntent)
-        } else {
-            startService(bgIntent)
-        }
-        bindService(bgIntent, geminiBgConnection, 1) // Context.BIND_AUTO_CREATE = 1
+        // IMPORTANT: GeminiBackgroundService is a foregroundServiceType="microphone"
+        // service. On Android 14+ starting such a service before RECORD_AUDIO is
+        // granted throws ForegroundServiceStartNotAllowedException and crashes the
+        // app. On a brand-new phone the permission isn't granted yet, so we defer
+        // the start until the permission is actually available (see
+        // startGeminiBackgroundServiceIfAllowed(), also called after the grant
+        // arrives in onRequestPermissionsResult()).
+        startGeminiBackgroundServiceIfAllowed()
 
         // Initialize Gemini Live Service for bidirectional audio streaming
         initializeGeminiLive()
@@ -429,6 +430,47 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
     private fun hasRecordAudioPermission(): Boolean {
         return ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+    }
+
+    /** Tracks whether the microphone foreground service has already been started/bound. */
+    private var geminiBgServiceStarted = false
+
+    /**
+     * Start + bind the Gemini background foreground service, but ONLY when it is
+     * actually allowed. The service declares foregroundServiceType="microphone",
+     * so on Android 14+ (API 34) the system throws
+     * ForegroundServiceStartNotAllowedException / SecurityException if it is
+     * started while RECORD_AUDIO is not granted — which is the case on a fresh
+     * phone and was the cause of the immediate crash when opening Mark 2.
+     *
+     * Safe to call multiple times; it no-ops once started and is re-invoked from
+     * onRequestPermissionsResult() the moment RECORD_AUDIO is granted.
+     */
+    private fun startGeminiBackgroundServiceIfAllowed() {
+        if (geminiBgServiceStarted) return
+
+        // A microphone FGS requires RECORD_AUDIO on Android 14+. POST_NOTIFICATIONS
+        // is also needed on 13+ for the FGS notification to show, but its absence
+        // doesn't crash the start, so we only hard-gate on RECORD_AUDIO.
+        if (!hasRecordAudioPermission()) {
+            Log.w(TAG, "⏸️ Deferring GeminiBackgroundService start — RECORD_AUDIO not granted yet")
+            return
+        }
+
+        try {
+            val bgIntent = Intent(this, GeminiBackgroundService::class.java)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(bgIntent)
+            } else {
+                startService(bgIntent)
+            }
+            bindService(bgIntent, geminiBgConnection, 1) // Context.BIND_AUTO_CREATE = 1
+            geminiBgServiceStarted = true
+            Log.d(TAG, "✅ GeminiBackgroundService started + bound")
+        } catch (e: Exception) {
+            // Never let a foreground-service start failure crash the app.
+            Log.e(TAG, "❌ Failed to start GeminiBackgroundService: ${e.message}", e)
+        }
     }
 
     private fun startWakeWordDetectorIfReady(trigger: String) {
@@ -598,9 +640,11 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         super.onNewIntent(intent)
         if (intent.action == ListeningService.ACTION_WAKE_WORD_DETECTED) {
             Log.d(TAG, "🔥 onNewIntent: wake word received from background — starting Gemini Live")
-            // Post the same EventBus event that the normal foreground path uses so all
-            // existing state-guards (mute check, BLE check, etc.) apply consistently.
-            EventBus.getDefault().post(
+            // Call the handler directly instead of posting to EventBus: ListeningService is
+            // also subscribed to BluetoothEvent and would react to a re-posted "wake up" by
+            // calling startActivity() again, which re-enters onNewIntent and posts again —
+            // an infinite wake-word loop.
+            onBluetoothEvent(
                 com.sdk.glassessdksample.ui.BluetoothEvent(
                     com.sdk.glassessdksample.ui.BluetoothEvent.EventType.VOICE_TEXT,
                     "wake up"
@@ -614,9 +658,25 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
         // Re-bind to the background service if we lost the connection
         // (e.g. Activity was recreated after screen-off / config change).
-        if (!isGeminiBgServiceBound) {
-            val bgIntent = Intent(this, GeminiBackgroundService::class.java)
-            bindService(bgIntent, geminiBgConnection, 1) // Context.BIND_AUTO_CREATE = 1
+        // Only do this once RECORD_AUDIO is granted — binding with BIND_AUTO_CREATE
+        // would auto-create the microphone foreground service, which crashes on
+        // Android 14+ when the permission isn't granted. This also covers the case
+        // where the user grants the permission later via system Settings: the
+        // service is started/bound on the next resume.
+        if (!isGeminiBgServiceBound && hasRecordAudioPermission()) {
+            if (!geminiBgServiceStarted) {
+                // First successful start in this process (e.g. permission was just
+                // granted via Settings) — start + bind via the guarded helper.
+                startGeminiBackgroundServiceIfAllowed()
+            } else {
+                // Service was started earlier but we lost the binding; just re-bind.
+                val bgIntent = Intent(this, GeminiBackgroundService::class.java)
+                try {
+                    bindService(bgIntent, geminiBgConnection, 1) // Context.BIND_AUTO_CREATE = 1
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to re-bind GeminiBackgroundService: ${e.message}")
+                }
+            }
         }
 
         // Update Live Gallery photo count badge
@@ -717,6 +777,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             REQUEST_RECORD_AUDIO_CODE -> {
                 if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
                     Toast.makeText(this, "Hey Imi wake model is ready!", Toast.LENGTH_SHORT).show()
+                    // Now that mic is granted, the microphone foreground service can start safely.
+                    startGeminiBackgroundServiceIfAllowed()
                     startWakeWordDetectorIfReady("record-audio-granted")
                 } else {
                     Toast.makeText(this, "Microphone denied. Wake word won't work.", Toast.LENGTH_LONG).show()
@@ -750,6 +812,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 if (allGranted) {
                     Log.d(TAG, "✅ Background listening permissions granted")
                     Toast.makeText(this, "Background listening enabled", Toast.LENGTH_SHORT).show()
+                    // Mic now granted — safe to start the microphone foreground service.
+                    startGeminiBackgroundServiceIfAllowed()
                     startWakeWordDetectorIfReady("background-permissions-granted")
                 } else {
                     Log.w(TAG, "⚠️ Background listening permissions denied")
@@ -4710,6 +4774,17 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             Log.d(TAG, "🎙️ Quick Wake button pressed - triggering wake event")
             EventBus.getDefault().post(BluetoothEvent(BluetoothEvent.EventType.VOICE_TEXT, "wake up"))
         }
+
+        // AI Stop button - end the active conversation and return to wake-word listening
+        binding.btnVoiceCommand.setOnClickListener {
+            if (isGeminiLiveMode || isInConversationMode) {
+                Log.d(TAG, "🛑 AI Stop button pressed - ending conversation")
+                stopGeminiLiveConversation()
+                Toast.makeText(this, "AI conversation stopped", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(this, "No active conversation", Toast.LENGTH_SHORT).show()
+            }
+        }
         
         // Interrupt Mode Switch - Enable/Disable AI interruption when user speaks
         binding.switchInterruptMode.setOnCheckedChangeListener { _, isChecked ->
@@ -5476,7 +5551,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                                 }
                             }
                             photoNotifyFallbackRunnable = runnable
-                            Handler(Looper.getMainLooper()).postDelayed(runnable, 1800)
+                            Handler(Looper.getMainLooper()).postDelayed(runnable, 6000)
                         }
                     }
                     
@@ -6088,29 +6163,21 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                     return@launch
                 }
 
-                // Attempt 2: Retry the BLE command one more time
-                Log.d(TAG, "🔁 Retrying BLE takePhoto command...")
-                SafeBleCommandHelper.takePhoto(
-                    onSuccess = { code ->
-                        Log.d(TAG, "✅ Retry camera command sent (code=$code)")
-                        isCameraFallbackInProgress = false
-                        runOnUiThread {
-                            Toast.makeText(this@MainActivity, "Photo command sent. Check gallery.", Toast.LENGTH_SHORT).show()
-                        }
-                    },
-                    onError = { error ->
-                        Log.e(TAG, "❌ Retry also failed: $error")
-                        isCameraCaptureInProgress = false
-                        isCameraFallbackInProgress = false
-                        // Make sure the glasses don't stay stuck in an active camera/CoV
-                        // state with nothing left on our side waiting for a photo.
-                        SafeBleCommandHelper.disableCovMode()
-                        SafeBleCommandHelper.exitCamera()
-                        runOnUiThread {
-                            Toast.makeText(this@MainActivity, "Camera failed. Make sure glasses are in range.", Toast.LENGTH_LONG).show()
-                        }
-                    }
-                )
+                // No photo via WiFi or SDK reflection. We deliberately do NOT resend a
+                // fresh BLE takePhoto command here - the glasses already received and
+                // acted on the original command, and large BLE photo transfers can take
+                // longer than our wait window. Resending re-triggers a second physical
+                // capture on the glasses, which is what caused continuous/repeated
+                // photos from this button. Just give up cleanly and let any in-flight
+                // transfer complete on its own (it will still reach the EventBus handler).
+                Log.w(TAG, "⚠️ No photo payload yet after fallback checks - giving up without resending takePhoto")
+                isCameraCaptureInProgress = false
+                isCameraFallbackInProgress = false
+                SafeBleCommandHelper.disableCovMode()
+                SafeBleCommandHelper.exitCamera()
+                runOnUiThread {
+                    Toast.makeText(this@MainActivity, "Camera is taking longer than expected. Check gallery shortly.", Toast.LENGTH_LONG).show()
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "❌ Camera fallback error: ${e.message}", e)
                 isCameraCaptureInProgress = false
@@ -6645,7 +6712,11 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                             this@MainActivity, currentSessionId, trimmedInput, trimmedOutput
                         )
                     }
-                    com.sdk.glassessdksample.ui.sync.ChatSync.pushTurn(this@MainActivity, "Mark 2 Glasses", fullInput, fullOutput)
+                    com.sdk.glassessdksample.ui.sync.ChatSync.pushTurn(
+                        this@MainActivity, "Mark 2 Glasses", fullInput, fullOutput,
+                        channel = com.sdk.glassessdksample.ui.sync.ChatSync.Channel.VOICE,
+                        sessionId = currentSessionId
+                    )
 
                     val lowerInput = fullInput.lowercase()
                     

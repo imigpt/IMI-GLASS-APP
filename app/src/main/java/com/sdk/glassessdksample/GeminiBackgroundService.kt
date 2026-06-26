@@ -5,14 +5,17 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import com.sdk.glassessdksample.ui.GeminiLiveService
 
 /**
@@ -66,9 +69,33 @@ class GeminiBackgroundService : Service() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
-        startForeground(NOTIF_ID, buildNotification())
-        acquireWakeLock()
-        Log.d(TAG, "✅ GeminiBackgroundService created — wake lock acquired")
+
+        // This is a foregroundServiceType="microphone" service. On Android 14+
+        // (API 34) startForeground() throws if RECORD_AUDIO isn't granted. The
+        // app normally defers starting this service until the permission is
+        // granted, but the OS can also auto-restart a STICKY service or auto-
+        // create it via a bind — so we guard here too and never let it crash
+        // the process. If we can't legally run as a microphone FGS, stop self.
+        if (!hasRecordAudioPermission()) {
+            Log.w(TAG, "⏹️ RECORD_AUDIO not granted — cannot run microphone FGS, stopping self")
+            stopSelf()
+            return
+        }
+
+        try {
+            startForeground(NOTIF_ID, buildNotification())
+            acquireWakeLock()
+            Log.d(TAG, "✅ GeminiBackgroundService created — wake lock acquired")
+        } catch (e: Exception) {
+            // e.g. ForegroundServiceStartNotAllowedException / SecurityException.
+            Log.e(TAG, "❌ startForeground failed — stopping self: ${e.message}", e)
+            stopSelf()
+        }
+    }
+
+    private fun hasRecordAudioPermission(): Boolean {
+        return ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
