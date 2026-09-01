@@ -301,7 +301,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             if (currentNewsKey == null || currentNewsKey.isBlank()) {
                 // No key configured - app will use Gemini AI fallback for news
                 Log.d(TAG, "News API key not set, will use Gemini fallback")
-            }
+            } 
         } catch (e: Exception) {
             Log.w(TAG, "Failed to read News API key from prefs: ${e.message}")
         }
