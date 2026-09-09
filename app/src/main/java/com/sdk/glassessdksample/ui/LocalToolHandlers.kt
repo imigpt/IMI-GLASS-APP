@@ -1,5 +1,6 @@
 package com.sdk.glassessdksample.ui
 
+import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -7,6 +8,7 @@ import okhttp3.Request
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URLEncoder
+import java.util.concurrent.TimeUnit
 
 /**
  * Small collection of local web tool helpers used by GeminiLiveService for quick lookups.
@@ -15,7 +17,19 @@ import java.net.URLEncoder
  * - These methods return short plain-text summaries suitable for conversational replies.
  */
 object LocalToolHandlers {
-    private val client = OkHttpClient()
+    private const val TAG = "LocalToolHandlers"
+
+    // 🆕 Explicit short timeouts. These calls run inside a `runBlocking` on the
+    // Gemini Live tool-call callback (see MainActivity.handleGeminiToolCall), so a
+    // hung/slow network call previously blocked that thread forever - Gemini Live
+    // never got a tool response and the user heard only the loading tone with no
+    // answer. A bounded timeout guarantees the tool call always returns in time.
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(6, TimeUnit.SECONDS)
+        .readTimeout(6, TimeUnit.SECONDS)
+        .writeTimeout(6, TimeUnit.SECONDS)
+        .callTimeout(8, TimeUnit.SECONDS)
+        .build()
 
     suspend fun dictionaryLookup(word: String): String = withContext(Dispatchers.IO) {
         try {
@@ -69,16 +83,28 @@ object LocalToolHandlers {
             val url = "https://api.duckduckgo.com/?q=$encoded&format=json&no_redirect=1"
             val req = Request.Builder().url(url).get().build()
             client.newCall(req).execute().use { resp ->
-                if (!resp.isSuccessful) return@withContext("No results for: $query")
-                val body = resp.body?.string() ?: return@withContext("No results for: $query")
-                val obj = JSONObject(body)
-                val abstractText = obj.optString("AbstractText")
-                if (abstractText.isNotBlank()) return@withContext(abstractText.take(800))
-                return@withContext(obj.optString("Abstract").ifEmpty { "No instant answer; try web_search_full" })
+                if (resp.isSuccessful) {
+                    val body = resp.body?.string()
+                    if (body != null) {
+                        val obj = JSONObject(body)
+                        val abstractText = obj.optString("AbstractText")
+                        if (abstractText.isNotBlank()) return@withContext(abstractText.take(800))
+                        val abstract = obj.optString("Abstract")
+                        if (abstract.isNotBlank()) return@withContext(abstract.take(800))
+                    }
+                }
             }
         } catch (e: Exception) {
-            return@withContext("Error performing web search: ${e.message}")
+            Log.w(TAG, "Instant answer lookup failed, falling back to full search: ${e.message}")
         }
+
+        // DuckDuckGo's instant-answer API has no abstract for most conversational
+        // queries ("what's happening in the country right now"), which used to
+        // return the literal string "No instant answer; try web_search_full" to the
+        // model. That reads as a dead end rather than a retryable failure, and the
+        // model would often end the turn without answering at all. Escalate to the
+        // full search here instead of handing that decision back to the model.
+        return@withContext webSearchFull(query)
     }
 
     suspend fun webSearchFull(query: String): String = withContext(Dispatchers.IO) {

@@ -4,6 +4,7 @@ import com.sdk.glassessdksample.ui.BluetoothEvent
 import com.sdk.glassessdksample.ui.DeviceType
 import com.sdk.glassessdksample.ui.DevicePreferenceManager
 import com.sdk.glassessdksample.ui.GeminiLiveService
+import com.sdk.glassessdksample.ui.ActiveMeetingActivity
 import com.sdk.glassessdksample.ui.HotHelper
 import com.sdk.glassessdksample.ui.LocalToolHandlers
 import com.sdk.glassessdksample.ui.Mark1MainActivity
@@ -33,6 +34,7 @@ import androidx.core.content.ContextCompat
 import org.greenrobot.eventbus.EventBus
 import org.greenrobot.eventbus.Subscribe
 import org.greenrobot.eventbus.ThreadMode
+import com.sdk.glassessdksample.utils.WakeChimePlayer
 
 class ListeningService : Service() {
     companion object {
@@ -40,6 +42,17 @@ class ListeningService : Service() {
         const val ACTION_WAKE_WORD_DETECTED = "com.sdk.glassessdksample.ACTION_WAKE_WORD_DETECTED"
         /** Ends an in-progress background conversation but keeps wake-word listening. */
         const val ACTION_STOP_BG_CONVERSATION = "com.sdk.ACTION_STOP_BG_CONVERSATION"
+
+        /**
+         * Re-arms wake-word detection after a caller decided not to take the mic.
+         *
+         * onBluetoothEvent disarms the detector the instant "Hey IMI" fires, on the
+         * assumption that whoever it hands off to will start a conversation. Any
+         * path that then bails out (glasses disconnected, AI muted, a session
+         * already running) must send this, or the detector stays disarmed and IMI
+         * goes permanently deaf until the app is reopened.
+         */
+        const val ACTION_REARM_WAKE_WORD = "com.sdk.ACTION_REARM_WAKE_WORD"
         private const val TAG = "ListeningService"
         private const val CHANNEL_ID = "imi_listening_channel"
         private const val NOTIF_ID = 1001
@@ -69,6 +82,13 @@ class ListeningService : Service() {
         private const val VISION_ARM_POLL_MS = 1_000L
 
         /**
+         * How long the Activity gets to take the mic after we hand it a wake word
+         * before we assume it failed and re-arm. Must comfortably exceed the chime
+         * plus SCO/websocket setup so it never fires on a healthy start.
+         */
+        private const val FOREGROUND_WAKE_WATCHDOG_MS = 12_000L
+
+        /**
          * Whether wake-word listening *should* be active. Kept in the companion so it
          * survives the OS re-creating this START_STICKY service: on a sticky restart
          * we must not re-arm the detector while a conversation owns the mic.
@@ -92,7 +112,6 @@ class ListeningService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
 
     private val mainHandler = Handler(Looper.getMainLooper())
-    private var chimePlayer: MediaPlayer? = null
     private var bgGeminiService: GeminiLiveService? = null
 
     // Single-reply mode (Continuous Chat OFF): set once the AI has answered a real
@@ -141,6 +160,11 @@ class ListeningService : Service() {
             )
             wakeLock?.acquire()
 
+        // Decode the wake chime up front. SoundPool loads asynchronously, and a
+        // cold decode on the first "Hey IMI" was one reason that first chime was
+        // routinely missed.
+        WakeChimePlayer.preload(this)
+
             // Subscribe to wake word events so we can forward them to MainActivity even
             // when the Activity is stopped (minimised / screen off).
             EventBus.getDefault().register(this)
@@ -158,6 +182,16 @@ class ListeningService : Service() {
             wakeLock?.let { if (it.isHeld) it.release() }
             stopSelf()
             return START_NOT_STICKY
+        }
+
+        // A caller declined the wake word (no glasses, muted, already talking).
+        // Put the detector back so the next "Hey IMI" is heard.
+        if (intent?.action == ACTION_REARM_WAKE_WORD) {
+            if (!bgConversationActive) {
+                wakeWordEnabled = true
+                rearmWakeWord("external re-arm request")
+            }
+            return START_STICKY
         }
 
         // The Activity took over (or the user tapped Stop): end the background
@@ -190,7 +224,15 @@ class ListeningService : Service() {
             return START_STICKY
         }
 
-        try { HotHelper.getInstance(applicationContext).start() } catch (_: Exception) {}
+        // 🎤 A meeting recording owns the microphone exclusively. Arming the detector
+        // here starts a second recorder against the live MediaRecorder and kills it,
+        // which is what stopped meeting minutes part-way through.
+        if (ActiveMeetingActivity.meetingActive) {
+            Log.i(TAG, "🎤 Meeting recording in progress — not arming wake word")
+            return START_STICKY
+        }
+
+        try { HotHelper.getInstance(applicationContext).armOnGlassMic() } catch (_: Exception) {}
 
         return START_STICKY
     }
@@ -211,7 +253,11 @@ class ListeningService : Service() {
                     mainHandler.postDelayed(this, VISION_ARM_POLL_MS)
                     return
                 }
-                try { HotHelper.getInstance(applicationContext).start() } catch (_: Exception) {}
+                if (ActiveMeetingActivity.meetingActive) {
+                    Log.i(TAG, "🎤 Meeting recording in progress — abandoning deferred wake-word arm")
+                    return
+                }
+                try { HotHelper.getInstance(applicationContext).armOnGlassMic() } catch (_: Exception) {}
                 Log.i(TAG, "🔁 Wake word armed now that the vision window has closed")
             }
         }, VISION_ARM_POLL_MS)
@@ -227,8 +273,9 @@ class ListeningService : Service() {
         try { bgGeminiService?.stopLiveConversation() } catch (_: Exception) {}
         bgGeminiService = null
         bgConversationActive = false
-        chimePlayer?.release()
-        chimePlayer = null
+        // The wake chime is a shared, preloaded sample owned by WakeChimePlayer and
+        // used by the Activities too, so it is deliberately NOT released here —
+        // tearing it down with this service would silence their wake sound.
     }
 
     /**
@@ -274,6 +321,13 @@ class ListeningService : Service() {
                     }
                     try {
                         startActivity(activityIntent)
+                        // The Activity may still decline the wake word (glasses
+                        // disconnected, AI muted, a session already running). It
+                        // sends ACTION_REARM_WAKE_WORD in those cases, but if it
+                        // crashes or never resumes nothing would re-arm us and the
+                        // wake word stays dead. This watchdog is the backstop: it
+                        // only fires if no conversation took the mic in time.
+                        scheduleForegroundWakeWatchdog()
                     } catch (e: Exception) {
                         // The Activity never came up, so nothing will take over the
                         // mic — re-arm here or the wake word stays dead until the
@@ -287,6 +341,21 @@ class ListeningService : Service() {
                 }
             }
         }
+    }
+
+    /**
+     * Backstop for the foreground hand-off: if the Activity never starts a
+     * conversation after we handed it a wake word, re-arm the detector so
+     * "Hey IMI" keeps working instead of going silently dead.
+     */
+    private fun scheduleForegroundWakeWatchdog() {
+        mainHandler.postDelayed({
+            if (!wakeWordEnabled && !bgConversationActive && !GeminiLiveService.isActive()) {
+                Log.w(TAG, "â±ï¸ Activity never started a conversation after wake â re-arming")
+                wakeWordEnabled = true
+                rearmWakeWord("foreground hand-off watchdog")
+            }
+        }, FOREGROUND_WAKE_WATCHDOG_MS)
     }
 
     /**
@@ -391,45 +460,34 @@ class ListeningService : Service() {
      */
     private fun rearmWakeWord(reason: String) {
         mainHandler.postDelayed({
+            if (ActiveMeetingActivity.meetingActive) {
+                Log.i(TAG, "🎤 Meeting recording in progress — skipping wake-word re-arm ($reason)")
+                return@postDelayed
+            }
             if (!bgConversationActive) {
                 wakeWordEnabled = true
-                try { HotHelper.getInstance(applicationContext).start() } catch (_: Exception) {}
+                try { HotHelper.getInstance(applicationContext).armOnGlassMic() } catch (_: Exception) {}
                 Log.i(TAG, "🔁 Wake word re-armed ($reason)")
             }
         }, REARM_DELAY_MS)
     }
 
-    /** Plays the wake chime through the current audio route, then invokes [then]. */
+    /**
+     * Plays the wake chime through the current audio route, then invokes [then].
+     *
+     * Delegates to [WakeChimePlayer] so all three wake paths (Mark 1, Mark 2 and
+     * this service) use one implementation. The MediaPlayer this replaced opened a
+     * fresh USAGE_ASSISTANCE_SONIFICATION output against the MODE_IN_COMMUNICATION
+     * session already holding SCO for the glasses mic; with A2DP suspended for the
+     * life of that link the playback was accepted but rendered to a suspended path,
+     * leaving the chime silent on many phones with nothing logged.
+     *
+     * waitForChime = true: unlike the in-app paths, the conversation must NOT start
+     * until the chime has finished here, or the chime is fed straight into the live
+     * mic that this service opens.
+     */
     private fun playWakeChime(then: () -> Unit) {
-        val fired = java.util.concurrent.atomic.AtomicBoolean(false)
-        val once = { if (fired.compareAndSet(false, true)) then() }
-        // Backstop so a failed chime can never swallow the conversation start. Must
-        // stay LONGER than the chime itself, or it fires every time and the session
-        // starts while the chime is still sounding — feeding the chime straight into
-        // the live mic. It was 1_200 against a ~1s chime; wake_chime.wav is 2_350.
-        mainHandler.postDelayed({ once() }, CHIME_DURATION_MS + 250)
-        try {
-            val mp = MediaPlayer().apply {
-                setAudioAttributes(
-                    AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                        .build()
-                )
-                val afd = resources.openRawResourceFd(R.raw.wake_chime)
-                setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
-                afd.close()
-                setOnCompletionListener { p -> p.release(); once() }
-                setOnErrorListener { p, _, _ -> p.release(); once(); true }
-                prepare()
-                start()
-            }
-            chimePlayer?.release()
-            chimePlayer = mp
-        } catch (e: Exception) {
-            Log.w(TAG, "Background chime failed: ${e.message}")
-            once()
-        }
+        WakeChimePlayer.play(this, waitForChime = true, then = then)
     }
 
     /** Minimal user/notes context so the background AI behaves like the in-app one. */
@@ -535,12 +593,20 @@ class ListeningService : Service() {
                 "stock_quote" -> bgStockQuote(args)
                 "get_news" -> bgWebSearch(mapOf("query" to (args["topic"] as? String ?: "top news today")))
                 "create_note" -> bgCreateNote(args)
+                "delete_note" ->
+                    "I can't delete notes by voice. Open Quick Notes and delete it there — " +
+                        "tap and hold a note, or open it and tap the delete icon."
                 "make_phone_call" -> bgPhoneCall(args)
                 "get_directions", "open_maps" -> bgDirections(args)
                 "read_notifications" -> bgReadNotifications()
                 "send_message" -> bgSendMessage(args)
                 "read_emails" -> bgReadEmails()
                 "identify_song" -> bgIdentifySong()
+                // 🌐 Browser tools drive an off-screen WebView, so they work
+                // here with the app in the background — that is the point.
+                in com.sdk.glassessdksample.ui.web.GlassBrowserTools.TOOL_NAMES ->
+                    com.sdk.glassessdksample.ui.web.GlassBrowserTools
+                        .handleBlocking(this@ListeningService, toolName, args)
                 "say_goodbye" -> { endBackgroundConversation(); "Goodbye!" }
                 "mute_ai" -> { endBackgroundConversation(); "Muting now." }
                 // Genuinely need the on-screen app (camera preview, meeting UI, media UI).

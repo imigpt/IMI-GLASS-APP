@@ -17,9 +17,13 @@ import com.sdk.glassessdksample.ui.ConversationHistoryActivity
 import com.sdk.glassessdksample.ui.MeetingMinutesActivity
 import com.sdk.glassessdksample.ui.QuickNotesActivity
 import com.sdk.glassessdksample.ui.UserMemoryActivity
+import com.sdk.glassessdksample.ui.web.WebBrowserActivity
 import com.sdk.glassessdksample.ui.gallery.GlassMediaGalleryActivity
 import com.sdk.glassessdksample.ui.gallery.ImageDescriptionVaultActivity
 import java.io.File
+import com.sdk.glassessdksample.utils.SystemBarsInsets
+import com.sdk.glassessdksample.ui.DevicePreferenceManager
+import com.sdk.glassessdksample.ui.DeviceType
 
 class MoreActivity : AppCompatActivity() {
 
@@ -31,10 +35,27 @@ class MoreActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         binding = ActivityMoreBinding.inflate(layoutInflater)
         setContentView(binding.root)
+        SystemBarsInsets.apply(this)
 
         setupActions()
         setupRecentsSlider()
+        applyDeviceGating()
         BottomNavManager.setup(binding.bottomNavigation, R.id.nav_more, this)
+    }
+
+    /**
+     * Mark 1 glasses have no camera, so every camera/vision-dependent feature
+     * on this screen (Live Gallery, Camera, Vision Chat, Glass Media Gallery,
+     * Vision Descriptions) must stay hidden for that device type.
+     */
+    private fun applyDeviceGating() {
+        val isMark1 = DevicePreferenceManager.getDeviceType(this) == DeviceType.MARK1
+        if (!isMark1) return
+
+        binding.layoutRecentsLabel.visibility = View.GONE
+        binding.layoutRecentsCard.visibility = View.GONE
+        binding.cardGlassGallery.visibility = View.GONE
+        binding.cardVisionDescriptions.visibility = View.GONE
     }
 
     override fun onResume() {
@@ -45,6 +66,7 @@ class MoreActivity : AppCompatActivity() {
     private fun setupActions() {
         binding.cardCamera.setOnClickListener { open(CameraActivity::class.java) }
         binding.cardQuickNotes.setOnClickListener { open(QuickNotesActivity::class.java) }
+        binding.cardWeb.setOnClickListener { open(WebBrowserActivity::class.java) }
         binding.cardMeetingMinutes.setOnClickListener { open(MeetingMinutesActivity::class.java) }
         binding.cardConversationHistory.setOnClickListener { open(ConversationHistoryActivity::class.java) }
         binding.cardChat.setOnClickListener { open(ChatActivity::class.java) }

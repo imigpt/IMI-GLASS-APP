@@ -115,8 +115,14 @@ class GeminiLiveService(
         // Pre-buffering: Wait for this many audio chunks before starting playback
         private const val PRE_BUFFER_COUNT = 3
         
-        // Audio timeout: How long to wait for more audio before declaring end of speech
-        private const val AUDIO_END_TIMEOUT_MS = 700L
+        // FALLBACK ONLY: how long a gap in arriving audio may last before the
+        // playback loop gives up on a turn that never sent an end-of-turn
+        // signal. Normal turns end on the server's own signal (see
+        // turnAudioComplete), so this no longer needs to be tight - and must
+        // not be: at the old 700ms an ordinary mid-sentence pause or network
+        // stall ended playback early and truncated the reply ("best
+        // restaurants in Jaipur" -> "best restaurants in").
+        private const val AUDIO_END_TIMEOUT_MS = 5000L
         // How long the first queued chunk of a turn may wait for the pre-buffer to
         // fill before we play it anyway. Gemini streams chunks milliseconds apart, so
         // a real multi-chunk reply always fills well inside this; only a reply that is
@@ -377,11 +383,36 @@ class GeminiLiveService(
     private var currentOutputTranscription = StringBuilder()
     private var receivedAudioInCurrentTurn = false
     private var hasTranscriptionForCurrentTurn = false
+
+    // Set when a tool runs during this turn. Gemini sometimes ends a turn straight
+    // after a tool response without speaking - the tool data comes back fine, the
+    // model just never narrates it, so the user is left waiting for a reply that
+    // never arrives. Tracked so an empty turn can be retried once (see
+    // recoverFromSilentTurn); reset with the other per-turn flags.
+    private var toolCallInCurrentTurn = false
+    private var lastToolResultSummary: String? = null
+    // Guards the retry so a model that stays silent cannot loop forever.
+    private var silentTurnRetried = false
     
     // Audio playback queue
     private val audioQueue = mutableListOf<ByteArray>()
     private val audioQueueLock = Any()
     private var isPreBuffering = true // Wait for buffer to fill before playing
+
+    /**
+     * True once the server has said this turn's audio is complete
+     * (turnComplete / generationComplete / interrupted).
+     *
+     * The playback loop used to decide the reply had finished purely from a
+     * short gap in arriving audio, which truncated replies whenever the model
+     * paused mid-sentence or the network stalled briefly - "best restaurants
+     * in Jaipur" came out as "best restaurants in". The server tells us
+     * authoritatively when a turn is over, so that is what ends playback now;
+     * the silence timeout is only a fallback for a turn whose end signal never
+     * arrives at all.
+     */
+    @Volatile
+    private var turnAudioComplete = false
     
     // 🆕 Mute functionality for vision chat integration
     private val isMuted = AtomicBoolean(false) // When true, blocks audio output (but keeps listening)
@@ -536,6 +567,18 @@ class GeminiLiveService(
                             }
                         }
                         Log.d(TAG, "🔊 PROCESSING CHIME STOPPED (max duration reached, no reply)")
+
+                        // 🆕 The server never sent turnComplete for this turn (dropped
+                        // response, stuck tool call, etc.), so recoverFromSilentTurn()
+                        // in handleGeminiMessage() never ran - that path only fires on
+                        // turnComplete. Without this, the session just goes silent
+                        // forever: no retry, no error, no listening. Nudge the model
+                        // for an answer now using whatever was transcribed so far, same
+                        // as the turnComplete-triggered recovery.
+                        val fullInput = currentInputTranscription.toString()
+                        if (!receivedAudioInCurrentTurn && !hasTranscriptionForCurrentTurn) {
+                            recoverFromSilentTurn(fullInput)
+                        }
                     }
                 }, thinkingCueToken, MAX_CUE_MS)
             } catch (e: Exception) {
@@ -1049,8 +1092,9 @@ class GeminiLiveService(
         if (!HIGH_QUALITY_PLAYBACK) return
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
         try {
-            val a2dp = audioManager?.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
-                ?.firstOrNull { it.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP }
+            val a2dp = audioManager?.getDevices(AudioManager.GET_DEVICES_OUTPUTS)?.let {
+                PreferredAudioDeviceResolver.findGlasses(context, it, AudioDeviceInfo.TYPE_BLUETOOTH_A2DP)
+            }
             if (a2dp != null) {
                 val ok = audioTrack?.setPreferredDevice(a2dp)
                 Log.d(TAG, "🎯 Playback re-pinned → ${a2dp.productName} [A2DP], success=$ok")
@@ -1136,8 +1180,9 @@ class GeminiLiveService(
                 Log.d(TAG, "🎧 Communication device already on Bluetooth SCO (${current.productName})")
                 return true
             }
-            val bt = am.availableCommunicationDevices
-                .firstOrNull { it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO }
+            val bt = PreferredAudioDeviceResolver.findGlasses(
+                context, am.availableCommunicationDevices, AudioDeviceInfo.TYPE_BLUETOOTH_SCO
+            )
             if (bt == null) {
                 Log.w(TAG, "⚠️ No Bluetooth SCO communication device offered by the system — " +
                         "the glasses may not expose HFP, or are not connected as a headset")
@@ -1397,11 +1442,13 @@ class GeminiLiveService(
                     Log.d(TAG, "   - ${dev.productName}: $typeStr")
                 }
                 
-                // Find and prefer Bluetooth SCO device
-                val bluetoothDevice = devices.firstOrNull { 
-                    it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO 
-                }
-                
+                // Find and prefer the paired glasses' Bluetooth SCO device specifically —
+                // not just any Bluetooth SCO device, in case a second BT accessory is
+                // also connected (see PreferredAudioDeviceResolver).
+                val bluetoothDevice = PreferredAudioDeviceResolver.findGlasses(
+                    context, devices, AudioDeviceInfo.TYPE_BLUETOOTH_SCO
+                )
+
                 if (bluetoothDevice != null) {
                     val success = audioRecord?.setPreferredDevice(bluetoothDevice)
                     Log.d(TAG, "🎯 Set preferred device to: ${bluetoothDevice.productName}, success=$success")
@@ -1482,12 +1529,12 @@ class GeminiLiveService(
             try {
                 val outputDevices = audioManager?.getDevices(AudioManager.GET_DEVICES_OUTPUTS) ?: arrayOf()
 
-                val a2dpDevice = outputDevices.firstOrNull {
-                    it.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP
-                }
-                val scoDevice = outputDevices.firstOrNull {
-                    it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO
-                }
+                val a2dpDevice = PreferredAudioDeviceResolver.findGlasses(
+                    context, outputDevices, AudioDeviceInfo.TYPE_BLUETOOTH_A2DP
+                )
+                val scoDevice = PreferredAudioDeviceResolver.findGlasses(
+                    context, outputDevices, AudioDeviceInfo.TYPE_BLUETOOTH_SCO
+                )
 
                 val chosen = if (HIGH_QUALITY_PLAYBACK && a2dpDevice != null) a2dpDevice else scoDevice
 
@@ -1628,10 +1675,15 @@ class GeminiLiveService(
                 // Transient hiccup (Gemini occasionally drops the socket mid-setup
                 // or right after connecting). Previously the user had to manually
                 // "quick start" again; instead, silently re-establish the session a
-                // couple of times before surfacing any error. Auth/config problems
-                // are not transient, so don't retry those.
+                // couple of times before surfacing any error. Auth/quota/billing
+                // problems are not transient, so don't retry those - a suspended key
+                // will fail identically on every retry, and retrying just delayed and
+                // muddied the real error (see errorMessage below).
                 val isAuthError = response?.code == 401 || response?.code == 403 ||
-                    t.message?.contains("401", ignoreCase = true) == true
+                    response?.code == 429 ||
+                    t.message?.contains("401", ignoreCase = true) == true ||
+                    t.message?.contains("403", ignoreCase = true) == true ||
+                    t.message?.contains("429", ignoreCase = true) == true
                 if (!isAuthError && autoReconnects < MAX_AUTO_RECONNECTS) {
                     autoReconnects++
                     Log.w(TAG, "⚠️ Connection dropped, auto-reconnecting (attempt $autoReconnects/$MAX_AUTO_RECONNECTS)")
@@ -1650,12 +1702,27 @@ class GeminiLiveService(
                     return
                 }
 
+                // Distinguishes "no network" from "the server refused us", which used
+                // to collapse into one generic "Connection failed" message that never
+                // named the actual HTTP status - so a 429 quota rejection and a 401
+                // revoked key both looked identical to a dropped WiFi connection, and
+                // the (previously mislabelled "Invalid OpenAI API Key") 401 branch
+                // fired for Gemini too since it only checked the message text, not
+                // which provider was active.
+                val providerLabel = if (activeProvider == ModelProvider.GPT_REALTIME) "OpenAI" else "Gemini"
                 val errorMessage = when {
+                    response?.code == 429 ->
+                        "$providerLabel API quota exceeded — check billing/usage limits (429: $responseBody)"
+                    response?.code == 401 ->
+                        "$providerLabel API key rejected as invalid (401: $responseBody)"
+                    response?.code == 403 ->
+                        "$providerLabel API key lacks permission or billing is not enabled (403: $responseBody)"
+                    response?.code != null ->
+                        "$providerLabel connection rejected (${response.code}: $responseBody)"
                     t.message?.contains("network", ignoreCase = true) == true -> "Network disconnected"
                     t.message?.contains("internet", ignoreCase = true) == true -> "No internet connection"
                     t.message?.contains("connection", ignoreCase = true) == true -> "Connection lost"
                     t.message?.contains("timeout", ignoreCase = true) == true -> "Connection timeout"
-                    t.message?.contains("401", ignoreCase = true) == true -> "Invalid OpenAI API Key"
                     else -> "Connection failed: ${t.message}"
                 }
                 
@@ -1719,6 +1786,34 @@ class GeminiLiveService(
                     // just sees the screen close with no answer and no explanation.
                     Log.e(TAG, "❌ Gemini Live rejected the session setup ($code: $reason)")
                     callbacks.onError("AI rejected the session setup: $reason")
+                } else if (code != 1000) {
+                    // Any other non-clean close (clean = 1000, the normal end-of-turn
+                    // shutdown this app itself requests) used to fall straight through
+                    // to cleanup() with nothing reported. That is exactly what a quota
+                    // exhaustion, billing suspension, or revoked-key rejection looks
+                    // like from the server: it can close the frame with a code other
+                    // than 1007 instead of failing the handshake, so it never hit
+                    // onFailure's error handling either. The user just saw the session
+                    // end with no explanation - indistinguishable from a normal stop.
+                    //
+                    // 1008 = policy violation, 1011 = internal error: Gemini uses both
+                    // for auth/quota/billing rejections depending on where in the
+                    // pipeline the request was refused. Log the reason text too, since
+                    // that is where "quota", "billing" or "permission" actually shows.
+                    val looksLikeAccessProblem = code == 1008 || code == 1011 ||
+                        reason.contains("quota", ignoreCase = true) ||
+                        reason.contains("billing", ignoreCase = true) ||
+                        reason.contains("permission", ignoreCase = true) ||
+                        reason.contains("exhausted", ignoreCase = true) ||
+                        reason.contains("suspended", ignoreCase = true)
+
+                    val message = if (looksLikeAccessProblem) {
+                        "AI unavailable — the API key may be out of quota, unbilled, or revoked ($code: ${reason.ifBlank { "no reason given" }})"
+                    } else {
+                        "AI session ended unexpectedly ($code: ${reason.ifBlank { "no reason given" }})"
+                    }
+                    Log.e(TAG, "❌ $message")
+                    callbacks.onError(message)
                 }
 
                 callbacks.onConnectionStatusChanged(false)
@@ -1874,6 +1969,21 @@ class GeminiLiveService(
                         "content" to mapOf("type" to "string", "description" to "Content of the note")
                     ),
                     "required" to listOf("title", "content")
+                )
+            ),
+            mapOf(
+                "type" to "function",
+                "name" to "delete_note",
+                "description" to
+                    "Call this when the user asks to delete, remove, or get rid of a note " +
+                    "or reminder by voice. There is no voice-driven delete - it deliberately " +
+                    "cannot be done this way, since a spoken description can't reliably pick " +
+                    "out one specific note among many. This tool does not delete anything; it " +
+                    "exists so you tell the user clearly that they need to delete it themselves " +
+                    "in Quick Notes, rather than claiming it's done or staying silent.",
+                "parameters" to mapOf(
+                    "type" to "object",
+                    "properties" to emptyMap<String, Any>()
                 )
             ),
             mapOf(
@@ -2036,11 +2146,15 @@ class GeminiLiveService(
         // ListeningService) has no analyze_view / capture_new_frame case, so
         // declaring them there only gets the model to call something that comes
         // back "not yet implemented" — worse than not offering them at all.
-        val tools = if (isMark2) {
+        val visionFiltered = if (isMark2) {
             allTools
         } else {
             allTools.filterNot { (it["name"] as? String) in VISION_TOOL_NAMES }
         }
+
+        // 🌐 Browser tools work on both marks — they drive an off-screen WebView
+        // on the phone, not the glasses hardware — so they are not mark-gated.
+        val tools = visionFiltered + com.sdk.glassessdksample.ui.web.GlassBrowserTools.declarations()
 
         // 👁️ Every other tool in this list has an explicit "call this when the
         // user says X" section below. Vision had none, so with the "reply FAST
@@ -2069,6 +2183,7 @@ CRITICAL: Reply FAST and CONCISELY. No filler words. Match the user's vibe.
 
 QUICK NOTES: When the user asks to "remember this", "add to notes", "note this down", or mentions saving information, use the create_note tool to save it.
 When the user asks to "take a pic and add to notes", "click photo and save in notes", "capture this and note it", or wants to photograph something AND save it as a note, use the capture_photo_note tool.
+When the user asks to delete, remove, or get rid of a note (e.g. "delete that note", "remove my note about X"), call the delete_note tool. Do not claim you deleted it and do not say nothing - delete_note tells you the correct thing to say.
 
 MEETING MINUTES: When the user asks to "start meeting minutes", "record this meeting", "start recording the meeting", or similar, use the start_meeting tool to begin recording. If they mention a specific meeting name (e.g., "start meeting minutes for Raghav Meeting"), extract the meeting name and pass it in the 'title' parameter. Otherwise leave title empty for auto-generation.
 
@@ -2079,6 +2194,19 @@ SILENT MODE: When the user asks you to be quiet, go silent, stop talking, mute y
 SONG IDENTIFICATION: When the user asks what song or music is playing (in any language), call identify_song. It listens to the audio already around you, so never ask the user to replay the song or hold up the phone. Report the result naturally in one short line, like "That's Warriors by Imagine Dragons." If it comes back saying it couldn't identify the song, just say so briefly without apologising at length.
 
 EMAIL - READING: When the user asks about new emails, their inbox, or unread mail, call read_emails and tell them the result briefly.
+
+WEB BROWSER - YOU CAN USE WEBSITES: You control a real browser on the user's phone, already signed in to sites they use. Call browse_web and put their whole request in the 'goal' parameter. To read back whatever page is open, call read_current_page. For "how far is my Claude project", "what was I doing in ChatGPT", call catch_up_on_ai.
+Call browse_web whenever the answer depends on information that is CURRENT or specific to a live site - flights, prices, availability, timings, scores, news, stock of an item, opening hours, "what's on X right now". Examples that MUST use browse_web: "find me flights to Delhi", "how much is this on Amazon", "is this in stock", "what's the score", "when does it open", "check the news on this". You do not know these from memory and your memory is out of date.
+NEVER answer this kind of question by naming a website and telling the user to go look themselves. Saying "you can check the IndiGo website" or "have a look at their site for details" is WRONG - you have a browser, so open it and get the actual answer. Call the tool FIRST, then report what you actually found.
+Once a page from browse_web/browser_continue is open, the whole browser stays voice-controlled turn by turn - do NOT call browse_web again for a simple next step on the SAME page. Use the direct tools instead, which act immediately:
+- "scroll down"/"scroll up"/"page down"/"scroll to the top" -> browser_scroll (direction, amount: "a bit"/"a lot"/"top"/"bottom")
+- "click sign up"/"tap the second result"/"open that link" -> browser_click (description of what to tap, in the user's words)
+- "type headphones in the search box"/"put my name in the name field" -> browser_type (which field, the text, and whether to submit/press enter)
+- "go back"/"previous page" -> browser_back ; "go forward" -> browser_forward
+- "never mind"/"cancel that"/"forget it" about something the browser is doing or waiting on -> browser_cancel
+Only fall back to a fresh browse_web call for a new, multi-step goal that isn't just one direct action on the current page.
+If a browser tool comes back saying you need the user to sign in, solve a security check, or finish something on the phone, tell them EXACTLY that in one short line and stop - do not try another way around it and never ask them for a password or a one-time code. When they say they are done ("done", "logged in", "carry on", "ho gaya"), call browser_continue. If they instead say to drop it, call browser_cancel.
+Browser tools take a few seconds. Say one short line like "Let me check" BEFORE calling, then report what came back.
 
 EMAIL - SENDING (always confirm first): When the user asks you to email or write to someone, call draft_email with your best guess at recipient, subject, and body from what they said. Then READ THE DRAFT BACK to the user out loud in your own next spoken turn (recipient, subject, and a short summary of the body) and ask "should I send it?". Do NOT call confirm_send_email in the same turn as draft_email. Only call confirm_send_email in a LATER turn, after the user has explicitly agreed (e.g. "yes", "send it", "go ahead"). If the user wants changes, call draft_email again with the corrected details and read it back again. If the user declines, do not send anything.
 $visionInstruction"""
@@ -2441,8 +2569,14 @@ $visionInstruction"""
                     } else if (!isPreBuffering) {
                         // Queue is empty but we were playing - check if more audio is coming
                         val timeSinceLastAudio = System.currentTimeMillis() - lastAudioTime
-                        
-                        if (timeSinceLastAudio > AUDIO_END_TIMEOUT_MS) {
+
+                        // End the turn when the SERVER says it's over. A gap in
+                        // arriving audio is not the same thing: the model pauses
+                        // mid-sentence and the network stalls, and treating either
+                        // as "finished" truncated replies ("best restaurants in
+                        // Jaipur" -> "best restaurants in"). The timeout below is
+                        // only a fallback for a turn whose end signal never lands.
+                        if (turnAudioComplete || timeSinceLastAudio > AUDIO_END_TIMEOUT_MS) {
                             // No new audio for a while, AI likely finished speaking.
                             //
                             // IMPORTANT: "no more writes" is NOT "finished playing".
@@ -2452,12 +2586,15 @@ $visionInstruction"""
                             // suspend A2DP and cut the tail off — "goodbye" came out
                             // as "good". Wait for the hardware playback head to reach
                             // everything we wrote before touching the route.
+                            val endedBy = if (turnAudioComplete) "server end-of-turn"
+                                else "fallback timeout ${AUDIO_END_TIMEOUT_MS}ms"
                             waitForTrackToDrain()
                             reacquireScoForListening()
                             isAIPlaying.set(false) // Resume mic capture
                             isPreBuffering = true // Reset for next turn
+                            turnAudioComplete = false // Reset for next turn
                             callbacks.onAudioPlaybackEnd()
-                            Log.d(TAG, "🔇 Audio playback ended (no new audio for ${AUDIO_END_TIMEOUT_MS}ms)")
+                            Log.d(TAG, "🔇 Audio playback ended ($endedBy)")
                         }
                         delay(5) // Quick check for new audio
                     } else {
@@ -2765,6 +2902,17 @@ $visionInstruction"""
             if (serverContent != null) {
                 val turnComplete = serverContent["turnComplete"] as? Boolean ?: false
                 val interrupted = serverContent["interrupted"] as? Boolean ?: false
+                // Gemini sends generationComplete when it has finished producing
+                // this turn's audio, usually a moment before turnComplete.
+                val generationComplete = serverContent["generationComplete"] as? Boolean ?: false
+
+                // Tell the playback loop the turn's audio is genuinely finished,
+                // so it stops guessing from gaps between chunks and truncating
+                // replies mid-sentence. It still drains whatever is already
+                // queued before ending — this only says "no more is coming".
+                if (turnComplete || generationComplete || interrupted) {
+                    turnAudioComplete = true
+                }
 
                 // User-speech transcript (requested via input_audio_transcription).
                 val inputTranscription = serverContent["inputTranscription"] as? Map<*, *>
@@ -2812,6 +2960,9 @@ $visionInstruction"""
                                     Log.d(TAG, "🤖 GEMINI RESPONSE AUDIO RECEIVED")
                                     stopThinkingSound()
                                 }
+                                // More audio for this turn means it is not over,
+                                // whatever a previous turn's end signal left behind.
+                                turnAudioComplete = false
                                 val audioData = Base64.decode(audioBase64, Base64.DEFAULT)
                                 synchronized(audioQueueLock) {
                                     audioQueue.add(audioData)
@@ -2838,6 +2989,22 @@ $visionInstruction"""
                     stopThinkingSound()
                     val fullInput = currentInputTranscription.toString()
                     val fullOutput = currentOutputTranscription.toString()
+
+                    // Gemini can close a turn having produced no audio and no text -
+                    // most often right after a tool response, where it treats the tool
+                    // result as the whole answer. Nothing plays and the user waits for
+                    // a reply that never comes, until the 10s session fallback fires.
+                    // Detect it here and ask once for the answer to actually be spoken.
+                    val producedNothing = !receivedAudioInCurrentTurn &&
+                        !hasTranscriptionForCurrentTurn &&
+                        fullOutput.isBlank()
+                    if (producedNothing && !interrupted && recoverFromSilentTurn(fullInput)) {
+                        // Retry sent: keep the turn's transcripts so the recovered
+                        // reply is reported against the question the user actually
+                        // asked, and do not signal turn-complete yet.
+                        return
+                    }
+
                     callbacks.onTranscriptionUpdate(fullInput, fullOutput, true)
                     if (fullInput.isNotEmpty()) {
                         visionTranscriptionListener?.onUserTranscription(fullInput, true)
@@ -2847,6 +3014,9 @@ $visionInstruction"""
                     currentOutputTranscription.clear()
                     receivedAudioInCurrentTurn = false
                     hasTranscriptionForCurrentTurn = false
+                    toolCallInCurrentTurn = false
+                    lastToolResultSummary = null
+                    silentTurnRetried = false
                 }
                 return
             }
@@ -2862,10 +3032,14 @@ $visionInstruction"""
                     val args = fcMap["args"] as? Map<String, Any> ?: emptyMap()
                     
                     Log.d(TAG, "🔧 Gemini function call: $name, args: $args")
+                    toolCallInCurrentTurn = true
                     scope.launch {
                         try {
                             val result = callbacks.onToolCall(name, args)
                             Log.d(TAG, "✅ Gemini function $name result: $result")
+                            // Kept so a turn that ends without narration can still be
+                            // salvaged from the data the tool already fetched.
+                            lastToolResultSummary = result
                             sendGeminiFunctionResponse(id, name, result)
                         } catch (e: Exception) {
                             Log.e(TAG, "❌ Error executing Gemini function $name: ${e.message}")
@@ -2889,6 +3063,58 @@ $visionInstruction"""
         }
     }
     
+    /**
+     * Salvages a turn that ended with no spoken reply.
+     *
+     * Gemini occasionally completes a turn after a tool response without narrating
+     * the result. The data is present and correct - it simply never gets spoken, so
+     * the user hears silence and the session eventually force-stops. Rather than
+     * leaving that dead air, ask the model once to say the answer.
+     *
+     * Only ever retries once per turn: if the model stays silent after being asked
+     * directly, retrying again would just repeat the silence. When a tool did run,
+     * its result is included so the answer can be given even if the model has lost
+     * the thread of it.
+     *
+     * @return true if a retry was sent and the turn should stay open.
+     */
+    private fun recoverFromSilentTurn(userInput: String): Boolean {
+        if (silentTurnRetried) {
+            Log.w(TAG, "⚠️ Turn produced no reply again after retry - giving up on this turn")
+            return false
+        }
+        // A turn with no user speech is usually a stray/empty model turn rather
+        // than a failed answer; nudging there would speak into a silent room.
+        if (userInput.isBlank() && !toolCallInCurrentTurn) {
+            return false
+        }
+        if (webSocket == null || !isSetupComplete.get()) {
+            Log.w(TAG, "⚠️ Silent turn but session is not ready - cannot retry")
+            return false
+        }
+
+        silentTurnRetried = true
+        val toolResult = lastToolResultSummary
+
+        val prompt = if (toolCallInCurrentTurn && !toolResult.isNullOrBlank()) {
+            Log.w(TAG, "⚠️ Silent turn after tool call - asking Gemini to speak the result")
+            "You called a tool and received this result but did not reply to the user. " +
+                "Answer their question now in 1-2 short sentences using this information, " +
+                "speaking naturally and without mentioning tools or this instruction. " +
+                "Question: \"$userInput\". Information: $toolResult"
+        } else {
+            Log.w(TAG, "⚠️ Silent turn with no reply - asking Gemini to answer")
+            "You did not reply to the user. Answer their question now in 1-2 short " +
+                "sentences, speaking naturally and without mentioning this instruction. " +
+                "If you cannot answer, say so briefly. Question: \"$userInput\""
+        }
+
+        // speakDirectly=false: this is an instruction to answer, not a script to
+        // read aloud verbatim.
+        speakText(prompt, speakDirectly = false)
+        return true
+    }
+
     /**
      * Send function response back to Gemini Live
      */
@@ -3161,6 +3387,7 @@ $visionInstruction"""
      */
     fun interruptCurrentResponse() {
         Log.d(TAG, "🛑 interruptCurrentResponse called - clearing audio queue and stopping AI playback")
+        turnAudioComplete = false // Don't carry this turn's end state into the next
         synchronized(audioQueueLock) {
             audioQueue.clear()
         }

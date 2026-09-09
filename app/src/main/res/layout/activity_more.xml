@@ -42,7 +42,9 @@
                 android:layout_marginBottom="28dp" />
 
             <!-- ============ YOUR RECENTS LABEL ============ -->
+            <!-- Hidden on Mark 1 (no camera hardware); see MoreActivity.applyDeviceGating() -->
             <LinearLayout
+                android:id="@+id/layoutRecentsLabel"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:orientation="horizontal"
@@ -65,7 +67,10 @@
             </LinearLayout>
 
             <!-- ============ RECENTS CARD (Figma: 356x243, radius 20) ============ -->
+            <!-- Hidden on Mark 1: contains Live Gallery, Camera and Vision Chat,
+                 all of which need the camera hardware that Mark 1 doesn't have. -->
             <LinearLayout
+                android:id="@+id/layoutRecentsCard"
                 android:layout_width="match_parent"
                 android:layout_height="243dp"
                 android:orientation="horizontal"
@@ -261,6 +266,44 @@
                     android:layout_weight="1"
                     android:layout_marginStart="14dp"
                     android:text="Quick Note"
+                    android:textColor="#ADADAD"
+                    android:textSize="16sp" />
+
+                <ImageView
+                    android:layout_width="18dp"
+                    android:layout_height="18dp"
+                    android:src="@drawable/ic_arrow_right"
+                    app:tint="#FFFFFF" />
+            </LinearLayout>
+
+            <!-- Web (in-app browser) -->
+            <LinearLayout
+                android:id="@+id/cardWeb"
+                android:layout_width="match_parent"
+                android:layout_height="74dp"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:background="@drawable/bg_more_quick_note"
+                android:paddingStart="14dp"
+                android:paddingEnd="16dp"
+                android:layout_marginBottom="9dp"
+                android:clickable="true"
+                android:focusable="true">
+
+                <ImageView
+                    android:layout_width="36dp"
+                    android:layout_height="36dp"
+                    android:background="@drawable/bg_more_note_icon"
+                    android:padding="9dp"
+                    android:src="@drawable/ic_web"
+                    app:tint="#ADADAD" />
+
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:layout_marginStart="14dp"
+                    android:text="Web"
                     android:textColor="#ADADAD"
                     android:textSize="16sp" />
 

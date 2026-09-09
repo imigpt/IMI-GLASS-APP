@@ -192,6 +192,23 @@ class HotHelper private constructor(private val context: Context) {
     }
 
     /**
+     * Arm the detector on the GLASSES mic.
+     *
+     * [useGlassBLEAudio] is sticky process-wide state, and a bare [start] just
+     * inherits whatever the last caller happened to leave it as. Mark 1 sets it
+     * false during pre-warm (so the pre-warm pass doesn't try to bring SCO up
+     * before the glasses are connected), which meant every later start — the
+     * background service's included — silently ran on the phone mic instead.
+     *
+     * Callers that want the glasses mic should use this rather than setting the
+     * flag and calling start() separately, so the two can't drift apart again.
+     */
+    fun armOnGlassMic() {
+        setPreferGlassBleAudio(true)
+        start()
+    }
+
+    /**
      * Set detection threshold (0.0 to 1.0)
      * Lower = more sensitive but more false positives
      * Higher = less sensitive but fewer false positives
@@ -251,6 +268,21 @@ class HotHelper private constructor(private val context: Context) {
         }
 
         syncEngineFromSettings()
+
+        // With two Bluetooth audio devices connected at once, Android's own
+        // routing decides which one gets the audio — the app cannot reliably
+        // force it to the glasses (see PreferredAudioDeviceResolver). Rather than
+        // silently risking "Hey IMI" going to the wrong device, block starting
+        // until only the glasses are connected, and tell the user why.
+        if (PreferredAudioDeviceResolver.hasMultipleBluetoothAudioDevicesConnected(context)) {
+            val names = PreferredAudioDeviceResolver.connectedBluetoothAudioDeviceNames(context)
+            Log.w(TAG, "⚠️ Multiple Bluetooth audio devices connected ($names) — " +
+                "not starting wake word detection until only the glasses are connected")
+            MultipleBluetoothDeviceNotifier.notify(context, names)
+            return
+        } else {
+            MultipleBluetoothDeviceNotifier.clear(context)
+        }
 
         if (isStartPending) {
             val pendingAge = System.currentTimeMillis() - startPendingSinceMs
@@ -498,8 +530,9 @@ class HotHelper private constructor(private val context: Context) {
                 if (am.mode != AudioManager.MODE_IN_COMMUNICATION) {
                     am.mode = AudioManager.MODE_IN_COMMUNICATION
                 }
-                val bt = am.availableCommunicationDevices
-                    .firstOrNull { it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO }
+                val bt = PreferredAudioDeviceResolver.findGlasses(
+                    context, am.availableCommunicationDevices, AudioDeviceInfo.TYPE_BLUETOOTH_SCO
+                )
                 if (bt != null && am.setCommunicationDevice(bt)) {
                     Log.d(TAG, "🎧 Wake detection routed to glasses via setCommunicationDevice(${bt.productName})")
                     startDetectorInternal(requestId)
