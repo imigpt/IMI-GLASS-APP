@@ -143,12 +143,18 @@ class GeminiLiveService(
         private const val THINKING_CUE_VOLUME = 0.7f
         // Length of res/raw/processing_chime.wav (1071 ms), rounded up.
         private const val CHIME_DURATION_MS = 1100L
-        // Hard cap on the looping cue. It exists only for the turn where no reply
-        // ever arrives — normally stopThinkingSound() ends the cue long before this.
-        // Sized past the slowest observed grounded turn (a Google Search reply took
-        // 3.81s from speech-end) with margin, but short enough that a stuck cue is a
-        // brief annoyance rather than an endless loop.
-        private const val MAX_CUE_MS = 8000L
+        // Hard cap on the looping cue, and in practice the deadline for rescuing a
+        // turn: when it expires with no reply, recoverFromSilentTurn() nudges the
+        // model to answer (see startThinkingSound). Normally stopThinkingSound() ends
+        // the cue long before this.
+        //
+        // Was 8000ms, which is far too long to sit listening to a loading tone — that
+        // is the "loading, loading, loading" the user hears when a grounded search
+        // comes back empty and the model goes quiet instead of answering. The slowest
+        // grounded turn actually observed was 3.81s from speech-end, so 6s still
+        // clears a genuinely slow search with margin while cutting the dead air by a
+        // quarter and getting the recovery nudge out sooner.
+        private const val MAX_CUE_MS = 6000L
         
         // Loudness settings
         private const val SOFTWARE_GAIN = 1.0f
@@ -313,8 +319,16 @@ class GeminiLiveService(
         fun onTranscriptionUpdate(input: String, output: String, isFinal: Boolean)
         fun onTurnComplete(fullInput: String, fullOutput: String)
         
-        // Tool call callback - called when Gemini wants to execute a function
-        fun onToolCall(toolName: String, args: Map<String, Any>): String
+        // Tool call callback - called when Gemini wants to execute a function.
+        //
+        // suspend, deliberately. Handlers do network I/O, and while this was a plain
+        // function they wrapped every call in runBlocking. All three call sites are
+        // inside scope.launch on Dispatchers.IO — the same pool that also runs the
+        // mic capture and audio playback loops — so each runBlocking pinned an IO
+        // worker for up to its 8s call timeout. A turn with a few tool calls starved
+        // the audio loops of threads and the app froze mid-conversation. As a suspend
+        // fun the handler releases its thread while waiting on the network.
+        suspend fun onToolCall(toolName: String, args: Map<String, Any>): String
         fun onAudioPlaybackStart()
         fun onAudioPlaybackEnd()
         fun onError(error: String)
@@ -344,11 +358,42 @@ class GeminiLiveService(
 
     private val gson = com.google.gson.Gson()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    // The mic capture and audio playback loops each run for the whole session and
+    // never yield voluntarily for long — capture blocks in AudioRecord.read(), and
+    // playback blocks in AudioTrack.write(). Running them on Dispatchers.IO meant
+    // they competed for the same bounded pool as every tool call, reconnect and
+    // upload in the app: a few slow network tool calls could take every worker and
+    // the audio loops simply stopped being scheduled, which is what the frozen
+    // conversation looked like. One dedicated thread each removes that coupling
+    // entirely, and audio threads get URGENT_AUDIO priority so the OS schedules
+    // them ahead of ordinary background work.
+    private val audioCaptureDispatcher = newSingleThreadAudioDispatcher("imi-audio-capture")
+    private val audioPlaybackDispatcher = newSingleThreadAudioDispatcher("imi-audio-playback")
+
+    private fun newSingleThreadAudioDispatcher(name: String) =
+        java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+            Thread({
+                android.os.Process.setThreadPriority(
+                    android.os.Process.THREAD_PRIORITY_URGENT_AUDIO
+                )
+                r.run()
+            }, name).apply { isDaemon = true }
+        }.asCoroutineDispatcher()
     
     // WebSocket components
     private var webSocket: WebSocket? = null
+    // Timeouts matter as much as the ping here. With only a pingInterval and no
+    // read/connect timeout, a silently dead network (lift, tunnel, weak wifi) left
+    // the socket sitting open forever: onFailure never fired, so the auto-reconnect
+    // path below was never reached and the session hung with no error shown. A 10s
+    // ping plus a 30s read timeout means a dead link surfaces as a failure — and so
+    // triggers a reconnect — within seconds instead of never.
     private val client = OkHttpClient.Builder()
-        .pingInterval(20, java.util.concurrent.TimeUnit.SECONDS)
+        .pingInterval(10, java.util.concurrent.TimeUnit.SECONDS)
+        .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+        .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+        .writeTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
         .build()
 
     // Audio components
@@ -575,8 +620,17 @@ class GeminiLiveService(
                         // forever: no retry, no error, no listening. Nudge the model
                         // for an answer now using whatever was transcribed so far, same
                         // as the turnComplete-triggered recovery.
+                        // The test is "has the user HEARD anything", which is
+                        // receivedAudioInCurrentTurn alone. hasTranscriptionForCurrentTurn
+                        // used to be part of it, and that is what left the cue looping
+                        // forever: a turn where the model emitted text but never any
+                        // audio — a grounded search that came back empty, a reply the
+                        // model started and abandoned — set that flag, so this guard
+                        // decided the turn was fine and skipped the rescue. Nothing was
+                        // ever spoken and the user just heard the loading tone until the
+                        // session timed out. Text the user cannot hear is not a reply.
                         val fullInput = currentInputTranscription.toString()
-                        if (!receivedAudioInCurrentTurn && !hasTranscriptionForCurrentTurn) {
+                        if (!receivedAudioInCurrentTurn) {
                             recoverFromSilentTurn(fullInput)
                         }
                     }
@@ -1961,7 +2015,7 @@ class GeminiLiveService(
             mapOf(
                 "type" to "function",
                 "name" to "create_note",
-                "description" to "Create a quick note or reminder when user asks to remember something or add to notes",
+                "description" to "Save a note. Use when the user asks to remember something, AND whenever your answer is a long list or too much detail to speak aloud - put the full answer in the note instead of reading it out.",
                 "parameters" to mapOf(
                     "type" to "object",
                     "properties" to mapOf(
@@ -2021,18 +2075,27 @@ class GeminiLiveService(
                     )
                 )
             ),
-            mapOf(
-                "type" to "function",
-                "name" to "web_search",
-                "description" to "Perform a web search and return a concise summary",
-                "parameters" to mapOf(
-                    "type" to "object",
-                    "properties" to mapOf(
-                        "query" to mapOf("type" to "string", "description" to "Search query to look up on the web")
-                    ),
-                    "required" to listOf("query")
-                )
-            ),
+            // web_search is deliberately NOT declared either, for the same reason as
+            // the browser tools below: any client-side search tool competes with
+            // Gemini's own google_search grounding, and the model reliably picks the
+            // tool it can see. That turned one-round-trip grounded answers into a
+            // DuckDuckGo scrape that returns a single snippet — the "you could check
+            // TripAdvisor, there are several options" style non-answer. Grounding
+            // handles these directly and far better.
+            // browse_web / read_current_page are deliberately NOT declared here.
+            //
+            // Declaring them made the model prefer the on-device browser for ordinary
+            // questions ("flights to Jaipur", "restaurants nearby"). That path opens a
+            // real WebView, which hits sign-in walls and CAPTCHAs it is not allowed to
+            // solve — so the user got "I couldn't get past the security check, you can
+            // fix it on your phone" instead of an answer, and no amount of prompt
+            // wording stopped the model choosing a tool that was sitting right there.
+            // Gemini's own google_search grounding (see the setup message) answers
+            // these server-side in the same reply, which is what this should do.
+            //
+            // The handlers still exist in every onToolCall dispatcher, so the browser
+            // remains reachable from the Web section of the app — it is just no longer
+            // something the voice model can reach for on its own.
             mapOf(
                 "type" to "function",
                 "name" to "get_news",
@@ -2195,18 +2258,17 @@ SONG IDENTIFICATION: When the user asks what song or music is playing (in any la
 
 EMAIL - READING: When the user asks about new emails, their inbox, or unread mail, call read_emails and tell them the result briefly.
 
-WEB BROWSER - YOU CAN USE WEBSITES: You control a real browser on the user's phone, already signed in to sites they use. Call browse_web and put their whole request in the 'goal' parameter. To read back whatever page is open, call read_current_page. For "how far is my Claude project", "what was I doing in ChatGPT", call catch_up_on_ai.
-Call browse_web whenever the answer depends on information that is CURRENT or specific to a live site - flights, prices, availability, timings, scores, news, stock of an item, opening hours, "what's on X right now". Examples that MUST use browse_web: "find me flights to Delhi", "how much is this on Amazon", "is this in stock", "what's the score", "when does it open", "check the news on this". You do not know these from memory and your memory is out of date.
-NEVER answer this kind of question by naming a website and telling the user to go look themselves. Saying "you can check the IndiGo website" or "have a look at their site for details" is WRONG - you have a browser, so open it and get the actual answer. Call the tool FIRST, then report what you actually found.
-Once a page from browse_web/browser_continue is open, the whole browser stays voice-controlled turn by turn - do NOT call browse_web again for a simple next step on the SAME page. Use the direct tools instead, which act immediately:
-- "scroll down"/"scroll up"/"page down"/"scroll to the top" -> browser_scroll (direction, amount: "a bit"/"a lot"/"top"/"bottom")
-- "click sign up"/"tap the second result"/"open that link" -> browser_click (description of what to tap, in the user's words)
-- "type headphones in the search box"/"put my name in the name field" -> browser_type (which field, the text, and whether to submit/press enter)
-- "go back"/"previous page" -> browser_back ; "go forward" -> browser_forward
-- "never mind"/"cancel that"/"forget it" about something the browser is doing or waiting on -> browser_cancel
-Only fall back to a fresh browse_web call for a new, multi-step goal that isn't just one direct action on the current page.
-If a browser tool comes back saying you need the user to sign in, solve a security check, or finish something on the phone, tell them EXACTLY that in one short line and stop - do not try another way around it and never ask them for a password or a one-time code. When they say they are done ("done", "logged in", "carry on", "ho gaya"), call browser_continue. If they instead say to drop it, call browser_cancel.
-Browser tools take a few seconds. Say one short line like "Let me check" BEFORE calling, then report what came back.
+ANSWERING QUESTIONS ABOUT CURRENT INFORMATION - THIS IS THE MOST IMPORTANT RULE:
+You have Google Search built in. It runs on Google's servers as part of this very reply. There is no tool to call, nothing happens on the user's phone, and there is nothing to wait for.
+Search only when the answer really does change over time - live flight times and prices, today's news, current weather, scores, whether a place is open right now, "what's happening".
+ANSWER FROM YOUR OWN KNOWLEDGE, WITHOUT SEARCHING, for anything general or stable. Places to visit in Vietnam, what a city is known for, how to cook something, history, how something works, recommendations, explanations, advice, opinions, ideas - you already know these. Just answer.
+NEVER leave a question unanswered. Every single turn must end with you actually saying something useful out loud - silence is the worst possible outcome, far worse than an imperfect answer.
+Avoid "I don't know" / "I couldn't find that" for general questions: you have broad world knowledge, so use it. But if a search comes back empty, do NOT go quiet and do NOT keep thinking - answer immediately from what you already know and simply note the one part you could not confirm. For example: "I can't get today's exact fares, but Delhi to Jaipur is about an hour and IndiGo, Air India and SpiceJet all fly it." Always give the user something.
+Whichever way you answer, give the ACTUAL ANSWER IN THIS SAME REPLY.
+FORBIDDEN, never say any of these: "let me check", "I'm searching", "one moment", "I'll find out", "let me look that up", "I couldn't get past the security check", "you can do it on your phone", "you can check TripAdvisor", "have a look at their website", "there are several options you could browse".
+WHEN THE ANSWER IS TOO LONG TO SPEAK: You are talking through glasses, so a long spoken list is useless - the user cannot scroll back and will not remember it. If the honest answer needs more than about 4 items or more than roughly 3 sentences (a packing list, a full itinerary, step-by-step instructions, "list 20 songs", a detailed comparison), call create_note with the COMPLETE answer in the content and a short clear title. Then say ONE short line telling them it is saved and giving them the headline of it, for example: "I've put the full list in your notes - twenty songs, mostly nineties rock." Never read a long list out loud, and never say you cannot answer just because the answer is long. If it is short enough to speak comfortably, just speak it and do not make a note.
+
+Naming a website and telling the user to go look themselves is ALWAYS WRONG. So is listing vague options instead of facts. If they ask for places to visit, name actual places. If they ask for restaurants, name actual restaurants. If they ask for flights, give actual airlines and times. If they ask for a distance, give the actual number.
 
 EMAIL - SENDING (always confirm first): When the user asks you to email or write to someone, call draft_email with your best guess at recipient, subject, and body from what they said. Then READ THE DRAFT BACK to the user out loud in your own next spoken turn (recipient, subject, and a short summary of the body) and ask "should I send it?". Do NOT call confirm_send_email in the same turn as draft_email. Only call confirm_send_email in a LATER turn, after the user has explicitly agreed (e.g. "yes", "send it", "go ahead"). If the user wants changes, call draft_email again with the corrected details and read it back again. If the user declines, do not send anything.
 $visionInstruction"""
@@ -2275,6 +2337,20 @@ $visionInstruction"""
                     // text is empty and nothing can be saved to history.
                     "input_audio_transcription" to mapOf<String, Any>(),
                     "output_audio_transcription" to mapOf<String, Any>(),
+                    // google_search is Google's OWN server-side grounding: Gemini runs
+                    // the search on its infrastructure and folds the results straight
+                    // into the spoken answer. That is the right way to answer "what's
+                    // happening", "flight prices", "who won" — one round trip, no phone
+                    // involvement, nothing for the app to execute.
+                    //
+                    // It must stay listed alongside function_declarations. Removing it
+                    // left the model with only client-side tools for live facts, which
+                    // meant every current-information question had to go through the
+                    // on-device browser (browse_web) — slow, fragile, and dependent on
+                    // a WebView that can hit sign-in walls and CAPTCHAs the app is not
+                    // allowed to solve. The browser is the fallback for things that
+                    // genuinely need the user's own logged-in session, not the default
+                    // path for ordinary web questions.
                     "tools" to listOf(
                         mapOf("function_declarations" to geminiToolDeclarations),
                         mapOf("google_search" to mapOf<String, Any>())
@@ -2293,7 +2369,7 @@ $visionInstruction"""
      * Gemini: realtime_input with base64 PCM16 16kHz
      */
     private fun startAudioCapture(webSocket: WebSocket) {
-        scope.launch {
+        scope.launch(audioCaptureDispatcher) {
             try {
                 audioRecord?.startRecording()
                 isRecording.set(true)
@@ -2485,7 +2561,7 @@ $visionInstruction"""
      * Start audio playback coroutine with pre-buffering for smooth playback
      */
     private fun startAudioPlayback() {
-        scope.launch {
+        scope.launch(audioPlaybackDispatcher) {
             try {
                 audioTrack?.play()
                 totalFramesWritten = 0L // playback head starts at 0 with the track
@@ -2995,9 +3071,12 @@ $visionInstruction"""
                     // result as the whole answer. Nothing plays and the user waits for
                     // a reply that never comes, until the 10s session fallback fires.
                     // Detect it here and ask once for the answer to actually be spoken.
-                    val producedNothing = !receivedAudioInCurrentTurn &&
-                        !hasTranscriptionForCurrentTurn &&
-                        fullOutput.isBlank()
+                    // "Produced nothing" means the user HEARD nothing. Text without
+                    // audio counts as nothing: a turn that transcribed a few words but
+                    // never played them is exactly the case the user experiences as the
+                    // reply never arriving. hasTranscriptionForCurrentTurn was part of
+                    // this test and suppressed the rescue for those turns.
+                    val producedNothing = !receivedAudioInCurrentTurn
                     if (producedNothing && !interrupted && recoverFromSilentTurn(fullInput)) {
                         // Retry sent: keep the turn's transcripts so the recovered
                         // reply is reported against the question the user actually
@@ -3106,7 +3185,7 @@ $visionInstruction"""
             Log.w(TAG, "⚠️ Silent turn with no reply - asking Gemini to answer")
             "You did not reply to the user. Answer their question now in 1-2 short " +
                 "sentences, speaking naturally and without mentioning this instruction. " +
-                "If you cannot answer, say so briefly. Question: \"$userInput\""
+                "Do not search - answer from what you already know, even if only partially. Saying nothing is not an option. Question: \"$userInput\""
         }
 
         // speakDirectly=false: this is an instruction to answer, not a script to
@@ -3380,6 +3459,15 @@ $visionInstruction"""
         stopThinkingSound() // Clean up thinking sound
         scope.cancel()
         cleanup()
+        // Only here, never in cleanup(): cleanup() also runs on every auto-reconnect,
+        // and closing the audio dispatchers there would leave the reconnected session
+        // with no thread to capture or play on.
+        try {
+            audioCaptureDispatcher.close()
+            audioPlaybackDispatcher.close()
+        } catch (e: Exception) {
+            Log.w(TAG, "Error closing audio dispatchers: ${e.message}")
+        }
     }
 
     /**

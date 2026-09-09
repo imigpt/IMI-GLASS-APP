@@ -19,11 +19,12 @@ import java.util.concurrent.TimeUnit
 object LocalToolHandlers {
     private const val TAG = "LocalToolHandlers"
 
-    // 🆕 Explicit short timeouts. These calls run inside a `runBlocking` on the
-    // Gemini Live tool-call callback (see MainActivity.handleGeminiToolCall), so a
-    // hung/slow network call previously blocked that thread forever - Gemini Live
-    // never got a tool response and the user heard only the loading tone with no
+    // 🆕 Explicit short timeouts. These run on the Gemini Live tool-call callback
+    // (see MainActivity.handleGeminiToolCall); a hung network call means Gemini Live
+    // never gets a tool response and the user hears only the loading tone with no
     // answer. A bounded timeout guarantees the tool call always returns in time.
+    // (These were once wrapped in runBlocking, which also pinned an IO worker for
+    // the duration — the callback is suspend now, so only the timeout still matters.)
     private val client = OkHttpClient.Builder()
         .connectTimeout(6, TimeUnit.SECONDS)
         .readTimeout(6, TimeUnit.SECONDS)

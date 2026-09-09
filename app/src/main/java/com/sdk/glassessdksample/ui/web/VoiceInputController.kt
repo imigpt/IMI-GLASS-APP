@@ -42,6 +42,15 @@ class VoiceInputController(
     }
 
     private var recognizer: SpeechRecognizer? = null
+
+    /** True once real speech is detected in the current listening run. */
+    private var heardSpeech = false
+
+    /** Set when the user stops the mic, so a following error does not re-arm it. */
+    private var stoppedByUser = false
+
+    /** Silent re-arms used so far while waiting for speech. */
+    private var restarts = 0
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private val watchdogToken = Any()
 
@@ -72,12 +81,20 @@ class VoiceInputController(
         }
 
         setListening(true)
+        restarts = 0
+        stoppedByUser = false
+        heardSpeech = false
 
         recognizer?.destroy()
         recognizer = SpeechRecognizer.createSpeechRecognizer(activity).apply {
             setRecognitionListener(object : RecognitionListener {
                 override fun onReadyForSpeech(params: Bundle?) {}
-                override fun onBeginningOfSpeech() {}
+                override fun onBeginningOfSpeech() {
+                    heardSpeech = true
+                    // Real speech started: the "waiting for you to talk" watchdog
+                    // must not fire mid-sentence.
+                    mainHandler.removeCallbacksAndMessages(watchdogToken)
+                }
                 override fun onRmsChanged(rmsdB: Float) {}
                 override fun onBufferReceived(buffer: ByteArray?) {}
                 override fun onEndOfSpeech() {}
@@ -85,6 +102,21 @@ class VoiceInputController(
                 override fun onError(error: Int) {
                     Log.w(TAG, "Speech error $error")
                     activity.runOnUiThread {
+                        // Android's recognizer gives up ~3s after starting if it has
+                        // not heard speech yet (NO_MATCH / SPEECH_TIMEOUT). Closing the
+                        // mic there is what made it "stop after 3 seconds" whenever the
+                        // user paused to think. Re-arm instead and leave the mic UI up,
+                        // bounded so a dead recognizer cannot loop.
+                        val waitingForSpeech = !heardSpeech && !stoppedByUser &&
+                            (error == SpeechRecognizer.ERROR_NO_MATCH ||
+                                error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT)
+                        if (waitingForSpeech && restarts < MAX_RESTARTS) {
+                            restarts++
+                            Log.d(TAG, "Re-arming mic ($restarts/$MAX_RESTARTS)")
+                            restart()
+                            return@runOnUiThread
+                        }
+
                         setListening(false)
                         // These are the everyday failures (mic caught silence,
                         // a short timeout, the recognizer service hiccupped).
@@ -138,23 +170,51 @@ class VoiceInputController(
             false
         }
 
-        if (started) {
-            // Some OEM speech services (seen on this device's recognizer)
-            // don't honor EXTRA_SPEECH_INPUT_*_SILENCE_LENGTH_MILLIS and can
-            // sit "listening" far longer than the ~2s of silence that should
-            // have ended it - the mic just stays open with nothing
-            // happening. This is a hard backstop, independent of whatever
-            // the recognizer itself does: if nothing has closed the mic on
-            // its own well past what any real utterance needs, force it
-            // closed so the UI never gets stuck open.
-            mainHandler.postDelayed({ stop() }, watchdogToken, HARD_TIMEOUT_MS)
-        }
+        if (started) armWaitWatchdog()
 
         return started
     }
 
+    /**
+     * Backstop for a recognizer that neither hears anything nor reports an error -
+     * some OEM services ignore EXTRA_SPEECH_INPUT_*_SILENCE_LENGTH_MILLIS and just
+     * sit there with the mic open.
+     *
+     * This used to be a flat HARD_TIMEOUT_MS from the moment listening began, which
+     * cut the user off mid-sentence if they spoke for longer than it. It is now
+     * cancelled in onBeginningOfSpeech, so it only ever polices the silent
+     * "waiting for you to start" phase and never truncates real speech.
+     */
+    private fun armWaitWatchdog() {
+        mainHandler.removeCallbacksAndMessages(watchdogToken)
+        mainHandler.postDelayed({
+            if (isListening && !heardSpeech) stop()
+        }, watchdogToken, WAIT_TIMEOUT_MS)
+    }
+
     /** Stops listening without discarding what has been heard so far. */
+    /**
+     * Re-arms the recognizer after it gave up without hearing anything, leaving the
+     * mic UI up so it looks continuously open. The delay matters: the recognizer is
+     * still tearing down inside onError, and an immediate startListening() is
+     * refused with ERROR_RECOGNIZER_BUSY.
+     */
+    private fun restart() {
+        heardSpeech = false
+        mainHandler.postDelayed({
+            if (!isListening || stoppedByUser) return@postDelayed
+            try {
+                recognizer?.startListening(buildIntent(partial = true))
+                armWaitWatchdog()
+            } catch (e: Exception) {
+                Log.e(TAG, "Re-arm failed: ${e.message}")
+                setListening(false)
+            }
+        }, watchdogToken, 250L)
+    }
+
     fun stop() {
+        stoppedByUser = true
         mainHandler.removeCallbacksAndMessages(watchdogToken)
         if (!isListening) return
         try {
@@ -213,7 +273,15 @@ class VoiceInputController(
          * past what a real spoken command needs, short of what would feel
          * like the app itself has stopped responding.
          */
-        private const val HARD_TIMEOUT_MS = 6000L
+        /**
+         * How long the mic waits in silence for the user to start speaking before
+         * giving up. Only covers the pre-speech phase (see armWaitWatchdog), so it
+         * can be generous without ever cutting a sentence short.
+         */
+        private const val WAIT_TIMEOUT_MS = 30000L
+
+        /** Silent re-arms allowed while waiting for speech. */
+        private const val MAX_RESTARTS = 10
 
         /** Permission request code, also used by the Activity's callback. */
         const val REQ_AUDIO = 9701

@@ -3,7 +3,13 @@ package com.sdk.glassessdksample.ui
 import com.sdk.glassessdksample.RemoteConfigManager
 import android.Manifest
 import android.content.Context
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothHeadset
+import android.bluetooth.BluetoothProfile
+import android.content.BroadcastReceiver
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
@@ -84,6 +90,31 @@ class ActiveMeetingActivity : AppCompatActivity() {
     
     private var currentMeeting: MeetingMinute? = null
     private var isRecording = false
+
+    /** Tracks the glasses' connection state so we only report real transitions. */
+    private var glassesWereConnected = true
+
+    /**
+     * Watches for the glasses dropping off mid-meeting.
+     *
+     * A meeting can run for hours with the phone in a pocket, and the recording is
+     * taken from the glasses' microphone. If they disconnect - out of range, flat
+     * battery, knocked off - recording silently continues on whatever mic Android
+     * falls back to, so the user only discovers the problem when they open a
+     * transcript that captured nothing useful. Nothing in this screen was listening
+     * for that, so it showed no message at all. Surface it immediately instead, and
+     * say so again if they come back.
+     */
+    private val glassesConnectionReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            when (intent?.action) {
+                BluetoothHeadset.ACTION_CONNECTION_STATE_CHANGED,
+                BluetoothDevice.ACTION_ACL_CONNECTED,
+                BluetoothDevice.ACTION_ACL_DISCONNECTED,
+                BluetoothAdapter.ACTION_STATE_CHANGED -> updateGlassesConnectionState()
+            }
+        }
+    }
     private var isPaused = false
 
     // Total time spent paused, and when the current pause began, so the displayed
@@ -112,6 +143,74 @@ class ActiveMeetingActivity : AppCompatActivity() {
 
         setupUI()
         checkPermissionsAndStart()
+
+        glassesWereConnected = areGlassesConnected()
+        androidx.core.content.ContextCompat.registerReceiver(
+            this,
+            glassesConnectionReceiver,
+            IntentFilter().apply {
+                addAction(BluetoothHeadset.ACTION_CONNECTION_STATE_CHANGED)
+                addAction(BluetoothDevice.ACTION_ACL_CONNECTED)
+                addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED)
+                addAction(BluetoothAdapter.ACTION_STATE_CHANGED)
+            },
+            androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED
+        )
+    }
+
+    /** True when the glasses are connected on any transport that carries audio. */
+    private fun areGlassesConnected(): Boolean {
+        return try {
+            val adapter = BluetoothAdapter.getDefaultAdapter() ?: return false
+            if (!adapter.isEnabled) return false
+            intArrayOf(BluetoothProfile.HEADSET, BluetoothProfile.A2DP, BluetoothProfile.GATT).any { p ->
+                try {
+                    adapter.getProfileConnectionState(p) == BluetoothProfile.STATE_CONNECTED
+                } catch (_: Exception) {
+                    false
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not read glasses connection state: ${e.message}")
+            // Assume still connected on error rather than crying wolf mid-meeting.
+            true
+        }
+    }
+
+    /**
+     * Reports a change in the glasses' connection while a meeting is running.
+     *
+     * Only fires on an actual transition, so a burst of Bluetooth broadcasts cannot
+     * produce a stream of duplicate warnings. The recording is deliberately NOT
+     * stopped: the phone mic still captures something, and cutting a meeting short
+     * automatically would lose more than it saves. The user is told, and decides.
+     */
+    private fun updateGlassesConnectionState() {
+        val connected = areGlassesConnected()
+        if (connected == glassesWereConnected) return
+        glassesWereConnected = connected
+
+        if (!isRecording) return
+
+        runOnUiThread {
+            if (connected) {
+                Toast.makeText(
+                    this,
+                    "Glasses reconnected — recording from the glasses again",
+                    Toast.LENGTH_LONG
+                ).show()
+                tvStatus.text = if (isPaused) "Paused" else "Recording audio"
+                Log.i(TAG, "🔌 Glasses reconnected during meeting")
+            } else {
+                Toast.makeText(
+                    this,
+                    "Glasses disconnected — still recording on the phone mic",
+                    Toast.LENGTH_LONG
+                ).show()
+                tvStatus.text = "⚠️ Glasses disconnected — recording on phone mic"
+                Log.w(TAG, "🔌 Glasses disconnected during meeting")
+            }
+        }
     }
 
     private fun setupUI() {
@@ -433,7 +532,11 @@ class ActiveMeetingActivity : AppCompatActivity() {
                     pauseStartedAtMs = 0L
                 }
                 isPaused = false
-                tvStatus.text = "Recording audio"
+                // Keep the disconnect warning up if the glasses are still off; a
+                // plain "Recording audio" here would quietly hide the problem the
+                // moment the user paused and resumed.
+                tvStatus.text = if (glassesWereConnected) "Recording audio"
+                    else "⚠️ Glasses disconnected — recording on phone mic"
                 indicatorRecording.visibility = View.VISIBLE
                 btnPause.setImageResource(R.drawable.ic_pause_bars)
                 handler.removeCallbacks(amplitudeRunnable)
@@ -692,6 +795,11 @@ class ActiveMeetingActivity : AppCompatActivity() {
     
     override fun onDestroy() {
         super.onDestroy()
+        try {
+            unregisterReceiver(glassesConnectionReceiver)
+        } catch (_: Exception) {
+            // Never registered, or already gone.
+        }
         abandonAudioFocus()
         releaseMicExclusively()
         releaseWakeLock()

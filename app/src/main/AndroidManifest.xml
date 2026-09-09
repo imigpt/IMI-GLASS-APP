@@ -196,6 +196,7 @@
         <activity 
             android:name=".ui.ChatActivity"
             android:exported="false"
+            android:windowSoftInputMode="adjustResize"
             android:label="Chat" />
 
         <!-- CONVERSATION HISTORY - ALL USER/AI MESSAGES -->

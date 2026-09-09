@@ -30,6 +30,32 @@ object PreferredAudioDeviceResolver {
     private const val KEY_PAIRED_ADDRESS = "paired_device_address"
     private const val KEY_PAIRED_NAME = "paired_device_name"
 
+    /**
+     * Records [address]/[name] as the paired glasses if nothing is stored yet.
+     *
+     * DeviceBindActivity.savePairedDevice() is the only other writer, and it runs
+     * only during the first-time pairing flow. A reinstall, cleared app data, or an
+     * OS-level Bluetooth reconnect all leave the glasses connected with NO record —
+     * and then every routing decision here has nothing to match against. Call this
+     * whenever the app observes the glasses connected so the record self-heals.
+     *
+     * Never overwrites an existing record: if the user has genuinely paired a
+     * specific device, that choice wins over whatever happens to be connected now.
+     */
+    fun rememberPairedGlassesIfUnset(context: Context, address: String?, name: String?) {
+        if (address.isNullOrBlank() && name.isNullOrBlank()) return
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val haveRecord = !prefs.getString(KEY_PAIRED_ADDRESS, null).isNullOrBlank() ||
+            !prefs.getString(KEY_PAIRED_NAME, null).isNullOrBlank()
+        if (haveRecord) return
+        prefs.edit().apply {
+            if (!address.isNullOrBlank()) putString(KEY_PAIRED_ADDRESS, address)
+            if (!name.isNullOrBlank()) putString(KEY_PAIRED_NAME, name)
+            apply()
+        }
+        Log.i(TAG, "💾 Backfilled paired-glasses record (address=$address name=$name)")
+    }
+
     /** The Bluetooth MAC address of the currently paired glasses, if any. */
     fun pairedGlassesAddress(context: Context): String? =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -74,12 +100,34 @@ object PreferredAudioDeviceResolver {
         vararg types: Int
     ): AudioDeviceInfo? {
         val match = candidates.firstOrNull { it.type in types && isPairedGlasses(context, it) }
-        if (match == null && candidates.any { it.type in types }) {
-            Log.w(TAG, "⚠️ Bluetooth audio device(s) present but none match the paired glasses " +
-                "(address=${pairedGlassesAddress(context)}) — likely a second connected " +
-                "Bluetooth accessory. Refusing to route to it.")
+        if (match != null) return match
+
+        val ofType = candidates.filter { it.type in types }
+        if (ofType.isEmpty()) return null
+
+        // Nothing matched. Whether that is dangerous depends entirely on WHY.
+        //
+        // If we have no pairing record at all (the glasses were connected without
+        // going through DeviceBindActivity — a reinstall, cleared app data, or an
+        // OS-level reconnect), then isPairedGlasses() can never return true and this
+        // refused EVERY device, including the one correct pair of glasses sitting
+        // right there in the list. The audible symptom is the assistant replying
+        // into the phone speaker instead of the glasses, which reads as "it didn't
+        // answer me". Refusing is only meaningful when we actually know who we are
+        // paired to, so with no record and exactly one candidate, take it.
+        val haveNoPairingRecord =
+            pairedGlassesAddress(context).isNullOrBlank() && pairedGlassesName(context).isNullOrBlank()
+        if (haveNoPairingRecord && ofType.size == 1) {
+            Log.w(TAG, "⚠️ No paired-glasses record stored — falling back to the only " +
+                "connected Bluetooth device (${ofType[0].productName}). Re-pair in the app " +
+                "to make routing explicit.")
+            return ofType[0]
         }
-        return match
+
+        Log.w(TAG, "⚠️ Bluetooth audio device(s) present but none match the paired glasses " +
+            "(address=${pairedGlassesAddress(context)}, candidates=${ofType.size}) — likely a " +
+            "second connected Bluetooth accessory. Refusing to route to it.")
+        return null
     }
 
     fun findGlasses(

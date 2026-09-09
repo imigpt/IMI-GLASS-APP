@@ -225,27 +225,11 @@ object GlassBrowserTools {
     )
 
     /**
-     * Blocking entry point for the `onToolCall` dispatchers, which are plain
-     * functions.
-     *
-     * The browser does its WebView work on the main thread, so blocking the
-     * main thread here would deadlock. `onToolCall` is normally reached from
-     * `Dispatchers.IO`, but the Activity implementations can be reached from
-     * the main thread too — so this refuses to block there and says so, rather
-     * than hanging the UI.
+     * `handleBlocking` used to live here as a runBlocking bridge for the
+     * `onToolCall` dispatchers back when they were plain functions. They are
+     * suspend now and call `handle` directly, so the wrapper — and the thread
+     * it used to pin — is gone.
      */
-    @JvmStatic
-    fun handleBlocking(
-        context: Context,
-        toolName: String,
-        args: Map<String, Any>
-    ): String {
-        if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
-            Log.w(TAG, "Browser tool $toolName called on the main thread")
-            return "I can't run the browser right now. Try again in a moment."
-        }
-        return kotlinx.coroutines.runBlocking { handle(context, toolName, args) }
-    }
 
     /**
      * Runs one browser tool. Returns the sentence the glasses should say.

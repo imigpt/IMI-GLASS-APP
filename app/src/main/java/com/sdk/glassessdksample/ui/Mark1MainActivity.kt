@@ -235,8 +235,23 @@ class Mark1MainActivity : AppCompatActivity(), GeminiLiveService.GeminiLiveCallb
         // wake word back, or IMI goes permanently deaf until the app is reopened —
         // which is exactly the "sometimes it never listens to me" symptom.
         if (isAiMuted || isGeminiLiveActive) {
-            Log.i(TAG, "Wake conversation declined (muted=$isAiMuted active=$isGeminiLiveActive) — re-arming")
-            requestWakeWordRearm()
+            // Only re-arm when nothing is going to take the mic. A conversation that
+            // is ALREADY running took it a few milliseconds ago via the EventBus
+            // path (onEvent -> playChimeThenStartConversation), and this intent is
+            // just the second delivery of the SAME wake word — ListeningService and
+            // this Activity both observe it. Re-arming here restarted the wake-word
+            // detector on top of the live session, so the detector and Gemini Live
+            // fought over the SCO mic for the whole turn: the reply would stall and
+            // the UI flipped between "listening" and "stopped" repeatedly.
+            //
+            // isAiMuted is different — nothing is holding the mic then, so the wake
+            // word must go back or IMI goes permanently deaf.
+            if (isGeminiLiveActive) {
+                Log.i(TAG, "Wake conversation already running — ignoring duplicate wake event")
+            } else {
+                Log.i(TAG, "Wake conversation declined (muted=$isAiMuted) — re-arming")
+                requestWakeWordRearm()
+            }
             return
         }
         if (!isGlassConnected()) {
@@ -681,11 +696,35 @@ class Mark1MainActivity : AppCompatActivity(), GeminiLiveService.GeminiLiveCallb
             stopConversation()
             return
         }
+        // Silent mode means IMI does not listen or speak. Every wake-word path
+        // already checks isAiMuted, but Quick Start went straight to starting a
+        // conversation, so tapping it after enabling silent mode opened a full live
+        // session that answered normally - silent mode looked like it had simply
+        // switched itself off. Say what is going on instead of silently ignoring
+        // the tap, so the user knows why nothing started and how to undo it.
+        if (isAiMuted) {
+            Toast.makeText(
+                this,
+                "Silent Mode is on — tap Unmute AI to talk to IMI",
+                Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
         playChimeThenStartConversation()
     }
 
     private fun startInlineGeminiLive() {
         if (isGeminiLiveActive) return
+
+        // Last line of defence for silent mode. Several paths reach this function
+        // (Quick Start, the wake word, the EventBus voice event, the post-BLE-gate
+        // resume), and each checked isAiMuted separately - so any path that forgot
+        // to, or any added later, would quietly start a live session while the user
+        // believed IMI was silenced. Checking here means no route can bypass it.
+        if (isAiMuted) {
+            Log.i(TAG, "🔇 Silent Mode is on — not starting a live conversation")
+            return
+        }
 
         // With two Bluetooth audio devices connected at once, the app cannot
         // reliably force audio to the glasses (Android's own routing decides).
@@ -789,9 +828,47 @@ class Mark1MainActivity : AppCompatActivity(), GeminiLiveService.GeminiLiveCallb
         sb.append("## Available Tools\n")
         sb.append("You have access to these tools: create_note, capture_photo_note, start_meeting, ")
         sb.append("play_music, play_youtube, make_phone_call, get_directions, get_weather, ")
-        sb.append("web_search, define_word, wiki_summary, stock_quote, mute_ai, ")
+        sb.append("read_notifications, ")
+        sb.append("mute_ai, ")
         sb.append("read_notifications, say_goodbye.\n\n")
-        sb.append("Use tools when the user's request matches them. Keep responses brief and spoken-word friendly.")
+
+        // The old wording here was just "Use tools when the user's request matches
+        // them", which the model satisfied by TALKING about searching: asked for
+        // flights it replied "I'm searching for that" and ended the turn without ever
+        // emitting a function call, so the user heard a promise and then silence.
+        // Live audio models narrate by default, so the prohibition has to be explicit
+        // and the no-preamble rule stated separately from it.
+        sb.append("## Answering questions\n")
+        sb.append("1. You have Google Search built in, running as part of your own reply. Use it ")
+        sb.append("only for facts that actually change: live flight times and prices, today's news, ")
+        sb.append("current weather, scores, whether somewhere is open right now.\n")
+        sb.append("2. Answer from your OWN knowledge, without searching, for anything general or ")
+        sb.append("stable — places to visit, what a city is known for, recipes, history, how things ")
+        sb.append("work, recommendations, advice, ideas. You already know these. Just answer.\n")
+        sb.append("3. NEVER say 'I don't know' or 'I couldn't find that' for a general question. ")
+        sb.append("You have broad world knowledge — use it. Only a genuinely live fact a search ")
+        sb.append("could not return may be reported as unavailable, and even then still give the ")
+        sb.append("useful general information you do have.\n")
+        sb.append("4. NEVER say you are searching, checking, or looking something up. No ")
+        sb.append("'let me check', 'one moment' or 'I'll find out'. Speak ONE short reply that ")
+        sb.append("already contains the answer.\n")
+        sb.append("5. Name real things: actual places, actual restaurants, actual airlines and ")
+        sb.append("times, actual numbers — never vague options or a website to go look at.\n")
+        sb.append("6. If the honest answer is long — more than about 4 items or 3 sentences, ")
+        sb.append("such as a packing list, an itinerary, step-by-step instructions or 'list 20 ")
+        sb.append("songs' — do NOT read it aloud. Call create_note with the COMPLETE answer as ")
+        sb.append("the content and a short title, then say one line telling the user it is saved ")
+        sb.append("and what is in it, e.g. \"I've put the full list in your notes — twenty songs, ")
+        sb.append("mostly nineties rock.\" Never refuse just because an answer is long. If it is ")
+        sb.append("short enough to speak comfortably, simply speak it and make no note.\n\n")
+
+        // The model answered a plain English question in Hindi (observed in logcat:
+        // outputTranscription "सर्च कर रहा"), because nothing here pins the language.
+        sb.append("## Language\n")
+        sb.append("Always reply in the SAME language the user spoke in. If the user speaks ")
+        sb.append("English, reply in English.\n\n")
+
+        sb.append("Keep responses brief and spoken-word friendly.")
 
         return sb.toString()
     }
@@ -1183,7 +1260,7 @@ class Mark1MainActivity : AppCompatActivity(), GeminiLiveService.GeminiLiveCallb
         conversationModeCommandHandled = false
     }
 
-    override fun onToolCall(toolName: String, args: Map<String, Any>): String {
+    override suspend fun onToolCall(toolName: String, args: Map<String, Any>): String {
         Log.d(TAG, "Tool call: $toolName args=$args")
         return when (toolName) {
             "create_note" -> handleCreateNote(args)
@@ -1208,7 +1285,7 @@ class Mark1MainActivity : AppCompatActivity(), GeminiLiveService.GeminiLiveCallb
             // the Web section, so the user's logins carry over.
             in com.sdk.glassessdksample.ui.web.GlassBrowserTools.TOOL_NAMES ->
                 com.sdk.glassessdksample.ui.web.GlassBrowserTools
-                    .handleBlocking(this@Mark1MainActivity, toolName, args)
+                    .handle(this@Mark1MainActivity, toolName, args)
             else -> "Tool $toolName not yet implemented."
         }
     }
@@ -1270,9 +1347,9 @@ class Mark1MainActivity : AppCompatActivity(), GeminiLiveService.GeminiLiveCallb
      * capturing. Returns "Title by Artist" for the model to speak, or a short
      * plain-language miss message.
      */
-    private fun handleIdentifySong(): String {
+    private suspend fun handleIdentifySong(): String {
         return try {
-            kotlinx.coroutines.runBlocking { SongIdentifier.identifyFromLiveSession() }
+            SongIdentifier.identifyFromLiveSession()
         } catch (e: Exception) {
             Log.e(TAG, "Song identification failed: ${e.message}", e)
             "I couldn't identify that song right now."
@@ -1462,37 +1539,37 @@ class Mark1MainActivity : AppCompatActivity(), GeminiLiveService.GeminiLiveCallb
         }
     }
 
-    private fun handleWebSearch(args: Map<String, Any>): String {
+    private suspend fun handleWebSearch(args: Map<String, Any>): String {
         val query = args["query"] as? String ?: return "Please specify a search query."
         return try {
-            kotlinx.coroutines.runBlocking { LocalToolHandlers.webSearchInstant(query) }
+            LocalToolHandlers.webSearchInstant(query)
         } catch (e: Exception) {
             "Search failed: ${e.message}"
         }
     }
 
-    private fun handleDefineWord(args: Map<String, Any>): String {
+    private suspend fun handleDefineWord(args: Map<String, Any>): String {
         val word = args["word"] as? String ?: return "Please specify a word."
         return try {
-            kotlinx.coroutines.runBlocking { LocalToolHandlers.dictionaryLookup(word) }
+            LocalToolHandlers.dictionaryLookup(word)
         } catch (e: Exception) {
             "Definition not found for: $word"
         }
     }
 
-    private fun handleWikiSummary(args: Map<String, Any>): String {
+    private suspend fun handleWikiSummary(args: Map<String, Any>): String {
         val topic = args["topic"] as? String ?: return "Please specify a topic."
         return try {
-            kotlinx.coroutines.runBlocking { LocalToolHandlers.wikiSummary(topic) }
+            LocalToolHandlers.wikiSummary(topic)
         } catch (e: Exception) {
             "Could not retrieve Wikipedia summary for: $topic"
         }
     }
 
-    private fun handleStockQuote(args: Map<String, Any>): String {
+    private suspend fun handleStockQuote(args: Map<String, Any>): String {
         val symbol = args["symbol"] as? String ?: args["ticker"] as? String ?: return "Please specify a stock symbol."
         return try {
-            kotlinx.coroutines.runBlocking { LocalToolHandlers.stockQuote(symbol) }
+            LocalToolHandlers.stockQuote(symbol)
         } catch (e: Exception) {
             "Could not retrieve stock price for: $symbol"
         }

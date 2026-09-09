@@ -1,7 +1,9 @@
 package com.sdk.glassessdksample.ui.web
 
 import android.webkit.WebView
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
@@ -13,11 +15,28 @@ import kotlin.coroutines.suspendCoroutine
  * password rule is re-checked here anyway — an executor that can be tricked
  * into typing a secret is a bug no matter which caller does the tricking.
  *
- * All methods must be called on the UI thread.
+ * Every WebView touch is confined to the main thread by [execute] itself.
+ * WebView throws if it is driven from anywhere else, and the callers here are
+ * suspend functions running on background dispatchers — so the confinement has
+ * to live in this class rather than in a convention callers must remember.
  */
 class ActionExecutor(private val webView: WebView) {
 
-    suspend fun execute(action: BrowserAction): ActionResult = when (action) {
+    /**
+     * Runs one action, hopping to the main thread first.
+     *
+     * This used to work only because the tool dispatchers wrapped the whole call
+     * in runBlocking from a main-thread-adjacent context. Once those became
+     * proper suspend calls the work landed on a Dispatchers.Default worker and
+     * every browse_web crashed with "A WebView method was called on thread
+     * DefaultDispatcher-worker-N", which reached the user as "Something went
+     * wrong in the browser." withContext(Dispatchers.Main) makes the thread
+     * requirement structural: it holds no matter which dispatcher calls in.
+     */
+    suspend fun execute(action: BrowserAction): ActionResult =
+        withContext(Dispatchers.Main) { executeOnMain(action) }
+
+    private suspend fun executeOnMain(action: BrowserAction): ActionResult = when (action) {
         is BrowserAction.Open -> {
             webView.loadUrl(action.url)
             awaitPageSettle()

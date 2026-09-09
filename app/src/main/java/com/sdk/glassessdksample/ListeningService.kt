@@ -543,7 +543,7 @@ class ListeningService : Service() {
             }
         }
 
-        override fun onToolCall(toolName: String, args: Map<String, Any>): String {
+        override suspend fun onToolCall(toolName: String, args: Map<String, Any>): String {
             Log.d(TAG, "Background tool call: $toolName args=$args")
             return handleBackgroundTool(toolName, args)
         }
@@ -583,7 +583,7 @@ class ListeningService : Service() {
     // works from a Service context — no Activity required.
     // ─────────────────────────────────────────────────────────────────────────
 
-    private fun handleBackgroundTool(toolName: String, args: Map<String, Any>): String {
+    private suspend fun handleBackgroundTool(toolName: String, args: Map<String, Any>): String {
         return try {
             when (toolName) {
                 "get_weather" -> bgWeather(args)
@@ -606,7 +606,7 @@ class ListeningService : Service() {
                 // here with the app in the background — that is the point.
                 in com.sdk.glassessdksample.ui.web.GlassBrowserTools.TOOL_NAMES ->
                     com.sdk.glassessdksample.ui.web.GlassBrowserTools
-                        .handleBlocking(this@ListeningService, toolName, args)
+                        .handle(this@ListeningService, toolName, args)
                 "say_goodbye" -> { endBackgroundConversation(); "Goodbye!" }
                 "mute_ai" -> { endBackgroundConversation(); "Muting now." }
                 // Genuinely need the on-screen app (camera preview, meeting UI, media UI).
@@ -640,47 +640,47 @@ class ListeningService : Service() {
      * captured for this background conversation, so there's no camera, no UI and
      * no second recorder involved — unlike play_music, which does need the app open.
      */
-    private fun bgIdentifySong(): String {
+    private suspend fun bgIdentifySong(): String {
         return try {
-            kotlinx.coroutines.runBlocking { SongIdentifier.identifyFromLiveSession() }
+            SongIdentifier.identifyFromLiveSession()
         } catch (e: Exception) {
             Log.e(TAG, "Song identification failed: ${e.message}", e)
             "I couldn't identify that song right now."
         }
     }
 
-    private fun bgWebSearch(args: Map<String, Any>): String {
+    private suspend fun bgWebSearch(args: Map<String, Any>): String {
         val query = args["query"] as? String ?: return "Please specify a search query."
         return try {
-            kotlinx.coroutines.runBlocking { LocalToolHandlers.webSearchInstant(query) }
+            LocalToolHandlers.webSearchInstant(query)
         } catch (e: Exception) {
             "Search failed: ${e.message}"
         }
     }
 
-    private fun bgDefineWord(args: Map<String, Any>): String {
+    private suspend fun bgDefineWord(args: Map<String, Any>): String {
         val word = args["word"] as? String ?: return "Please specify a word."
         return try {
-            kotlinx.coroutines.runBlocking { LocalToolHandlers.dictionaryLookup(word) }
+            LocalToolHandlers.dictionaryLookup(word)
         } catch (e: Exception) {
             "Definition not found for: $word"
         }
     }
 
-    private fun bgWikiSummary(args: Map<String, Any>): String {
+    private suspend fun bgWikiSummary(args: Map<String, Any>): String {
         val topic = args["topic"] as? String ?: return "Please specify a topic."
         return try {
-            kotlinx.coroutines.runBlocking { LocalToolHandlers.wikiSummary(topic) }
+            LocalToolHandlers.wikiSummary(topic)
         } catch (e: Exception) {
             "Could not retrieve Wikipedia summary for: $topic"
         }
     }
 
-    private fun bgStockQuote(args: Map<String, Any>): String {
+    private suspend fun bgStockQuote(args: Map<String, Any>): String {
         val symbol = args["symbol"] as? String ?: args["ticker"] as? String
             ?: return "Please specify a stock symbol."
         return try {
-            kotlinx.coroutines.runBlocking { LocalToolHandlers.stockQuote(symbol) }
+            LocalToolHandlers.stockQuote(symbol)
         } catch (e: Exception) {
             "Could not retrieve stock price for: $symbol"
         }

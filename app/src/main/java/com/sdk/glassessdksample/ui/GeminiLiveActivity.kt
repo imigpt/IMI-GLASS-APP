@@ -197,7 +197,7 @@ class GeminiLiveActivity : AppCompatActivity(), GeminiLiveService.GeminiLiveCall
         }
     }
     
-    override fun onToolCall(toolName: String, args: Map<String, Any>): String {
+    override suspend fun onToolCall(toolName: String, args: Map<String, Any>): String {
         Log.d(TAG, "Tool call received: $toolName with args: $args")
         // This activity is for demo purposes - tool calls should be handled in MainActivity
         return "Tool $toolName executed (demo mode)"

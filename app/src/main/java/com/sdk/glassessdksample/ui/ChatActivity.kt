@@ -60,6 +60,16 @@ class ChatActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "UnifiedChat"
+
+        /**
+         * How many times the mic silently re-arms while waiting for the user to
+         * start speaking. Android's recognizer gives up after roughly 3s of
+         * silence, so this buys about 30s of patient waiting before the mic
+         * closes on its own - enough to think about what to say, while still
+         * bounded so a broken recognizer cannot spin forever.
+         */
+        private const val MAX_VOICE_RESTARTS = 10
+
         private const val MAX_AI_CONTEXT_CHARS = 1000
         private const val MAX_AI_HISTORY_CHARS = 800
         private const val MAX_AI_HISTORY_MESSAGES = 6
@@ -99,6 +109,18 @@ class ChatActivity : AppCompatActivity() {
     private lateinit var btnStopListening: ImageView
     private lateinit var voiceWave: VoiceWaveView
     private var speechRecognizer: android.speech.SpeechRecognizer? = null
+
+    /** True once the recognizer reports real speech in the current listening run. */
+    private var heardSpeechThisRun = false
+
+    /** Set when the user taps stop, so an error after that does not re-arm the mic. */
+    private var voiceStoppedByUser = false
+
+    /** How many times the mic has silently re-armed while waiting for speech. */
+    private var voiceRestarts = 0
+
+    /** The intent for the current listening run, reused when re-arming. */
+    private var voiceIntent: android.content.Intent? = null
     private var isListening = false
 
     // Pick an image from the gallery, copy it locally, then analyze inline.
@@ -145,6 +167,9 @@ class ChatActivity : AppCompatActivity() {
     
     // --- Data ---
     private val conversations = mutableListOf<Conversation>()
+
+    /** Current text in the drawer search box; "" means show everything. */
+    private var conversationFilter: String = ""
     private var currentConversation: Conversation? = null
     
     // --- Services ---
@@ -278,16 +303,47 @@ class ChatActivity : AppCompatActivity() {
         val content = findViewById<View>(R.id.layoutChatContent)
         val basePaddingBottom = content.paddingBottom
 
-        androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(content) { view, insets ->
+        // The listener MUST be attached to the same view SystemBarsInsets uses -
+        // android.R.id.content's first child, the DrawerLayout - not to
+        // layoutChatContent.
+        //
+        // SystemBarsInsets returns WindowInsetsCompat.CONSUMED from its listener on
+        // that DrawerLayout, which ends the dispatch there: a listener registered on
+        // any descendant, including layoutChatContent, is never called. So this ran
+        // exactly zero times and the keyboard went on covering the composer, which is
+        // why the careful padding fix documented above never actually took effect.
+        //
+        // This replaces SystemBarsInsets' own listener on that view (it is installed
+        // first, in onCreate), so this one listener must now do BOTH jobs: the status
+        // bar / cutout padding at the top that SystemBarsInsets was providing, and
+        // the IME inset at the bottom.
+        val host = (findViewById<android.view.ViewGroup>(android.R.id.content))?.getChildAt(0)
+            ?: content
+        val basePaddingTop = content.paddingTop
+
+        androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(host) { _, insets ->
             val imeHeight = insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.ime()).bottom
-            view.setPadding(
-                view.paddingLeft,
-                view.paddingTop,
-                view.paddingRight,
-                basePaddingBottom + imeHeight
+            val bars = insets.getInsets(
+                androidx.core.view.WindowInsetsCompat.Type.systemBars() or
+                    androidx.core.view.WindowInsetsCompat.Type.displayCutout()
             )
+            // While the keyboard is up it already covers the navigation bar, so the
+            // bar inset must not be added on top of the IME height or the composer
+            // floats above the keyboard with a gap under it.
+            val bottom = if (imeHeight > 0) imeHeight else bars.bottom
+            content.setPadding(
+                content.paddingLeft,
+                basePaddingTop + bars.top,
+                content.paddingRight,
+                basePaddingBottom + bottom
+            )
+            // Hide the bottom nav while typing: it is 68dp of fixed height below the
+            // composer that would otherwise push the input box up off the keyboard.
+            findViewById<View>(R.id.bottomNavigation)?.visibility =
+                if (imeHeight > 0) View.GONE else View.VISIBLE
             insets
         }
+        androidx.core.view.ViewCompat.requestApplyInsets(host)
     }
 
     /** Greeting uses the stored profile name; suggestions prefill the composer. */
@@ -349,12 +405,14 @@ class ChatActivity : AppCompatActivity() {
         }
 
         showListeningUi(true)
+        voiceRestarts = 0
+        voiceStoppedByUser = false
 
         speechRecognizer?.destroy()
         speechRecognizer = android.speech.SpeechRecognizer.createSpeechRecognizer(this).apply {
             setRecognitionListener(object : android.speech.RecognitionListener {
                 override fun onReadyForSpeech(params: Bundle?) {}
-                override fun onBeginningOfSpeech() {}
+                override fun onBeginningOfSpeech() { heardSpeechThisRun = true }
                 override fun onRmsChanged(rmsdB: Float) {
                     // rmsdB roughly -2..10; map to 0f..1f for the wave amplitude.
                     voiceWave.setAmplitude(((rmsdB + 2f) / 12f))
@@ -381,6 +439,30 @@ class ChatActivity : AppCompatActivity() {
                             error == android.speech.SpeechRecognizer.ERROR_SPEECH_TIMEOUT ||
                             error == android.speech.SpeechRecognizer.ERROR_CLIENT ||
                             error == android.speech.SpeechRecognizer.ERROR_RECOGNIZER_BUSY
+
+                        // Android's recognizer gives up roughly 3s after it starts if
+                        // it has not heard speech yet, reporting NO_MATCH or
+                        // SPEECH_TIMEOUT. This used to close the mic outright, which is
+                        // the "I tap the mic and it stops after 3 seconds" the user
+                        // hits whenever they take a moment to think before speaking.
+                        //
+                        // If they have not actually started talking, that is not a
+                        // failure - it is the recognizer being impatient. Silently
+                        // re-arm it and keep the mic UI up, so from the user's side the
+                        // mic simply stays open and waits. Bounded by MAX_VOICE_RESTARTS
+                        // so a genuinely dead recognizer cannot loop forever.
+                        val waitingForSpeech = !heardSpeechThisRun &&
+                            !voiceStoppedByUser &&
+                            (error == android.speech.SpeechRecognizer.ERROR_NO_MATCH ||
+                                error == android.speech.SpeechRecognizer.ERROR_SPEECH_TIMEOUT)
+
+                        if (waitingForSpeech && voiceRestarts < MAX_VOICE_RESTARTS) {
+                            voiceRestarts++
+                            Log.d(TAG, "🎙️ Recognizer timed out before speech - re-arming ($voiceRestarts/$MAX_VOICE_RESTARTS)")
+                            restartVoiceListening()
+                            return@runOnUiThread
+                        }
+
                         showListeningUi(false)
                         if (!recoverable) {
                             Toast.makeText(this@ChatActivity, speechErrorMessage(error), Toast.LENGTH_SHORT).show()
@@ -425,6 +507,8 @@ class ChatActivity : AppCompatActivity() {
             // Identify the calling app to the system recognizer (required on many devices).
             putExtra(android.speech.RecognizerIntent.EXTRA_CALLING_PACKAGE, packageName)
         }
+        voiceIntent = intent
+        heardSpeechThisRun = false
         try {
             Log.d(TAG, "🎙️ Voice listening started")
             speechRecognizer?.startListening(intent)
@@ -433,6 +517,28 @@ class ChatActivity : AppCompatActivity() {
             Toast.makeText(this, "Couldn't start voice input", Toast.LENGTH_SHORT).show()
             showListeningUi(false)
         }
+    }
+
+    /**
+     * Re-arms the recognizer after it gave up without hearing anything, keeping the
+     * listening UI on screen so the mic looks continuously open to the user.
+     *
+     * A small delay is needed: the recognizer is still tearing down its session
+     * inside onError, and calling startListening() synchronously there is refused
+     * with ERROR_RECOGNIZER_BUSY on most devices.
+     */
+    private fun restartVoiceListening() {
+        val intent = voiceIntent ?: return
+        heardSpeechThisRun = false
+        etChatInput.postDelayed({
+            if (!isListening || voiceStoppedByUser) return@postDelayed
+            try {
+                speechRecognizer?.startListening(intent)
+            } catch (e: Exception) {
+                Log.e(TAG, "Re-arm failed: ${e.message}")
+                showListeningUi(false)
+            }
+        }, 250)
     }
 
     // ========================================================================
@@ -508,6 +614,9 @@ class ChatActivity : AppCompatActivity() {
     }
 
     private fun stopVoiceListening(cancelled: Boolean) {
+        // Marks this as a deliberate stop so the onError that follows cancel()/
+        // stopListening() does not re-arm the mic behind the user's back.
+        voiceStoppedByUser = true
         try {
             if (cancelled) speechRecognizer?.cancel() else speechRecognizer?.stopListening()
         } catch (_: Exception) {}
@@ -612,6 +721,40 @@ class ChatActivity : AppCompatActivity() {
             layoutManager = LinearLayoutManager(this@ChatActivity)
             adapter = conversationAdapter
         }
+
+        // The search field was laid out and bound to a property but never given a
+        // listener, so typing in it did nothing and every chat stayed on screen.
+        etSearchConversations.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: android.text.Editable?) {
+                applyConversationFilter(s?.toString().orEmpty())
+            }
+        })
+    }
+
+    /**
+     * Filters the drawer list by [query], matching the chat title and the text of
+     * any message in it, so searching for a word you remember saying finds the chat
+     * even when its title is still "New Chat 3".
+     */
+    private fun applyConversationFilter(query: String) {
+        val q = query.trim()
+        conversationFilter = q
+        val shown = if (q.isEmpty()) {
+            conversations.toList()
+        } else {
+            conversations.filter { convo ->
+                convo.title.contains(q, ignoreCase = true) ||
+                    convo.messages.any { it.text.contains(q, ignoreCase = true) }
+            }
+        }
+        conversationAdapter.submit(shown)
+    }
+
+    /** Re-applies the active search after the underlying list changes. */
+    private fun refreshConversationList() {
+        applyConversationFilter(conversationFilter)
     }
 
     private fun setupDrawer() {
@@ -700,7 +843,7 @@ class ChatActivity : AppCompatActivity() {
             }
             conversation.title = previewSource.take(30) + if (previewSource.length > 30) "..." else ""
         }
-        conversationAdapter.notifyDataSetChanged()
+        refreshConversationList()
         saveConversations()
 
         val cleanedMessage = if (wakeWordInput.hasWakePhrase) {
@@ -900,7 +1043,7 @@ class ChatActivity : AppCompatActivity() {
                 )
                 
                 conversation.updatePreview()
-                conversationAdapter.notifyDataSetChanged()
+                refreshConversationList()
                 saveConversations()
             }
             
@@ -1326,7 +1469,7 @@ class ChatActivity : AppCompatActivity() {
 
                 // Update preview
                 conversation.updatePreview()
-                conversationAdapter.notifyDataSetChanged()
+                refreshConversationList()
                 saveConversations()
                 
             } catch (e: Exception) {
@@ -1440,7 +1583,7 @@ class ChatActivity : AppCompatActivity() {
                 memoryManager.incrementMessageStats(isNewConversation = false)
 
                 conversation.updatePreview()
-                conversationAdapter.notifyDataSetChanged()
+                refreshConversationList()
                 saveConversations()
                 
             } catch (e: Exception) {
@@ -1527,7 +1670,7 @@ class ChatActivity : AppCompatActivity() {
             title = "New Chat ${conversations.size + 1}"
         )
         conversations.add(0, newConversation)
-        conversationAdapter.notifyItemInserted(0)
+        refreshConversationList()
         switchToConversation(newConversation)
         saveConversations()
 
@@ -1538,8 +1681,14 @@ class ChatActivity : AppCompatActivity() {
     }
 
     private fun deleteConversation(conversation: Conversation, position: Int) {
-        conversations.removeAt(position)
-        conversationAdapter.notifyItemRemoved(position)
+        // Delete by identity, not by row index. `position` is the row in the
+        // (possibly filtered) drawer list, which stopped matching the master list
+        // as soon as search could hide rows — removing at that index would delete
+        // whichever chat happened to sit there instead of the one tapped.
+        val index = conversations.indexOfFirst { it.id == conversation.id }
+        if (index < 0) return
+        conversations.removeAt(index)
+        refreshConversationList()
         saveConversations()
         
         if (currentConversation == conversation) {
@@ -1607,9 +1756,70 @@ class ChatActivity : AppCompatActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        silenceVoiceForChat()
+    }
+
     override fun onPause() {
         super.onPause()
         saveConversations()
+        restoreVoiceAfterChat()
+    }
+
+    /**
+     * The text-chat screen owns the mic while it is open.
+     *
+     * Two things otherwise talk over the user here: a Gemini Live voice session
+     * left running from the Home screen keeps speaking replies at them while they
+     * are typing, and the "Hey IMI" detector keeps listening - so a wake phrase in
+     * the room (or the AI's own voice) starts a voice conversation on top of the
+     * chat they are in the middle of writing. Both also hold the microphone, which
+     * is the same mic the composer's voice-input button needs.
+     *
+     * Stopping them on entry and restoring on exit keeps one input active at a time.
+     */
+    private fun silenceVoiceForChat() {
+        try {
+            val live = GeminiLiveService.getInstance()
+            if (live != null && GeminiLiveService.isActive()) {
+                live.stopLiveConversation()
+                Log.i(TAG, "🔇 Stopped Gemini Live voice session for the chat screen")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not stop live conversation: ${e.message}")
+        }
+        try {
+            com.sdk.glassessdksample.ui.HotHelper.getInstance(this).setSuppressed(true)
+            Log.i(TAG, "🔇 Wake word suppressed while the chat screen is open")
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not suppress wake word: ${e.message}")
+        }
+    }
+
+    /**
+     * Releases the hold taken by [silenceVoiceForChat].
+     *
+     * setSuppressed(false) deliberately does not restart the detector on its own,
+     * so the re-arm has to be asked for explicitly - via ListeningService, which is
+     * the same path the rest of the app uses and which respects mute and an
+     * in-progress conversation rather than blindly starting the mic.
+     */
+    private fun restoreVoiceAfterChat() {
+        try {
+            com.sdk.glassessdksample.ui.HotHelper.getInstance(this).setSuppressed(false)
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not release wake suppression: ${e.message}")
+        }
+        try {
+            startService(
+                android.content.Intent(this, com.sdk.glassessdksample.ListeningService::class.java)
+                    .apply { action = com.sdk.glassessdksample.ListeningService.ACTION_REARM_WAKE_WORD }
+            )
+            Log.i(TAG, "🔊 Wake word re-armed after leaving the chat screen")
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not re-arm wake word: ${e.message}")
+        }
     }
     
     override fun onRequestPermissionsResult(

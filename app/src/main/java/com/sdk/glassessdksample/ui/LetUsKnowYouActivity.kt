@@ -215,7 +215,7 @@ class LetUsKnowYouActivity : AppCompatActivity() {
                 }
             }
 
-            override fun onToolCall(toolName: String, args: Map<String, Any>): String = "Tool disabled in profile interview mode"
+            override suspend fun onToolCall(toolName: String, args: Map<String, Any>): String = "Tool disabled in profile interview mode"
 
             override fun onAudioPlaybackStart() {
                 runOnUiThread {

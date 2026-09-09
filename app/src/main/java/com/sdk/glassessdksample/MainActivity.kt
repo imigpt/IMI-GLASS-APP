@@ -338,7 +338,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             if (currentNewsKey == null || currentNewsKey.isBlank()) {
                 // No key configured - app will use Gemini AI fallback for news
                 Log.d(TAG, "News API key not set, will use Gemini fallback")
-            } 
+            }
         } catch (e: Exception) {
             Log.w(TAG, "Failed to read News API key from prefs: ${e.message}")
         }
@@ -1747,6 +1747,21 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
      */
     private fun startGeminiLiveConversation() {
         try {
+            // Silent mode means IMI neither listens nor speaks, so no path may open
+            // a live session while it is on. Checked here rather than only at each
+            // call site so a route that forgets the check cannot bypass it.
+            if (isAiMuted) {
+                Log.i(TAG, "🔇 Silent Mode is on — not starting a live conversation")
+                runOnUiThread {
+                    Toast.makeText(
+                        this,
+                        "Silent Mode is on — unmute AI to talk to IMI",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+                return
+            }
+
             // Check dual connection before starting
             val hasFullConnection = checkDualConnection()
 
@@ -6426,7 +6441,10 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     /**
      * Handle tool calls from Gemini Live API
      */
-    private fun handleGeminiToolCall(toolName: String, args: Map<String, Any>): String {
+    // suspend: the LocalToolHandlers / browser / song-ID calls below are all
+    // network-bound. They used to be wrapped in runBlocking, which pinned an IO
+    // worker for the whole call and starved the audio loops sharing that pool.
+    private suspend fun handleGeminiToolCall(toolName: String, args: Map<String, Any>): String {
         // ONLY analyze_view should open Vision Chat (for "what is in front of me" type queries)
         // take_photo should just take photo, not open Vision Chat
         if (toolName == "analyze_view") {
@@ -6453,15 +6471,13 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 // cookies with the Web section, so the user's logins carry over.
                 in com.sdk.glassessdksample.ui.web.GlassBrowserTools.TOOL_NAMES -> {
                     com.sdk.glassessdksample.ui.web.GlassBrowserTools
-                        .handleBlocking(this@MainActivity, toolName, args)
+                        .handle(this@MainActivity, toolName, args)
                 }
 
                 // 🎵 Shazam-style song ID from the ambient audio the live session
                 // is already capturing — no camera, no UI, no second recorder.
                 "identify_song" -> {
-                    kotlinx.coroutines.runBlocking {
-                        com.sdk.glassessdksample.ui.SongIdentifier.identifyFromLiveSession()
-                    }
+                    com.sdk.glassessdksample.ui.SongIdentifier.identifyFromLiveSession()
                 }
 
                 "make_phone_call" -> {
@@ -6533,9 +6549,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 "dictionary" , "define_word" -> {
                     val word = args["word"] as? String ?: args["query"] as? String ?: return "Error: No word provided"
                     try {
-                        kotlinx.coroutines.runBlocking {
-                            return@runBlocking LocalToolHandlers.dictionaryLookup(word)
-                        }
+                        LocalToolHandlers.dictionaryLookup(word)
                     } catch (e: Exception) {
                         "Error fetching definition: ${e.message}"
                     }
@@ -6543,9 +6557,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 "wiki_summary", "wikipedia" -> {
                     val q = args["query"] as? String ?: args["topic"] as? String ?: return "Error: No topic provided"
                     try {
-                        kotlinx.coroutines.runBlocking {
-                            return@runBlocking LocalToolHandlers.wikiSummary(q)
-                        }
+                        LocalToolHandlers.wikiSummary(q)
                     } catch (e: Exception) {
                         "Error fetching wiki summary: ${e.message}"
                     }
@@ -6553,9 +6565,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 "web_search", "web_search_instant" -> {
                     val q = args["query"] as? String ?: return "Error: No query provided"
                     try {
-                        kotlinx.coroutines.runBlocking {
-                            return@runBlocking LocalToolHandlers.webSearchInstant(q)
-                        }
+                        LocalToolHandlers.webSearchInstant(q)
                     } catch (e: Exception) {
                         "Error performing web search: ${e.message}"
                     }
@@ -6563,9 +6573,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 "get_stock", "stock_quote" -> {
                     val symbol = args["symbol"] as? String ?: args["ticker"] as? String ?: return "Error: No symbol provided"
                     try {
-                        kotlinx.coroutines.runBlocking {
-                            return@runBlocking LocalToolHandlers.stockQuote(symbol)
-                        }
+                        LocalToolHandlers.stockQuote(symbol)
                     } catch (e: Exception) {
                         "Error fetching stock: ${e.message}"
                     }
@@ -6573,9 +6581,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 "get_weather", "weather" -> {
                     val city = args["city"] as? String ?: args["location"] as? String ?: return "Error: No location provided"
                     try {
-                        kotlinx.coroutines.runBlocking {
-                            return@runBlocking LocalToolHandlers.weatherForCity(city)
-                        }
+                        LocalToolHandlers.weatherForCity(city)
                     } catch (e: Exception) {
                         "Error fetching weather: ${e.message}"
                     }
@@ -6583,9 +6589,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 "web_search_full" -> {
                     val q = args["query"] as? String ?: args["q"] as? String ?: return "Error: No query provided"
                     try {
-                        kotlinx.coroutines.runBlocking {
-                            return@runBlocking LocalToolHandlers.webSearchFull(q)
-                        }
+                        LocalToolHandlers.webSearchFull(q)
                     } catch (e: Exception) {
                         "Error performing full web search: ${e.message}"
                     }
@@ -6593,22 +6597,43 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 "google_search" -> {
                     val q = args["query"] as? String ?: args["q"] as? String ?: return "Error: No query provided"
                     try {
-                        kotlinx.coroutines.runBlocking {
-                            return@runBlocking LocalToolHandlers.googleSearch(q)
-                        }
+                        LocalToolHandlers.googleSearch(q)
                     } catch (e: Exception) {
                         "Error performing Google search: ${e.message}"
                     }
                 }
-                // Accept tool name with camelCase from model: googleSearch
+                // Accept tool name with camelCase from model: googleSearch.
+                // "google_search" is also accepted as a safety net: the Live API can
+                // hand Google's own built-in grounding tool back to the client as a
+                // function call, and without a branch here it fell through to
+                // "Unknown function" and the model reported the search as failed.
                 "googleSearch" -> {
                     val q = args["query"] as? String ?: args["q"] as? String ?: return "Error: No query provided"
                     try {
-                        kotlinx.coroutines.runBlocking {
-                            return@runBlocking LocalToolHandlers.googleSearch(q)
-                        }
+                        LocalToolHandlers.googleSearch(q)
                     } catch (e: Exception) {
                         "Error performing Google search: ${e.message}"
+                    }
+                }
+                // Flights had no handler at all, so "find me flights from Delhi to
+                // Jaipur tomorrow" fell through to "Unknown function": the model said
+                // it was searching, got told the tool failed, and the turn ended with
+                // nothing spoken. There is no flight API wired up, so build a natural
+                // query and run it through the same web search the other lookups use.
+                "search_flights", "get_flights", "find_flights" -> {
+                    val origin = args["origin"] as? String ?: args["from"] as? String
+                    val destination = args["destination"] as? String ?: args["to"] as? String
+                    val date = args["date"] as? String ?: args["when"] as? String
+                    val q = args["query"] as? String ?: buildString {
+                        append("flights")
+                        if (!origin.isNullOrBlank()) append(" from $origin")
+                        if (!destination.isNullOrBlank()) append(" to $destination")
+                        if (!date.isNullOrBlank()) append(" $date")
+                    }.takeIf { it != "flights" } ?: return "Error: No route provided"
+                    try {
+                        LocalToolHandlers.googleSearch(q)
+                    } catch (e: Exception) {
+                        "Error searching flights: ${e.message}"
                     }
                 }
                 
@@ -7786,7 +7811,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 }
             }
             
-            override fun onToolCall(toolName: String, args: Map<String, Any>): String {
+            override suspend fun onToolCall(toolName: String, args: Map<String, Any>): String {
                 Log.d(TAG, "🔧 Tool call: $toolName with args: $args")
                 // Tells onTurnComplete that this turn was already actioned, so the
                 // vision fallback there stays out of the way.
