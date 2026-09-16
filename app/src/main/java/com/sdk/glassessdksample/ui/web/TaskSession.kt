@@ -149,6 +149,8 @@ object TaskSession {
         plan = null
         phase = Phase.GATHERING
         lastActivityAt = System.currentTimeMillis()
+        // A new task starts its step budget from zero.
+        GlassBrowserEngine.resetStepsSpent()
         Log.d(TAG, "Task started: $userRequest")
         notifyListeners()
     }

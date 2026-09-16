@@ -548,6 +548,13 @@ class ListeningService : Service() {
                 return
             }
 
+            // 🛒 Same for a Swiggy order, which asks which address, which item
+            // and how to pay before anything can be placed.
+            if (com.sdk.glassessdksample.ui.swiggy.SwiggyOrderSession.isActive) {
+                Log.i(TAG, "🛒 Swiggy order in progress — keeping the session open for the user's answer")
+                return
+            }
+
             if (!isContinuousChatEnabled() && fullInput.trim().isNotEmpty()) {
                 Log.i(TAG, "🔂 Continuous Chat off — ending background session once this reply finishes")
                 endBackgroundSessionAfterCurrentReply("Continuous Chat off")
@@ -617,6 +624,21 @@ class ListeningService : Service() {
                 // here with the app in the background — that is the point.
                 in com.sdk.glassessdksample.ui.web.GlassBrowserTools.TOOL_NAMES ->
                     com.sdk.glassessdksample.ui.web.GlassBrowserTools
+                        .handle(this@ListeningService, toolName, args)
+                // 🛒 Swiggy is plain network calls, so ordering works with the
+                // app in the background too. swiggy_connect is the exception:
+                // it opens a browser, which needs the app on screen.
+                "swiggy_connect" ->
+                    "Connecting Swiggy needs the IMI app open on your phone."
+                in com.sdk.glassessdksample.ui.swiggy.SwiggyTools.TOOL_NAMES ->
+                    com.sdk.glassessdksample.ui.swiggy.SwiggyTools
+                        .handle(this@ListeningService, toolName, args)
+                // 🚗 Same split for Uber: booking and tracking are plain network
+                // calls, but uber_connect opens a browser and needs the app up.
+                "uber_connect" ->
+                    "Connecting Uber needs the IMI app open on your phone."
+                in com.sdk.glassessdksample.ui.uber.UberTools.TOOL_NAMES ->
+                    com.sdk.glassessdksample.ui.uber.UberTools
                         .handle(this@ListeningService, toolName, args)
                 "say_goodbye" -> { endBackgroundConversation(); "Goodbye!" }
                 "mute_ai" -> { endBackgroundConversation(); "Muting now." }

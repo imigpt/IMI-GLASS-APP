@@ -76,6 +76,57 @@ object GlassBrowserEngine {
     @Volatile
     private var guidance: MutableList<String> = mutableListOf()
 
+    /**
+     * What the agent had already done when it parked, kept across the resume.
+     *
+     * A resumed run used to start with an empty history: it re-planned from
+     * scratch against the current page, could not tell what it had already
+     * tried or achieved, and so decided it was finished (or stuck) within a
+     * step or two. "Continue" therefore appeared to do nothing. Carrying the
+     * history means the resumed run genuinely picks up where it left off.
+     */
+    @Volatile
+    private var parkedHistory: List<ActionResult> = emptyList()
+
+    /**
+     * Steps already spent on this task, across every leg of it.
+     *
+     * The per-run cap exists so a confused agent cannot browse forever. But a
+     * long task that checks in, is told to carry on, and comes back with the
+     * counter reset would never actually be limited — and one that could not
+     * raise the ceiling at all would ask again every 40 steps forever. This
+     * tracks the true total so the runner can extend deliberately.
+     */
+    @Volatile
+    var stepsSpent: Int = 0
+        private set
+
+    fun addStepsSpent(count: Int) {
+        stepsSpent += count
+    }
+
+    /**
+     * Starts a fresh count for a new task.
+     *
+     * Without this the total carries into the next task, which would make an
+     * unrelated job claim it had already done 40 steps before it began.
+     */
+    fun resetStepsSpent() {
+        stepsSpent = 0
+    }
+
+    /** Stores what the agent had done, for the run that resumes it. */
+    fun parkHistory(history: List<ActionResult>) {
+        parkedHistory = history.toList()
+    }
+
+    /** Hands back the parked history and clears it. */
+    fun takeParkedHistory(): List<ActionResult> {
+        val h = parkedHistory
+        parkedHistory = emptyList()
+        return h
+    }
+
     /** Guards against two voice turns driving the browser at once. */
     @Volatile
     var isBusy: Boolean = false
@@ -219,8 +270,11 @@ object GlassBrowserEngine {
         pendingReason = null
         interruptedGoal = null
         waitKind = WaitKind.USER_ACTION
-        // Guidance belongs to the abandoned task, not the next one.
+        // Guidance, history and the step count all belong to the abandoned
+        // task, not the next one.
         guidance.clear()
+        parkedHistory = emptyList()
+        stepsSpent = 0
         isBusy = false
         notifyWaitChanged()
     }

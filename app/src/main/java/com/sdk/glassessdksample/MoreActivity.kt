@@ -67,6 +67,9 @@ class MoreActivity : AppCompatActivity() {
         binding.cardCamera.setOnClickListener { open(CameraActivity::class.java) }
         binding.cardQuickNotes.setOnClickListener { open(QuickNotesActivity::class.java) }
         binding.cardWeb.setOnClickListener { open(WebBrowserActivity::class.java) }
+        binding.cardSignInSites.setOnClickListener {
+            open(com.sdk.glassessdksample.ui.web.SignInAccountsActivity::class.java)
+        }
         binding.cardMeetingMinutes.setOnClickListener { open(MeetingMinutesActivity::class.java) }
         binding.cardConversationHistory.setOnClickListener { open(ConversationHistoryActivity::class.java) }
         binding.cardChat.setOnClickListener { open(ChatActivity::class.java) }

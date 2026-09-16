@@ -43,6 +43,13 @@ class HeadlessAgentRunner(
         val history = mutableListOf<ActionResult>()
 
         if (resuming) {
+            // Everything the agent had already done, carried across the pause.
+            // Without this a resumed run began blank: it re-planned from
+            // scratch against the current page, could not see what it had
+            // already tried or achieved, and concluded within a step or two
+            // that it was done or stuck — so saying "continue" looked like it
+            // did nothing at all.
+            history.addAll(GlassBrowserEngine.takeParkedHistory())
             history.add(
                 ActionResult(
                     BrowserAction.Wait("user handled this step"),
@@ -53,13 +60,54 @@ class HeadlessAgentRunner(
         }
 
         var steps = 0
-        while (steps < MAX_STEPS) {
+        // The page as it was, to notice a run going nowhere. Action results
+        // cannot be trusted for this: a click on a dead element reports
+        // success, so a task can spend forty "successful" steps without the
+        // page ever changing — which is exactly what a Flipkart run did.
+        var lastSignature = ""
+        var unchangedFor = 0
+        // The budget EXTENDS ITSELF while the task is going well. A long job
+        // stopping every 40 steps to ask "shall I keep going?" was the single
+        // most annoying thing about it — nothing had gone wrong, the agent was
+        // mid-flow, and the user had to say continue purely to grant steps it
+        // could have taken itself. Now it only stops when it is genuinely
+        // stuck, or when the hard ceiling makes it irresponsible to carry on
+        // unsupervised.
+        var budget = MAX_STEPS
+        while (steps < budget) {
             steps++
+            GlassBrowserEngine.addStepsSpent(1)
 
-            onProgress?.invoke("Reading the page… (step $steps of $MAX_STEPS)")
+            // Reached the current budget? Decide whether to grant more.
+            if (steps == budget && GlassBrowserEngine.stepsSpent < HARD_MAX_STEPS) {
+                val progressing = history.takeLast(PROGRESS_WINDOW).let { recent ->
+                    recent.isEmpty() || recent.any { it.success }
+                }
+                if (progressing) {
+                    budget += STEP_EXTENSION
+                    Log.d(
+                        TAG,
+                        "Extending budget to $budget (total ${GlassBrowserEngine.stepsSpent})"
+                    )
+                    onProgress?.invoke("Still working — this one is taking a while…")
+                }
+            }
+
+            onProgress?.invoke("Reading the page… (step $steps)")
             val page = GlassBrowserEngine.readPage()
 
-            onProgress?.invoke("Working out the next step… ($steps of $MAX_STEPS)")
+            onProgress?.invoke("Working out the next step… (step $steps)")
+
+            // Has the page actually MOVED? Action results cannot answer this:
+            // clicking a dead element and typing into an already-filled field
+            // both report success, so a run can spend forty "successful" steps
+            // with the page never changing — which is precisely what happened
+            // when a Flipkart task did nothing but retype the same search term.
+            val signature = page.url + "|" + page.title + "|" +
+                (page.raw.optJSONArray("inputs")?.length() ?: 0) + "," +
+                (page.raw.optJSONArray("buttons")?.length() ?: 0)
+            if (signature == lastSignature) unchangedFor++ else unchangedFor = 0
+            lastSignature = signature
 
             // The DOM read is the normal path: instant, free, exact selectors.
             // Only when it comes back with genuinely nothing to act on — a site
@@ -70,9 +118,36 @@ class HeadlessAgentRunner(
             // Never on the first step: nothing has been navigated to yet, so
             // there is nothing to photograph. Belt and braces alongside the
             // blank-page check in hasNothingActionable().
-            val action = if (steps > 1 && page.hasNothingActionable()) {
-                Log.d(TAG, "Page summary is empty — falling back to vision")
-                onProgress?.invoke("Looking at the page…")
+            //
+            // Two triggers, both meaning "the page code is not telling me what
+            // I need to know":
+            //
+            //  - the summary is empty, so there is nothing to act on at all;
+            //  - the last few steps kept FAILING, which in practice means the
+            //    planner is quoting selectors that do not work. A Flipkart
+            //    search burned 200 steps repeating "field not found" against a
+            //    search box that was plainly on screen — the DOM read was
+            //    misleading it, and no number of retries against the same bad
+            //    summary was ever going to fix that. A picture breaks the loop.
+            val failureRun = recentFailureRun(history)
+            val stuckOnDom = steps > 1 && failureRun >= VISION_AFTER_FAILURES
+            // Counting failures only catches the LOUD kind of stuck. A page
+            // that never changes while every action claims success is the
+            // quiet kind, and it slipped straight past the failure counter.
+            val goingNowhere = unchangedFor >= VISION_AFTER_UNCHANGED
+            val needsEyes = steps > 1 &&
+                (page.hasNothingActionable() || stuckOnDom || goingNowhere)
+
+            val action = if (needsEyes) {
+                Log.d(
+                    TAG,
+                    when {
+                        stuckOnDom -> "Stuck after $failureRun failures — using vision"
+                        goingNowhere -> "Page unchanged for $unchangedFor steps — using vision"
+                        else -> "Page summary is empty — falling back to vision"
+                    }
+                )
+                onProgress?.invoke("Taking a proper look at the page…")
                 planFromScreenshot(goal, history)
                     ?: planner.planNext(goal, page, history, emptyList())
             } else {
@@ -92,6 +167,7 @@ class HeadlessAgentRunner(
                             "${WebSessionManager.displayHost(page.url)} — I couldn't work " +
                             "out what to do next. What should I try?"
                     }
+                    GlassBrowserEngine.parkHistory(history)
                     GlassBrowserEngine.requireUser(
                         question,
                         goal,
@@ -114,6 +190,7 @@ class HeadlessAgentRunner(
                     // is folded into the goal rather than discarded — resuming
                     // on the unchanged goal walked straight back into the same
                     // dead end, which is what made a stuck agent unrecoverable.
+                    GlassBrowserEngine.parkHistory(history)
                     GlassBrowserEngine.requireUser(
                         action.question,
                         goal,
@@ -123,7 +200,7 @@ class HeadlessAgentRunner(
                 }
 
                 is BrowserAction.HandoffToUser ->
-                    return handOff(action.reason, goal)
+                    return handOff(action.reason, goal, history)
 
                 else -> Unit
             }
@@ -132,7 +209,7 @@ class HeadlessAgentRunner(
                 is ActionValidator.Verdict.Allow -> Unit
 
                 is ActionValidator.Verdict.Handoff ->
-                    return handOff(verdict.reason, goal)
+                    return handOff(verdict.reason, goal, history)
 
                 is ActionValidator.Verdict.Reject -> {
                     Log.d(TAG, "Rejected ${action.describe()}: ${verdict.reason}")
@@ -142,6 +219,7 @@ class HeadlessAgentRunner(
 
                 is ActionValidator.Verdict.NeedsConfirmation -> {
                     // Deliberately not confirmable by voice. See the class note.
+                    GlassBrowserEngine.parkHistory(history)
                     GlassBrowserEngine.requireUser(verdict.prompt, goal)
                     return Outcome(
                         false,
@@ -155,24 +233,38 @@ class HeadlessAgentRunner(
             val result = executor.execute(action)
             history.add(result)
 
+            // Every action, logged. Diagnosing a stuck run from the budget
+            // counter alone was guesswork — the log showed 40 steps passing
+            // and not a single thing the agent had tried.
+            Log.d(
+                TAG,
+                "step $steps: ${action.describe()} -> " +
+                    (if (result.success) "ok" else "FAILED") + ": ${result.detail}"
+            )
+
             delay(STEP_GAP_MS)
         }
 
-        // Running out of steps is no longer the end of the task. Say what went
-        // wrong and ASK what to try instead, keeping the goal parked so the
-        // user's answer can carry it on. Giving up here meant a task died on
-        // one bad guess when the user usually knows the way round it.
+        // The loop only ends here for one of two reasons, and they read very
+        // differently to the user.
+        //
+        // Either the agent stopped making progress — nothing in the recent
+        // window succeeded — in which case more steps would just repeat the
+        // same failure and the user's guidance is genuinely worth having.
+        //
+        // Or it hit the hard ceiling, which exists because an agent that
+        // extends itself indefinitely could browse for a very long time on
+        // someone's data with nobody watching. That is not a failure, and
+        // saying so matters: the task can simply be told to carry on.
         val explanation = explainFailure(history)
-        // Hitting the cap is a CHECK-IN, not a dead end — the run can carry on
-        // from exactly here. Only word it as "what should I try instead" when
-        // something was actually going wrong; otherwise it reads as a failure
-        // when the task was simply long.
-        val stalled = history.any { !it.success }
+        val stalled = history.takeLast(PROGRESS_WINDOW).none { it.success }
         val question = if (stalled) {
             "$explanation What should I try instead?"
         } else {
-            "$explanation Shall I keep going?"
+            "$explanation That's as far as I'll go without checking — say " +
+                "continue and I'll carry on."
         }
+        GlassBrowserEngine.parkHistory(history)
         GlassBrowserEngine.requireUser(
             question,
             goal,
@@ -193,7 +285,8 @@ class HeadlessAgentRunner(
         val failures = history.filter { !it.success }
         val lastFailure = failures.lastOrNull()
 
-        val sb = StringBuilder("I've done $MAX_STEPS steps and I'm not finished yet. ")
+        val total = GlassBrowserEngine.stepsSpent.coerceAtLeast(MAX_STEPS)
+        val sb = StringBuilder("I've done $total steps on this. ")
 
         when {
             // The same action failing repeatedly is the agent stuck in a loop —
@@ -220,8 +313,7 @@ class HeadlessAgentRunner(
             else -> {
                 val lastStep = history.lastOrNull()?.action?.describe()
                 if (lastStep != null) {
-                    sb.append("Nothing went wrong exactly — the task just needed more steps ")
-                        .append("than I'm allowed. I got as far as ")
+                    sb.append("It's a long one and I'm still going. I've got as far as ")
                         .append(lastStep.replaceFirstChar { it.lowercase() })
                         .append(".")
                 } else {
@@ -231,6 +323,23 @@ class HeadlessAgentRunner(
         }
 
         return sb.toString()
+    }
+
+    /**
+     * How many of the most recent actions failed, counting back from the end.
+     *
+     * A run of failures is the signal that the page summary is misleading the
+     * planner — it keeps choosing selectors that are not really there. Counting
+     * only the unbroken tail means one bad step among successes does not
+     * trigger an expensive screenshot.
+     */
+    private fun recentFailureRun(history: List<ActionResult>): Int {
+        var count = 0
+        for (result in history.asReversed()) {
+            if (result.success) break
+            count++
+        }
+        return count
     }
 
     /**
@@ -276,7 +385,14 @@ class HeadlessAgentRunner(
      * Parks the goal and tells the user, in speech, what only they can do.
      * This is the "this is your time to do it" moment.
      */
-    private fun handOff(reason: String, goal: String): Outcome {
+    private fun handOff(
+        reason: String,
+        goal: String,
+        history: List<ActionResult> = emptyList()
+    ): Outcome {
+        // Keep what has been done, so resuming after the login carries on
+        // rather than starting the task over from nothing.
+        GlassBrowserEngine.parkHistory(history)
         GlassBrowserEngine.requireUser(reason, goal)
         // requireUser() pushes the blocked page onto whatever home screen is
         // open (BrowserHandoffOverlay), so the user no longer has to go and
@@ -307,7 +423,51 @@ class HeadlessAgentRunner(
          * so a genuinely long task is finished across as many legs as it needs,
          * with the user deciding each time.
          */
+        /** Steps in the first leg, before the budget starts extending itself. */
         private const val MAX_STEPS = 40
+
+        /** Granted each time the agent reaches its budget and is still progressing. */
+        private const val STEP_EXTENSION = 20
+
+        /**
+         * The ceiling no amount of self-extension crosses.
+         *
+         * Self-extension exists so a long task finishes without nagging; this
+         * exists so a confused one cannot run all day on the user's data and
+         * usage budget while nobody is watching. At this point it stops and
+         * checks in — which the user can wave through.
+         */
+        private const val HARD_MAX_STEPS = 200
+
+        /**
+         * How many recent steps are examined to decide "is this going well?".
+         *
+         * All-failures across this window means more steps would only repeat
+         * the same mistake, so the user's help is worth more than the budget.
+         */
+        private const val PROGRESS_WINDOW = 6
+
+        /**
+         * Consecutive failures before the agent stops trusting the page code
+         * and looks at a screenshot instead.
+         *
+         * Two is deliberate: one failure is ordinary — a stale selector, a
+         * mistimed click — and retrying is the right response. Two in a row
+         * means the summary itself is wrong, and further retries against it
+         * are wasted steps.
+         */
+        private const val VISION_AFTER_FAILURES = 2
+
+        /**
+         * Identical page snapshots before the agent stops believing its own
+         * action results and looks at a screenshot.
+         *
+         * Three, not two: a page can legitimately stay the same across a
+         * scroll that reveals nothing new, or a click that opens an overlay
+         * the summary happens to describe identically.
+         */
+        private const val VISION_AFTER_UNCHANGED = 3
+
         private const val STEP_GAP_MS = 300L
     }
 }

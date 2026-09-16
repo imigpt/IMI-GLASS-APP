@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Debug-only additions.
+
+  SwiggyDebugReceiver dumps Swiggy's live MCP tool schemas to logcat so the
+  real tool names and required arguments can be read off a running device:
+
+    adb shell am broadcast -a com.aselea.imiglass.SWIGGY_DUMP_SCHEMAS
+    adb logcat -s SwiggySchema
+
+  It is declared here rather than in the main manifest so it is absent from
+  release builds entirely.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <receiver
+            android:name="com.sdk.glassessdksample.ui.swiggy.SwiggyDebugReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.aselea.imiglass.SWIGGY_DUMP_SCHEMAS" />
+            </intent-filter>
+        </receiver>
+    </application>
+
+</manifest>

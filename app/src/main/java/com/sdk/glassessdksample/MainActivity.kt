@@ -6470,6 +6470,22 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                         .handle(this@MainActivity, toolName, args)
                 }
 
+                // 🛒 Swiggy Food / Instamart / Dineout, over Swiggy's own MCP
+                // servers. Placing an order is gated behind a spoken
+                // confirmation inside SwiggyTools, the same way email sending is.
+                in com.sdk.glassessdksample.ui.swiggy.SwiggyTools.TOOL_NAMES -> {
+                    com.sdk.glassessdksample.ui.swiggy.SwiggyTools
+                        .handle(this@MainActivity, toolName, args)
+                }
+
+                // 🚗 Uber rides, over Uber's rider REST API. Booking is gated
+                // behind a spoken confirmation inside UberTools, the same way
+                // Swiggy ordering and email sending are.
+                in com.sdk.glassessdksample.ui.uber.UberTools.TOOL_NAMES -> {
+                    com.sdk.glassessdksample.ui.uber.UberTools
+                        .handle(this@MainActivity, toolName, args)
+                }
+
                 // 🎵 Shazam-style song ID from the ambient audio the live session
                 // is already capturing — no camera, no UI, no second recorder.
                 "identify_song" -> {
@@ -7587,16 +7603,30 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                     // "the one reply" closed the session as soon as it finished
                     // speaking, dropping the user back to the wake word with the
                     // question hanging. The task owns the session until it ends.
+                    // 🛒 ...and NOT in the middle of a Swiggy order, for exactly
+                    // the same reason as a task. An order ASKS the user things
+                    // ("which address?", "cash or UPI?") and cannot be completed
+                    // in one turn — Swiggy refuses a search without an address
+                    // and an order without a payment method, so the questions
+                    // are unavoidable. Counting the question as "the one reply"
+                    // closed the session the moment it finished speaking, so the
+                    // user's answer landed in a fresh session that knew nothing
+                    // about the order.
                     val continuousChat = prefs.getBoolean("continuous_chat", CONTINUOUS_CHAT_DEFAULT)
                     val visionInFlight = visionBusy || visionChatOpenFlag
                     val taskInFlight = com.sdk.glassessdksample.ui.web.TaskSession.isActive
-                    if (!continuousChat && trimmedInput.isNotEmpty() && !visionInFlight && !taskInFlight) {
+                    val orderInFlight = com.sdk.glassessdksample.ui.swiggy.SwiggyOrderSession.isActive
+                    if (!continuousChat && trimmedInput.isNotEmpty() && !visionInFlight &&
+                        !taskInFlight && !orderInFlight
+                    ) {
                         Log.d(TAG, "🔂 Continuous Chat off - ending session once this reply finishes playing")
                         endSessionAfterCurrentReply("Continuous Chat off")
                     } else if (visionInFlight) {
                         Log.d(TAG, "👁️ Vision in flight - keeping session open to speak the result")
                     } else if (taskInFlight) {
                         Log.d(TAG, "📋 Task in progress - keeping session open for the user's answer")
+                    } else if (orderInFlight) {
+                        Log.d(TAG, "🛒 Swiggy order in progress - keeping session open for the user's answer")
                     }
 
                     // ❌ REMOVED: Vision Chat triggers from Gemini Live - Vision Chat sirf manual open hoga

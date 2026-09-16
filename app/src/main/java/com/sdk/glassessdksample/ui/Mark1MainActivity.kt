@@ -1274,8 +1274,12 @@ class Mark1MainActivity : AppCompatActivity(), GeminiLiveService.GeminiLiveCallb
         // answered out loud; treating the question as "the one reply" closed the
         // session the moment it finished speaking and dropped the user back to
         // the wake word with the question unanswered.
+        // 🛒 A Swiggy order asks the same kind of questions - which address,
+        // which item, cash or UPI - so it holds the session the same way.
         if (com.sdk.glassessdksample.ui.web.TaskSession.isActive) {
             Log.d(TAG, "📋 Task in progress - keeping session open for the user's answer")
+        } else if (com.sdk.glassessdksample.ui.swiggy.SwiggyOrderSession.isActive) {
+            Log.d(TAG, "🛒 Swiggy order in progress - keeping session open for the user's answer")
         } else if (isSingleShotMode() && fullInput.isNotBlank()) {
             Log.d(TAG, "🔂 Continuous Chat off - ending session once this reply finishes playing")
             runOnUiThread { endSessionAfterCurrentReply("Continuous Chat off") }
@@ -1310,6 +1314,16 @@ class Mark1MainActivity : AppCompatActivity(), GeminiLiveService.GeminiLiveCallb
             // the Web section, so the user's logins carry over.
             in com.sdk.glassessdksample.ui.web.GlassBrowserTools.TOOL_NAMES ->
                 com.sdk.glassessdksample.ui.web.GlassBrowserTools
+                    .handle(this@Mark1MainActivity, toolName, args)
+            // 🛒 Swiggy is network-only (their MCP servers), so it needs no
+            // glasses hardware and works the same on Mark 1.
+            in com.sdk.glassessdksample.ui.swiggy.SwiggyTools.TOOL_NAMES ->
+                com.sdk.glassessdksample.ui.swiggy.SwiggyTools
+                    .handle(this@Mark1MainActivity, toolName, args)
+            // 🚗 Uber is network-only too, plus the phone's own GPS for pickup —
+            // no glasses hardware, so it works the same on Mark 1.
+            in com.sdk.glassessdksample.ui.uber.UberTools.TOOL_NAMES ->
+                com.sdk.glassessdksample.ui.uber.UberTools
                     .handle(this@Mark1MainActivity, toolName, args)
             else -> "Tool $toolName not yet implemented."
         }

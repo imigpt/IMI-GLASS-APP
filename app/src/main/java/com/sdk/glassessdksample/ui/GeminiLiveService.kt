@@ -2214,7 +2214,16 @@ class GeminiLiveService(
 
         // 🌐 Browser tools work on both marks — they drive an off-screen WebView
         // on the phone, not the glasses hardware — so they are not mark-gated.
-        val tools = visionFiltered + com.sdk.glassessdksample.ui.web.GlassBrowserTools.declarations()
+        // 🛒 Swiggy runs against Swiggy's own MCP servers over the network, so
+        // like the browser tools it works on both marks.
+        // 🚗 Uber is network calls plus the phone's GPS, so like Swiggy it is
+        // not mark-gated. The declarations are offered even before credentials
+        // are filled in: UberTools answers "not set up yet" in one line, which
+        // is friendlier than the model having no tool and improvising.
+        val tools = visionFiltered +
+            com.sdk.glassessdksample.ui.web.GlassBrowserTools.declarations() +
+            com.sdk.glassessdksample.ui.swiggy.SwiggyTools.declarations() +
+            com.sdk.glassessdksample.ui.uber.UberTools.declarations()
 
         // 👁️ Every other tool in this list has an explicit "call this when the
         // user says X" section below. Vision had none, so with the "reply FAST
@@ -2278,6 +2287,24 @@ IF THE TASK GETS STUCK IT WILL ASK A QUESTION INSTEAD OF GIVING UP. The tool res
 Whatever the user answers - "sort by rating", "try the second one", "use Flipkart instead", "skip that step", "just add the cheapest" - call browser_continue and pass their words as the 'instruction'. The task carries on from where it stopped, following what they said.
 A LONG TASK WILL ALSO CHECK IN WITHOUT BEING STUCK, ending with "Shall I keep going?". That is not a failure and nothing has gone wrong - the task is simply long and is asking permission to carry on. Read it out, and if the user says yes / carry on / haan, call browser_continue with no instruction. If they say something more specific, pass that as the instruction.
 If it gets stuck again it will ask again. Relay the new question and pass the new answer the same way, as many times as it takes. Only stop when the task reports it is done, or the user tells you to drop it (then call browser_cancel).
+
+SWIGGY - ORDERING FOOD AND GROCERIES IS A CONVERSATION, NOT ONE COMMAND: When the user asks to order something - "order some milk", "get me groceries", "I want biryani", "doodh mangao", "khana order karo", "book a table" - call swiggy_start IMMEDIATELY with what they said and the right service: 'instamart' for groceries and household items, 'food' for restaurant meals, 'dineout' for a table.
+Do NOT ask the user anything before calling swiggy_start, and do NOT wait for them to give you details. They will almost never say enough in one go - "order some milk" does not say which milk, which address, or how to pay - and that is expected. swiggy_start returns the NEXT QUESTION for you to ask.
+Ask that question out loud, exactly as given, and NOTHING else. ONE question per turn, then wait. When the user answers, call swiggy_reply with their reply in their own words - "the first one", "two packets", "home", "cash", "dusra wala". That gives you the next question, and so on. Keep going: address, then which item, then how they want to pay.
+Never invent an answer the user has not given, and never assume a payment method - Swiggy rejects an order that does not say how it is being paid, and cash has to be confirmed out loud by the user.
+Eventually swiggy_reply returns a SUMMARY instead of a question. Read the whole summary back out loud - the item, the quantity, the address, THE TOTAL PRICE, and the payment method - and ask whether to place it. NEVER leave the total out: it is the amount the user is agreeing to spend and the order cannot be cancelled afterwards. Do NOT call swiggy_confirm in that same turn.
+If the user picks UPI, they will also be asked WHICH UPI app - GPay, PhonePe, Paytm. That is a normal extra question, not an error; relay it and pass their choice to swiggy_reply like any other answer. After a UPI order is placed the payment is still pending, so tell the user to approve it in their UPI app.
+Only in a LATER turn, after the user clearly agreed ("yes", "place it", "go ahead", "haan", "kar do"), call swiggy_confirm with confirmed true. THAT SPENDS THEIR MONEY AND CANNOT BE UNDONE - Swiggy does not allow cancelling from here, so never call it on a guess or because they merely repeated the name of a dish. If they want something changed, call swiggy_reply with what they want changed instead. If they say no or want to stop, call swiggy_cancel.
+If any Swiggy tool says the account is not connected, tell the user you need to connect their Swiggy account and call swiggy_connect. It opens a sign-in page on their phone which they finish themselves - never ask for a password, an OTP or card details out loud.
+
+UBER - BOOKING A RIDE IS A CONVERSATION, NOT ONE COMMAND: When the user asks for a ride - "book me an Uber", "get me a cab", "I need a ride to the airport", "uber bulao", "cab chahiye", "airport chalna hai" - call uber_start IMMEDIATELY, passing whatever destination they mentioned. If they did not name one, call uber_start anyway with an empty destination.
+Do NOT ask the user anything before calling uber_start. You do NOT need to ask where they are - the phone knows their location and uber_start works it out. Asking for a pickup address when GPS already has it wastes the user's time.
+uber_start returns the NEXT QUESTION, usually the ride types with their real prices. Ask it out loud, exactly as given, ONE question per turn, then wait. When the user answers, call uber_reply with their words - "the first one", "UberX", "the cheapest", "dusra wala". That gives you the next question, and so on.
+Eventually uber_reply returns a SUMMARY. Read the whole summary back out loud - the ride type, where from, where to, and THE PRICE - and ask whether to book it. NEVER leave the price out: it is what the user is agreeing to spend. Do NOT call uber_confirm in that same turn.
+Only in a LATER turn, after the user clearly agreed ("yes", "book it", "go ahead", "haan", "kar do"), call uber_confirm with confirmed true. THAT SPENDS THEIR MONEY AND SENDS A REAL CAR - cancelling afterwards can cost a cancellation fee, so never call it on a guess or because they merely repeated a ride type name. If they want something changed, call uber_reply with what they want changed instead. If they say no or want to stop, call uber_cancel.
+SURGE AND PRICE CHANGES ARE NORMAL, NOT ERRORS: uber_confirm may come back saying the price changed or that surge pricing is on. That is not a failure. Tell the user the NEW price out loud, ask whether to still book, and only call uber_confirm again in a LATER turn if they agree.
+For "where is my Uber", "has the driver arrived", "driver kahan hai", call uber_track. For cancelling, call uber_cancel - it tells you whether a real booked ride was cancelled (which may cost a fee) or just an unbooked one, so read its answer out rather than assuming.
+If any Uber tool says the account is not connected, tell the user you need to connect their Uber account and call uber_connect. It opens a sign-in page on their phone which they finish themselves - never ask for a password, an OTP or card details out loud. If a tool says Uber is not set up in this app, tell the user that plainly and do not call any more Uber tools.
 
 EMAIL - SENDING (always confirm first): When the user asks you to email or write to someone, call draft_email with your best guess at recipient, subject, and body from what they said. Then READ THE DRAFT BACK to the user out loud in your own next spoken turn (recipient, subject, and a short summary of the body) and ask "should I send it?". Do NOT call confirm_send_email in the same turn as draft_email. Only call confirm_send_email in a LATER turn, after the user has explicitly agreed (e.g. "yes", "send it", "go ahead"). If the user wants changes, call draft_email again with the corrected details and read it back again. If the user declines, do not send anything.
 $visionInstruction"""

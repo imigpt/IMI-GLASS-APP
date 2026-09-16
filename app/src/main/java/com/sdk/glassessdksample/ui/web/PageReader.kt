@@ -23,6 +23,9 @@ object PageReader {
     // legitimately have far more than 40 interactive elements on screen, and
     // truncating at 40 hid the ones further down the page.
     private const val MAX_ELEMENTS = 60
+
+    /** Links are capped lower — see the collection loop for why. */
+    private const val MAX_LINKS = 25
     private const val MAX_TEXT_CHARS = 2500
 
     /**
@@ -34,6 +37,7 @@ object PageReader {
     (function() {
       try {
         var MAX_ELEMENTS = $MAX_ELEMENTS;
+        var MAX_LINKS = $MAX_LINKS;
         var MAX_TEXT = $MAX_TEXT_CHARS;
 
         function visible(el) {
@@ -141,8 +145,12 @@ object PageReader {
           buttons.push({ selector: selectorFor(b), label: bl });
         }
 
+        // Links are capped tighter than inputs and buttons. A shopping home
+        // page has hundreds, they are the least likely thing the agent needs,
+        // and left uncapped they crowded the summary until it was truncated
+        // before the useful controls had been read.
         var linkEls = document.querySelectorAll('a[href]');
-        for (var k = 0; k < linkEls.length && links.length < MAX_ELEMENTS; k++) {
+        for (var k = 0; k < linkEls.length && links.length < MAX_LINKS; k++) {
           var a = linkEls[k];
           if (!visible(a)) continue;
           var al = label(a);

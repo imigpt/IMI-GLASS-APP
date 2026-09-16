@@ -74,13 +74,30 @@ class WebAgentPlanner(private val context: Context?) {
            needs no handoff, since you are not interacting with it.
         4. If you need information only the user has (an address, a date, a
            choice between options), use "ask_user" with one clear question.
-        5. Prefer "search" over hunting for a site's own search box.
+        5. "search" runs a WEB search (Google). Use it to FIND a site, not to
+           search inside one you are already on. When the goal names a site and
+           you are on it, use that site's OWN search box: type into the field
+           whose label or placeholder looks like search, with submit true.
+           A search box is an input — look under INPUTS in the summary, not
+           BUTTONS. If the summary was truncated and you cannot find it, scroll
+           or reload and read again; do not invent a selector, and do not fall
+           back to a web search for something you were asked to do on that site.
         6. When the goal is met, use "done" with a short summary that answers
            the user's actual question. If you have read what the user asked
            for, put the answer in the summary itself.
         7. If you are stuck or the site blocks automation, use "failed" with a
            plain explanation. Do not loop.
         8. Do not repeat an action that has just failed. Try something else.
+        8a. NEVER type the same text into the same field twice. If the history
+           shows you already typed it, the text IS in the field — typing it
+           again achieves nothing. A whole run has been lost to exactly this.
+           After typing a search term, the next action is ALWAYS one of:
+           re-issue "type" with submit true to press Enter, or "click" the
+           search button or a suggestion. If the page still looks unchanged
+           after that, the field may not be the real search box — look for a
+           different one, or open the site's search URL directly.
+        8b. Check the INPUTS list before typing. If a field already shows
+           current="your text", it is filled — move on to submitting it.
         9. You CAN navigate this browser's history. "back" and "forward" are
            yours to use and need no permission from anyone — going back to a
            search results page to try a different result is a normal, expected
@@ -245,7 +262,10 @@ class WebAgentPlanner(private val context: Context?) {
     }
 
     private fun trim(text: String): String =
-        if (text.length <= MAX_PAGE_CHARS) text else text.take(MAX_PAGE_CHARS)
+        if (text.length <= MAX_PAGE_CHARS) text
+        else text.take(MAX_PAGE_CHARS) +
+            "\n[... page summary truncated — if what you need isn't listed, " +
+            "scroll or use a different approach rather than inventing a selector]"
 
     private fun isModelNotFound(e: Exception): Boolean {
         val message = e.message.orEmpty()
@@ -263,8 +283,25 @@ class WebAgentPlanner(private val context: Context?) {
             "gemini-2.0-flash-lite"
         )
 
-        private const val MAX_PAGE_CHARS = 6000
-        private const val MAX_HISTORY = 8
+        /**
+         * How much of the page summary reaches the model.
+         *
+         * Raised from 6000. The widened element selector legitimately finds far
+         * more controls on a modern site, and at 6000 the summary was being
+         * chopped mid-list — so the planner quoted a selector from a truncated
+         * view and got "field not found" for a search box that was plainly on
+         * screen. A Flipkart search burned 200 steps on exactly that. Input
+         * tokens are cheap next to a task that cannot finish.
+         */
+        private const val MAX_PAGE_CHARS = 24000
+        /**
+         * How many past steps the planner sees.
+         *
+         * Raised from 8. A loop longer than the window is invisible: the model
+         * could type the same thing into the same box a dozen times and never
+         * see enough history to notice it was repeating itself.
+         */
+        private const val MAX_HISTORY = 20
         private const val MAX_ANSWERS = 5
     }
 }

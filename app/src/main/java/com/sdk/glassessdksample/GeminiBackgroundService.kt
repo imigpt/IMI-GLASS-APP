@@ -43,7 +43,7 @@ class GeminiBackgroundService : Service() {
         private const val CHANNEL_ID = "imi_gemini_live_channel"
         private const val NOTIF_ID = 1002
 
-        const val ACTION_STOP = "com.aselea.imiglass.ACTION_STOP_GEMINI_BG"
+         const val ACTION_STOP = "com.aselea.imiglass.ACTION_STOP_GEMINI_BG"
     }
 
     // Binder given to clients (MainActivity)

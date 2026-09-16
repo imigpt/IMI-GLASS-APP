@@ -228,6 +228,13 @@
             android:windowSoftInputMode="adjustResize"
             android:label="Web" />
 
+        <!-- SIGNED-IN SITES - pre-authenticate sites the browser agent acts on -->
+        <activity
+            android:name=".ui.web.SignInAccountsActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:label="Signed-in sites" />
+
         <!-- QUICK NOTES - USER NOTES AND AI REMINDERS -->
         <activity
             android:name=".ui.QuickNotesActivity"

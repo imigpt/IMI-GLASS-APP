@@ -319,8 +319,17 @@ class ActionExecutor(private val webView: WebView) {
             ActionResult(
                 action,
                 true,
-                "Filled the field. If this opened a list of suggestions, the next " +
-                    "page summary will show them — pick one from there."
+                if (action.submit) {
+                    "Typed \"${action.text}\" and submitted it."
+                } else {
+                    // Naming what is already in the field matters: the old
+                    // wording invited the planner to look for suggestions, and
+                    // when none appeared it simply typed the same text again —
+                    // a run spent forty steps doing nothing but that.
+                    "Typed \"${action.text}\" into the field. The text is now IN it. " +
+                        "Do NOT type it again. Either click the suggestion or search " +
+                        "button, or re-issue type with submit true to press Enter."
+                }
             )
         } else {
             ActionResult(action, false, "Couldn't fill the field: ${res.optString("error")}")
