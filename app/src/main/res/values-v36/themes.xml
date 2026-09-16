@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!--
+        Android 16 (API 36) enforces edge-to-edge layout for every app that
+        targets it. This app's activities lay out against the system bars as
+        they always have, so we opt out of the enforcement to keep the UI
+        byte-for-byte identical to the shipped version. This is the official,
+        supported opt-out (android:windowOptOutEdgeToEdgeEnforcement, public
+        since API 36).
+
+        Each style below inherits from its counterpart in values/themes.xml and
+        adds ONLY the opt-out flag, so fonts, colours and window flags defined
+        there continue to apply. These overrides take effect on API 36+ only;
+        older devices use the base themes unchanged.
+    -->
+
+    <style name="Theme.GlassesSDKSample" parent="Theme.GlassesSDKSample.Base">
+        <item name="android:windowOptOutEdgeToEdgeEnforcement">true</item>
+    </style>
+
+    <style name="Theme.App.Starting" parent="Theme.App.Starting.Base">
+        <item name="android:windowOptOutEdgeToEdgeEnforcement">true</item>
+    </style>
+
+    <style name="Theme.GlassesSDKSample.Fullscreen" parent="Theme.GlassesSDKSample.Fullscreen.Base">
+        <item name="android:windowOptOutEdgeToEdgeEnforcement">true</item>
+    </style>
+
+</resources>

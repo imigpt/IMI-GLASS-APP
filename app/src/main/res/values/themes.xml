@@ -65,6 +65,12 @@
     <style name="Theme.GlassesSDKSample" parent="Theme.GlassesSDKSample.Base" />
 
 
+    <!-- Concrete themes referenced by the manifest. On API 36+ these are
+         overridden in values-v36/themes.xml to add the edge-to-edge opt-out;
+         the .Base styles below hold the actual appearance in both cases. -->
+    <style name="Theme.App.Starting" parent="Theme.App.Starting.Base" />
+    <style name="Theme.GlassesSDKSample.Fullscreen" parent="Theme.GlassesSDKSample.Fullscreen.Base" />
+
     <!-- Window Transition Animations -->
     <style name="AppWindowAnimation">
         <item name="android:activityOpenEnterAnimation">@android:anim/fade_in</item>
@@ -74,7 +80,7 @@
     </style>
 
     <!-- Splash Screen Theme -->
-    <style name="Theme.App.Starting" parent="Theme.Material3.DayNight.NoActionBar">
+    <style name="Theme.App.Starting.Base" parent="Theme.Material3.DayNight.NoActionBar">
         <item name="android:fontFamily">@font/neue_plak</item>
         <item name="fontFamily">@font/neue_plak</item>
         <item name="android:windowBackground">#3A3A3A</item>
@@ -87,7 +93,7 @@
     </style>
 
     <!-- Fullscreen Media Viewer Theme (AppCompat compatible) -->
-    <style name="Theme.GlassesSDKSample.Fullscreen" parent="Theme.AppCompat.NoActionBar">
+    <style name="Theme.GlassesSDKSample.Fullscreen.Base" parent="Theme.AppCompat.NoActionBar">
         <item name="android:fontFamily">@font/neue_plak</item>
         <item name="fontFamily">@font/neue_plak</item>
         <item name="android:windowBackground">#000000</item>

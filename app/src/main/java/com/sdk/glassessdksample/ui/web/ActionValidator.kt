@@ -1,5 +1,6 @@
 package com.sdk.glassessdksample.ui.web
 
+import android.util.Log
 import java.util.Locale
 
 /**
@@ -11,6 +12,8 @@ import java.util.Locale
  * still cannot get a password typed or a CAPTCHA answered.
  */
 object ActionValidator {
+
+    private const val TAG = "ActionValidator"
 
     sealed class Verdict {
         object Allow : Verdict()
@@ -72,6 +75,12 @@ object ActionValidator {
                 if (action.amount == 0.0) Verdict.Reject("Scroll amount was zero.")
                 else Verdict.Allow
 
+            // A coordinate tap comes from the vision fallback, which is blind to
+            // markup — so the label is the only signal about what it will hit.
+            // Hold it to the SAME rules as a normal click: a screenshot must not
+            // become a way around the login and payment guards.
+            is BrowserAction.TapAt -> validateTapAt(action)
+
             else -> Verdict.Allow
         }
     }
@@ -112,9 +121,18 @@ object ActionValidator {
     ): Verdict {
         if (action.selector.isBlank()) return Verdict.Reject("No selector given.")
 
+        // A selector that isn't in the snapshot used to be rejected outright.
+        // That is wrong for anything the page creates in response to the
+        // agent's own typing — autocomplete options, dropdown entries — which
+        // cannot be in a snapshot taken before the typing happened. The
+        // executor can now find an element by its visible text, so let the
+        // click through and let it try; a genuine miss comes back as a failed
+        // action, which the planner can learn from, instead of a rejection
+        // loop that repeats the same doomed attempt until the task dies.
         if (page != null && !page.hasSelector(action.selector)) {
-            return Verdict.Reject(
-                "Selector ${action.selector} is not on this page. Pick one from the list."
+            Log.d(
+                TAG,
+                "Selector not in snapshot, allowing text-match fallback: ${action.selector}"
             )
         }
 
@@ -138,6 +156,25 @@ object ActionValidator {
         return Verdict.Allow
     }
 
+    /** Same login/payment gates as [validateClick], keyed off the label. */
+    private fun validateTapAt(action: BrowserAction.TapAt): Verdict {
+        val label = action.label.lowercase(Locale.ROOT)
+
+        if (LOGIN_KEYWORDS.any { label.contains(it) }) {
+            return Verdict.Handoff(
+                "Signing in is your step. Please log in, then tap Continue and I'll carry on."
+            )
+        }
+
+        if (CONFIRM_KEYWORDS.any { label.contains(it) }) {
+            return Verdict.NeedsConfirmation(
+                "I'm about to tap \"${action.label}\". This may be final or cost money. Continue?"
+            )
+        }
+
+        return Verdict.Allow
+    }
+
     private fun validateOpen(action: BrowserAction.Open): Verdict {
         val url = action.url.trim()
         // Only real web pages. javascript: and data: URLs are how a page would
@@ -149,16 +186,23 @@ object ActionValidator {
     }
 
     /**
-     * Heuristic for text that shouldn't be typed by an automation. Errs toward
-     * handing off: a false positive costs the user one manual entry, a false
-     * negative means the app typed a secret into a page.
+     * Heuristic for text that shouldn't be typed by an automation.
+     *
+     * This deliberately no longer judges a bare short number by its shape. The
+     * old rule was "4-8 digits means OTP or PIN", which also matches every
+     * Indian postcode — so "deliver to pin code 302020" was unachievable by
+     * construction: the agent had to type the one string the validator forbade,
+     * handed off saying "this step needs your own login details" on a page
+     * where the user was already signed in, and looped there forever.
+     *
+     * Where the text is GOING is the reliable signal, and rule 1 of
+     * [validateType] already checks it against what the page reported. This is
+     * the backstop for text that is unmistakably a secret wherever it lands.
      */
     private fun looksLikeCredential(text: String): Boolean {
         val t = text.trim()
         if (t.isEmpty()) return false
-        // A bare 4-8 digit number in a form is almost always an OTP or PIN.
-        if (t.length in 4..8 && t.all { it.isDigit() }) return true
-        // Long card-like digit runs.
+        // Long card-like digit runs. A postcode is never this long.
         if (t.filter { it.isDigit() }.length >= 12 && t.none { it.isLetter() }) return true
         val lower = t.lowercase(Locale.ROOT)
         return lower.contains("password") || lower.contains("otp code")

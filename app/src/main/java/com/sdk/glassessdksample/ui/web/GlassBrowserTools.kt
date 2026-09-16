@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import com.sdk.glassessdksample.ui.QuickNote
 import com.sdk.glassessdksample.ui.QuickNotesManager
+import kotlinx.coroutines.sync.withLock
 
 /**
  * The browser, exposed to the glasses voice session as tools.
@@ -19,8 +20,35 @@ object GlassBrowserTools {
 
     private const val TAG = "GlassBrowserTools"
 
+    /**
+     * Serialises the task tools against each other.
+     *
+     * Every other browser tool guards itself with GlassBrowserEngine.isBusy,
+     * but the task tools plan rather than browse, so that flag never covered
+     * them — two deliveries of one call could run the planner concurrently and
+     * both append to the answer list.
+     */
+    private val taskMutex = kotlinx.coroutines.sync.Mutex()
+
+    /** Last answer handled, to recognise a redelivery of the same call. */
+    @Volatile
+    private var lastAnswerHandled: String? = null
+
+    @Volatile
+    private var lastAnswerAt: Long = 0L
+
+    /** What was said for that answer, replayed if the call arrives again. */
+    @Volatile
+    private var lastTurnSpoken: String = ""
+
+    /** Two identical answers closer together than this are one call, twice. */
+    private const val DUPLICATE_WINDOW_MS = 8_000L
+
     /** Tool names this object handles, for the dispatcher to check against. */
     val TOOL_NAMES = setOf(
+        "start_task",
+        "task_answer",
+        "task_approve",
         "browse_web",
         "browser_continue",
         "browser_cancel",
@@ -41,40 +69,110 @@ object GlassBrowserTools {
     fun declarations(): List<Map<String, Any>> = listOf(
         mapOf(
             "type" to "function",
-            "name" to "browse_web",
+            "name" to "start_task",
             "description" to
-                "Control a real web browser to look something up on the live web or " +
-                "carry out a task on a website. Use this whenever the answer depends on " +
-                "CURRENT information you cannot know from memory - flights, prices, " +
-                "availability, timings, scores, news, stock, opening hours - as well as " +
-                "for doing things on a site: 'find me flights to Delhi', 'how much is " +
-                "this on Amazon', 'what's the score', 'open my email and check', " +
-                "'book a table on this site'. Never answer these by telling the user to " +
-                "go check a website themselves; open it here and report what you found. " +
-                "The browser stays signed in to sites the user has logged into before. " +
-                "Describe the whole task in the 'goal' parameter, in the user's own words.",
+                "Begin a multi-step task that the browser will carry out on the user's " +
+                "phone. Call this ONLY when the user explicitly asks for a task in those " +
+                "words - 'do a task for me', 'start a task', 'I have a task', 'ek task " +
+                "karna hai'. NEVER call it for an ordinary question, however much it " +
+                "sounds like something on the web: 'what are flights to Jaipur', " +
+                "'how much is this', 'what's the score' are all answered by you directly " +
+                "with your own search, not by this. This tool starts a conversation: it " +
+                "returns a QUESTION for you to ask the user out loud, and you pass their " +
+                "reply to task_answer. It does not browse anything yet.",
             "parameters" to mapOf(
                 "type" to "object",
                 "properties" to mapOf(
-                    "goal" to mapOf(
+                    "request" to mapOf(
                         "type" to "string",
-                        "description" to "The complete task to carry out in the browser"
+                        "description" to
+                            "What the user wants done, in their own words. If they only " +
+                            "said 'do a task for me' with no detail, pass that as-is."
                     )
                 ),
-                "required" to listOf("goal")
+                "required" to listOf("request")
             )
         ),
         mapOf(
             "type" to "function",
-            "name" to "browser_continue",
+            "name" to "task_answer",
             "description" to
-                "Resume a browsing task that stopped because the user had to do " +
-                "something themselves, like signing in or solving a security check. " +
-                "Call this when the user says they are done — 'I've logged in', " +
-                "'done', 'carry on', 'continue', 'ho gaya'.",
+                "Pass the user's reply to the question the task asked. Call this every " +
+                "time the user answers something during a task conversation. It returns " +
+                "either the NEXT question to ask out loud, or the finished PLAN to read " +
+                "back to them. When it returns a plan, read it out and ask whether to go " +
+                "ahead - do NOT call task_approve in the same turn.",
             "parameters" to mapOf(
                 "type" to "object",
-                "properties" to emptyMap<String, Any>()
+                "properties" to mapOf(
+                    "answer" to mapOf(
+                        "type" to "string",
+                        "description" to "What the user just said, in their own words"
+                    )
+                ),
+                "required" to listOf("answer")
+            )
+        ),
+        mapOf(
+            "type" to "function",
+            "name" to "task_approve",
+            "description" to
+                "The user has agreed to the plan you read back to them - 'yes', 'go " +
+                "ahead', 'do it', 'haan', 'theek hai'. This starts the actual browsing " +
+                "and may take a while. Call it ONLY in a turn AFTER the plan was read " +
+                "out and the user said yes. If they say no or cancel, set approved to " +
+                "false. If instead they want part of the plan CHANGED - 'no, make it " +
+                "the 20th', 'change the pin code', 'two people not one', 'edit that' - " +
+                "do NOT call this at all: call task_answer with exactly what they want " +
+                "changed, and a fresh plan comes back for them to approve.",
+            "parameters" to mapOf(
+                "type" to "object",
+                "properties" to mapOf(
+                    "approved" to mapOf(
+                        "type" to "boolean",
+                        "description" to "True if the user agreed, false if they cancelled"
+                    )
+                ),
+                "required" to listOf("approved")
+            )
+        ),
+        // browse_web is deliberately NOT declared to the voice model.
+        //
+        // It used to be, and the model reliably chose it for ordinary questions
+        // ("flights to Jaipur", "restaurants nearby") because it was simply
+        // there. That opened a real WebView, which hit sign-in walls and
+        // CAPTCHAs it is not allowed to solve, so the user got "I couldn't get
+        // past the security check" instead of an answer — and no prompt wording
+        // stopped the model reaching for a tool sitting in front of it.
+        //
+        // Live questions are answered by Gemini's own google_search grounding,
+        // server-side, in the same reply. The browser is now reached ONLY
+        // through start_task, which the user triggers by name ("do a task for
+        // me"), so the model never picks it unprompted. The handler below still
+        // exists for the Web section of the app, which calls it directly.
+        mapOf(
+            "type" to "function",
+            "name" to "browser_continue",
+            "description" to
+                "Resume a browsing task that stopped. Two cases. (1) It stopped " +
+                "because the user had to do something themselves — signing in, a " +
+                "security check: call this when they say 'I've logged in', 'done', " +
+                "'carry on', 'continue', 'ho gaya', with no instruction. (2) It got " +
+                "STUCK and asked them what to try instead: pass whatever they answer " +
+                "as 'instruction', in their own words — 'sort by rating', 'try the " +
+                "second one', 'use Flipkart instead', 'skip that bit'. Always pass " +
+                "the instruction when they gave one; without it the task just walks " +
+                "back into the same dead end.",
+            "parameters" to mapOf(
+                "type" to "object",
+                "properties" to mapOf(
+                    "instruction" to mapOf(
+                        "type" to "string",
+                        "description" to
+                            "What the user said to try instead, if they gave guidance. " +
+                            "Leave empty when they only said they had finished a login."
+                    )
+                )
             )
         ),
         mapOf(
@@ -246,8 +344,14 @@ object GlassBrowserTools {
 
         return try {
             when (toolName) {
+                "start_task" -> startTask(context, args["request"]?.toString().orEmpty())
+                "task_answer" -> taskAnswer(context, args["answer"]?.toString().orEmpty())
+                "task_approve" -> taskApprove(
+                    context,
+                    args["approved"]?.toString()?.toBooleanStrictOrNull() ?: true
+                )
                 "browse_web" -> browse(context, args["goal"]?.toString().orEmpty())
-                "browser_continue" -> resume(context)
+                "browser_continue" -> resume(context, args["instruction"]?.toString())
                 "browser_cancel" -> cancel()
                 "read_current_page" -> readPage(context, args["question"]?.toString())
                 "catch_up_on_ai" -> catchUp(
@@ -276,6 +380,142 @@ object GlassBrowserTools {
         }
     }
 
+    // ------------------------------------------------------- task conversation
+
+    /**
+     * Starts the gather-plan-approve flow. Returns the first question, which the
+     * live model reads out; the user's reply comes back through [taskAnswer].
+     */
+    private suspend fun startTask(context: Context, request: String): String {
+        if (GlassBrowserEngine.isBusy) {
+            return "I'm still working on the last thing. Give me a moment."
+        }
+        if (request.isBlank()) {
+            return "Sure — what would you like me to do?"
+        }
+
+        return taskMutex.withLock {
+            TaskSession.begin(request)
+            nextTurn(context)
+        }
+    }
+
+    /** Files an answer and returns either the next question or the plan. */
+    private suspend fun taskAnswer(context: Context, answer: String): String {
+        if (!TaskSession.isActive) {
+            return "There's no task on the go. Say 'start a task' to begin one."
+        }
+        if (answer.isBlank()) return "Sorry, I didn't catch that."
+
+        return taskMutex.withLock {
+            // The SAME answer arriving twice is a duplicate delivery, not the
+            // user repeating themselves: the live socket has several dispatch
+            // paths (Gemini's toolCall plus OpenAI's two function-call events)
+            // and one call can come down more than one of them. Without this,
+            // the planner ran twice, the answer was filed twice, and the user
+            // got the next question — or the whole plan — read out twice.
+            if (answer.trim().equals(lastAnswerHandled, ignoreCase = true) &&
+                System.currentTimeMillis() - lastAnswerAt < DUPLICATE_WINDOW_MS
+            ) {
+                Log.d(TAG, "Ignoring duplicate answer: $answer")
+                return@withLock lastTurnSpoken
+            }
+            lastAnswerHandled = answer.trim()
+            lastAnswerAt = System.currentTimeMillis()
+
+            // A reply during approval is a change request, not an answer to a
+            // question — the model should have called task_approve for a plain yes.
+            if (TaskSession.phase == TaskSession.Phase.AWAITING_APPROVAL) {
+                TaskSession.requestChanges(answer)
+            } else {
+                TaskSession.recordAnswer(answer)
+            }
+            nextTurn(context).also { lastTurnSpoken = it }
+        }
+    }
+
+    /**
+     * Asks the planner what comes next and turns it into something speakable.
+     * Shared by [startTask] and [taskAnswer] because both need the same thing.
+     */
+    private suspend fun nextTurn(context: Context): String {
+        val atCap = TaskSession.questionCount >= TaskPlanner.MAX_QUESTIONS
+        if (atCap) Log.d(TAG, "Question cap reached — a question this turn will be refused")
+
+        val turn = TaskPlanner(context).next(
+            TaskSession.request,
+            TaskSession.answersSoFar()
+        )
+
+        // The cap is enforced HERE, not just asked for in the prompt. This
+        // block used to log "forcing a plan" and then force nothing, so a model
+        // that kept finding one more thing to ask could question the user
+        // indefinitely — and the prompt now explicitly allows up to six
+        // questions, which makes running over more likely rather than less.
+        if (atCap && turn is TaskTurn.Question) {
+            Log.w(TAG, "Planner asked past the cap; requesting a plan instead")
+            val forced = TaskPlanner(context).next(
+                TaskSession.request,
+                TaskSession.answersSoFar() +
+                    ("(no more questions allowed)" to
+                        "Do not ask anything else. Write the plan now and list " +
+                        "anything you still had to assume.")
+            )
+            // If it still will not plan, say so rather than looping.
+            if (forced !is TaskTurn.Question && forced != null) {
+                return renderTurn(forced)
+            }
+            TaskSession.finish()
+            return "I couldn't pin that down well enough to plan it. Try telling me again?"
+        }
+
+        return renderTurn(turn)
+    }
+
+    /** Turns a planner turn into the sentence the glasses should say. */
+    private fun renderTurn(turn: TaskTurn?): String {
+        return when (turn) {
+            null -> {
+                TaskSession.finish()
+                "I couldn't work that one out. Try telling me again?"
+            }
+
+            is TaskTurn.Question -> {
+                TaskSession.askedQuestion(turn.text)
+                turn.text
+            }
+
+            is TaskTurn.Ready -> {
+                TaskSession.awaitApproval(turn.plan)
+                // Spoken short; the phone shows the whole thing via the
+                // TaskSession listener.
+                turn.plan.toSpoken()
+            }
+
+            is TaskTurn.Refused -> {
+                TaskSession.finish()
+                turn.reason
+            }
+        }
+    }
+
+    /** Runs the approved plan, or drops it. */
+    private suspend fun taskApprove(context: Context, approved: Boolean): String {
+        if (TaskSession.phase != TaskSession.Phase.AWAITING_APPROVAL) {
+            return "There's no plan waiting for a yes right now."
+        }
+
+        if (!approved) {
+            TaskSession.finish()
+            return "Okay, I've dropped it."
+        }
+
+        val goal = TaskSession.approve()
+            ?: return "Something went wrong with that plan. Shall we start again?"
+
+        return TaskSession.execute(context, goal)
+    }
+
     // ------------------------------------------------------------------ tools
 
     private suspend fun browse(context: Context, goal: String): String {
@@ -301,14 +541,25 @@ object GlassBrowserTools {
         }
     }
 
-    private suspend fun resume(context: Context): String {
-        val goal = GlassBrowserEngine.resume()
+    /**
+     * Carries a parked task on.
+     *
+     * [instruction] is what the user said when the agent was stuck and asked
+     * what to try instead. It is folded into the goal by the engine, so the
+     * planner sees it on the next turn — previously the answer was discarded
+     * and the agent resumed on the unchanged goal, walking straight back into
+     * whatever had stopped it.
+     */
+    private suspend fun resume(context: Context, instruction: String?): String {
+        val goal = GlassBrowserEngine.resume(instruction)
             ?: return "There's nothing waiting to continue."
 
         GlassBrowserEngine.markBusy(true)
         return try {
-            val runner = HeadlessAgentRunner(context)
-            runner.run(goal, resuming = true).spokenResult
+            // Progress goes to any screen watching, the same as a first run.
+            HeadlessAgentRunner(context) { TaskSession.reportProgress(it) }
+                .run(goal, resuming = true)
+                .spokenResult
         } finally {
             GlassBrowserEngine.markBusy(false)
         }

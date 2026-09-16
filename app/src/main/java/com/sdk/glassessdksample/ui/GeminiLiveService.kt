@@ -2082,20 +2082,17 @@ class GeminiLiveService(
             // DuckDuckGo scrape that returns a single snippet — the "you could check
             // TripAdvisor, there are several options" style non-answer. Grounding
             // handles these directly and far better.
-            // browse_web / read_current_page are deliberately NOT declared here.
             //
-            // Declaring them made the model prefer the on-device browser for ordinary
-            // questions ("flights to Jaipur", "restaurants nearby"). That path opens a
-            // real WebView, which hits sign-in walls and CAPTCHAs it is not allowed to
-            // solve — so the user got "I couldn't get past the security check, you can
-            // fix it on your phone" instead of an answer, and no amount of prompt
-            // wording stopped the model choosing a tool that was sitting right there.
-            // Gemini's own google_search grounding (see the setup message) answers
-            // these server-side in the same reply, which is what this should do.
+            // browse_web is likewise NOT declared — see GlassBrowserTools.declarations(),
+            // where it is commented out of the list for exactly that reason. It was the
+            // same failure: the model preferred the on-device browser for ordinary
+            // questions and the user got "I couldn't get past the security check"
+            // instead of an answer.
             //
-            // The handlers still exist in every onToolCall dispatcher, so the browser
-            // remains reachable from the Web section of the app — it is just no longer
-            // something the voice model can reach for on its own.
+            // What IS declared is start_task / task_answer / task_approve. The browser
+            // is now behind a phrase the USER says ("do a task for me"), so the model
+            // cannot choose it for a question — it only relays a task the user asked
+            // for by name. See the TASK MODE section of the system prompt below.
             mapOf(
                 "type" to "function",
                 "name" to "get_news",
@@ -2270,6 +2267,18 @@ WHEN THE ANSWER IS TOO LONG TO SPEAK: You are talking through glasses, so a long
 
 Naming a website and telling the user to go look themselves is ALWAYS WRONG. So is listing vague options instead of facts. If they ask for places to visit, name actual places. If they ask for restaurants, name actual restaurants. If they ask for flights, give actual airlines and times. If they ask for a distance, give the actual number.
 
+TASK MODE - MULTI-STEP JOBS ON THE WEB: This is ONLY for when the user explicitly asks for a task, in those words: "do a task for me", "start a task", "I have a task for you", "ek task karna hai". Those words are the trigger. Nothing else is.
+NEVER start a task for an ordinary question, no matter how much it sounds like the web: "what are the flights to Jaipur", "how much does this cost", "what's the score", "is it open now" are all questions - answer them yourself as described above. Starting a task for a question is wrong and slow.
+When the user DOES say the trigger words, call start_task with whatever they told you. It gives you back a QUESTION - ask it out loud, exactly as given, and nothing else. When they answer, call task_answer with their reply; that gives you the next question, and so on. Ask ONE question per turn and wait.
+Eventually task_answer returns a PLAN instead of a question. Read the plan out loud and ask if you should go ahead. Do NOT call task_approve in that same turn.
+Only when the user agrees in a LATER turn ("yes", "go ahead", "haan", "theek hai") call task_approve with approved true. If they want something changed, call task_answer with what they want changed. If they say no, call task_approve with approved false.
+The plan is also on their phone screen, so you do not need to read every step aloud - the summary and the main steps are enough.
+While a task is running the user may have to sign in, solve a security check, or PAY. You never do those: the phone shows them the page and they do it themselves. Never ask for a password, an OTP or card details out loud. When they say they are done ("logged in", "done", "ho gaya"), call browser_continue with NO instruction.
+IF THE TASK GETS STUCK IT WILL ASK A QUESTION INSTEAD OF GIVING UP. The tool result will explain what went wrong and end by asking what to try instead - for example "I kept trying to tap Sort by customer rating and it kept failing. What should I try instead?". Read that out loud, exactly as given, and WAIT. The task is not over and you must not say it failed.
+Whatever the user answers - "sort by rating", "try the second one", "use Flipkart instead", "skip that step", "just add the cheapest" - call browser_continue and pass their words as the 'instruction'. The task carries on from where it stopped, following what they said.
+A LONG TASK WILL ALSO CHECK IN WITHOUT BEING STUCK, ending with "Shall I keep going?". That is not a failure and nothing has gone wrong - the task is simply long and is asking permission to carry on. Read it out, and if the user says yes / carry on / haan, call browser_continue with no instruction. If they say something more specific, pass that as the instruction.
+If it gets stuck again it will ask again. Relay the new question and pass the new answer the same way, as many times as it takes. Only stop when the task reports it is done, or the user tells you to drop it (then call browser_cancel).
+
 EMAIL - SENDING (always confirm first): When the user asks you to email or write to someone, call draft_email with your best guess at recipient, subject, and body from what they said. Then READ THE DRAFT BACK to the user out loud in your own next spoken turn (recipient, subject, and a short summary of the body) and ask "should I send it?". Do NOT call confirm_send_email in the same turn as draft_email. Only call confirm_send_email in a LATER turn, after the user has explicitly agreed (e.g. "yes", "send it", "go ahead"). If the user wants changes, call draft_email again with the corrected details and read it back again. If the user declines, do not send anything.
 $visionInstruction"""
 
@@ -2417,6 +2426,30 @@ $visionInstruction"""
                             // The mic is muted while Imi talks, so the VAD would see
                             // this as silence and fire a bogus speech-end. Reset it
                             // instead: the next real user turn starts from scratch.
+                            speechActive = false
+                            lastVoiceFrameMs = 0L
+                            continue
+                        }
+
+                        // 📋 Same treatment while an approved task is RUNNING. Once
+                        // the user has said "go ahead", the agent is driving the
+                        // browser for a minute or more and nothing they say can be
+                        // acted on — but the frames were still being streamed, so
+                        // room noise (or the user muttering at the screen) became a
+                        // new turn that interrupted the model mid-task. Executing is
+                        // the only phase gated: the gathering and approval phases are
+                        // a conversation and obviously need the mic.
+                        // …but the moment the agent PARKS and asks the user for
+                        // something ("log in, then say continue"), the mic must
+                        // come straight back. Without the awaitingUser check
+                        // this gate stayed shut through the whole handoff: the
+                        // agent asked the user to speak and then could not hear
+                        // a word of the reply, which read as the app ignoring
+                        // them entirely.
+                        if (com.sdk.glassessdksample.ui.web.TaskSession.phase ==
+                            com.sdk.glassessdksample.ui.web.TaskSession.Phase.EXECUTING &&
+                            !com.sdk.glassessdksample.ui.web.GlassBrowserEngine.awaitingUser
+                        ) {
                             speechActive = false
                             lastVoiceFrameMs = 0L
                             continue

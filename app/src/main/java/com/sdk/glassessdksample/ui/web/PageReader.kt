@@ -19,7 +19,10 @@ object PageReader {
     /** Marks fields the agent must never touch. Enforced again in the executor. */
     const val SENSITIVE_FLAG = "sensitive"
 
-    private const val MAX_ELEMENTS = 40
+    // Raised alongside the widened button selector below: a React site can
+    // legitimately have far more than 40 interactive elements on screen, and
+    // truncating at 40 hid the ones further down the page.
+    private const val MAX_ELEMENTS = 60
     private const val MAX_TEXT_CHARS = 2500
 
     /**
@@ -61,7 +64,11 @@ object PageReader {
                      (el.getAttribute('autocomplete') || '') + ' ' +
                      (el.getAttribute('aria-label') || '') + ' ' +
                      (el.getAttribute('placeholder') || '')).toLowerCase();
-          return /pass|pwd|otp|cvv|cvc|card|credit|secret|pin\b/.test(hay);
+          // "pin" alone also matched Amazon's "Enter pin code" delivery field,
+          // which is a postcode, not a secret — so the agent was blocked from
+          // the one thing the task required. Match the PIN senses only.
+          if (/pin\s*code|postal\s*code|postcode|\bzip\b/.test(hay)) return false;
+          return /pass|pwd|otp|cvv|cvc|card|credit|secret|\bpin\b/.test(hay);
         }
 
         var refCounter = 0;
@@ -92,13 +99,45 @@ object PageReader {
           });
         }
 
+        // Anything that BEHAVES like a button, not just <button>.
+        //
+        // The narrow list missed entire sites: MakeMyTrip's whole flight form —
+        // origin, destination, and the SEARCH FLIGHTS bar — is <div>s with
+        // click handlers, so the summary came back with no origin, no
+        // destination and no search button, and the agent correctly reported
+        // that it could not see anything to interact with. Modern React sites
+        // draw custom widgets this way as a matter of course.
         var btnEls = document.querySelectorAll(
-          'button, [role="button"], input[type="submit"], input[type="button"]');
+          'button, [role="button"], input[type="submit"], input[type="button"],' +
+          ' [role="option"], [role="menuitem"], [role="tab"], [role="link"],' +
+          ' [role="checkbox"], [role="radio"], [role="switch"], [role="combobox"],' +
+          ' [onclick], [data-testid], [tabindex]:not([tabindex="-1"]),' +
+          ' label, summary,' +
+          ' [class*="btn"], [class*="Btn"], [class*="button"], [class*="Button"]');
+        // A widened net catches containers as well as the real control, so
+        // filter: skip anything that merely WRAPS another candidate, and skip
+        // duplicates of the same element picked up by two selectors.
+        var seenBtn = [];
         for (var j = 0; j < btnEls.length && buttons.length < MAX_ELEMENTS; j++) {
           var b = btnEls[j];
+          if (seenBtn.indexOf(b) !== -1) continue;
+          seenBtn.push(b);
           if (!visible(b)) continue;
+
+          // A wrapper holding another clickable is not itself the target —
+          // clicking it often hits nothing. Keep the innermost one.
+          if (b.querySelector(
+                'button, [role="button"], input[type="submit"], [onclick]')) continue;
+
+          // Huge elements are layout, not controls.
+          var br = b.getBoundingClientRect();
+          if (br.width > window.innerWidth * 0.98 && br.height > 220) continue;
+
           var bl = label(b);
           if (!bl) continue;
+          // Pure-layout divs often carry the whole page's text.
+          if (bl.length > 120) continue;
+
           buttons.push({ selector: selectorFor(b), label: bl });
         }
 
@@ -119,8 +158,36 @@ object PageReader {
           .replace(/\s+/g, ' ').trim().slice(0, MAX_TEXT);
 
         // Heuristics that tell the agent to stop and hand control to the user.
-        var html = document.documentElement.innerHTML;
-        var hasCaptcha = /recaptcha|hcaptcha|captcha|cf-challenge|turnstile/i.test(html);
+        //
+        // CAPTCHA detection deliberately looks for a challenge that is actually
+        // RENDERED, not for a string in the source. Testing the raw HTML against
+        // /captcha/ matched almost every large site — Google results, a 404 page,
+        // any page bundling reCAPTCHA for a login form it isn't showing — so the
+        // agent was constantly told to hand off on pages with no challenge on
+        // them at all, and the user got asked to solve a CAPTCHA that wasn't
+        // there. A real challenge is a visible, sized iframe or widget container.
+        var hasCaptcha = (function () {
+          var SEL = [
+            'iframe[src*="recaptcha/api2/anchor"]',
+            'iframe[src*="recaptcha/enterprise/anchor"]',
+            'iframe[src*="hcaptcha.com/captcha"]',
+            'iframe[src*="challenges.cloudflare.com"]',
+            'div.g-recaptcha', 'div.h-captcha', 'div.cf-turnstile',
+            '#challenge-form', '#captcha', '.captcha-container'
+          ];
+          for (var s = 0; s < SEL.length; s++) {
+            var els = document.querySelectorAll(SEL[s]);
+            for (var e = 0; e < els.length; e++) {
+              var el = els[e];
+              var r = el.getBoundingClientRect();
+              // An invisible/zero-sized recaptcha node is the score-based v3
+              // variety, which needs nothing from the user. Only a challenge
+              // big enough to interact with counts.
+              if (r.width >= 80 && r.height >= 60 && visible(el)) return true;
+            }
+          }
+          return false;
+        })();
         var hasPassword = document.querySelectorAll('input[type="password"]').length > 0;
 
         return JSON.stringify({
@@ -153,6 +220,9 @@ object PageReader {
         val hasCaptcha: Boolean,
         val hasPasswordField: Boolean,
         val atBottom: Boolean,
+        /** Whether this browser has somewhere to go back to / forward to. */
+        val canGoBack: Boolean = false,
+        val canGoForward: Boolean = false,
         val raw: JSONObject
     ) {
         /**
@@ -166,6 +236,10 @@ object PageReader {
             if (hasCaptcha) sb.append("WARNING: a CAPTCHA is present on this page.\n")
             if (hasPasswordField) sb.append("WARNING: a password field is present.\n")
             sb.append("AT_BOTTOM: ").append(atBottom).append('\n')
+            // Stated every turn so the planner never has to guess whether
+            // navigating through history is available to it.
+            sb.append("CAN_GO_BACK: ").append(canGoBack)
+                .append("  CAN_GO_FORWARD: ").append(canGoForward).append('\n')
 
             appendList(sb, "INPUTS", "inputs") { o ->
                 val flag = if (o.optBoolean(SENSITIVE_FLAG)) " [SENSITIVE - DO NOT TYPE]" else ""
@@ -203,6 +277,35 @@ object PageReader {
             }
         }
 
+        /**
+         * True when this snapshot gives the planner nothing it could act on.
+         *
+         * The trigger for the vision fallback. A page that renders every
+         * control as a plain <div> produces a summary with no inputs, no
+         * buttons and no links — the DOM read has honestly failed, and a
+         * picture is the only way left to see the page.
+         */
+        fun hasNothingActionable(): Boolean {
+            // A browser that has not navigated anywhere yet is not an
+            // unreadable page — it is a blank tab, and the right response is to
+            // open something, which plain planning handles. Treating it as
+            // unreadable sent a screenshot of about:blank to the vision model
+            // on the very first step of every run, before any site had loaded:
+            // an empty image, asked "what next?". The whole vision path was
+            // being spent on a blank page and never reached the real site.
+            if (isBlank) return false
+
+            if (!ok) return true
+            val counts = listOf("inputs", "buttons", "links").sumOf { key ->
+                raw.optJSONArray(key)?.length() ?: 0
+            }
+            return counts == 0
+        }
+
+        /** True before the browser has navigated anywhere. */
+        val isBlank: Boolean
+            get() = url.isBlank() || url == "about:blank" || url.startsWith("data:")
+
         /** Whether a selector was actually reported by this snapshot. */
         fun hasSelector(selector: String): Boolean =
             listOf("inputs", "buttons", "links").any { key ->
@@ -227,12 +330,24 @@ object PageReader {
 
     /** Reads the current page. Must be called on the UI thread. */
     suspend fun read(webView: WebView): PageSnapshot = suspendCoroutine { cont ->
+        // History state comes from the WebView, not from the page's JS: a page
+        // cannot see how it was reached. Without it the planner was blind to
+        // its own history — it could only discover that going back was possible
+        // by trying, and a Back that came back "there is no page to go back to"
+        // read to the model as a refusal, which is how the agent ended up
+        // telling the user it was not allowed to navigate between pages.
+        val canBack = webView.canGoBack()
+        val canForward = webView.canGoForward()
         webView.evaluateJavascript(SCRIPT) { result ->
-            cont.resume(parse(result))
+            cont.resume(parse(result, canBack, canForward))
         }
     }
 
-    private fun parse(evaluateResult: String?): PageSnapshot {
+    private fun parse(
+        evaluateResult: String?,
+        canGoBack: Boolean = false,
+        canGoForward: Boolean = false
+    ): PageSnapshot {
         val fallback = PageSnapshot(
             ok = false,
             url = "",
@@ -240,6 +355,8 @@ object PageReader {
             hasCaptcha = false,
             hasPasswordField = false,
             atBottom = false,
+            canGoBack = canGoBack,
+            canGoForward = canGoForward,
             raw = JSONObject()
         )
         if (evaluateResult.isNullOrBlank() || evaluateResult == "null") return fallback
@@ -262,6 +379,8 @@ object PageReader {
                 hasCaptcha = json.optBoolean("hasCaptcha"),
                 hasPasswordField = json.optBoolean("hasPasswordField"),
                 atBottom = json.optBoolean("atBottom"),
+                canGoBack = canGoBack,
+                canGoForward = canGoForward,
                 raw = json
             )
         } catch (_: Exception) {

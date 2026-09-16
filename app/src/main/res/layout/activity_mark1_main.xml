@@ -923,4 +923,13 @@
         app:labelVisibilityMode="unlabeled"
         app:elevation="0dp" />
 
+    <!-- Covers the whole screen when the voice-driven browser agent hits a
+         login/CAPTCHA it must not do itself. Last child so it draws over the
+         dashboard and the bottom nav. Hidden until the engine says otherwise. -->
+    <com.sdk.glassessdksample.ui.web.BrowserHandoffOverlay
+        android:id="@+id/browserHandoffOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:visibility="gone" />
+
 </androidx.coordinatorlayout.widget.CoordinatorLayout>

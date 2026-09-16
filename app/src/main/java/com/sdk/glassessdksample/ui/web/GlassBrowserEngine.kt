@@ -51,6 +51,31 @@ object GlassBrowserEngine {
     @Volatile
     private var interruptedGoal: String? = null
 
+    /**
+     * Why the engine parked, which decides what resuming means.
+     *
+     * A login or CAPTCHA is the user DOING something the agent may not — it
+     * resumes on the same goal, unchanged. Being stuck is different: the agent
+     * has run out of ideas and needs to be TOLD something, and resuming on the
+     * unchanged goal just walks back into the same wall. They were the same
+     * state before, which is why a stuck agent could only ever repeat itself.
+     */
+    enum class WaitKind {
+        /** Sign-in, CAPTCHA, payment — the user acts, the goal is untouched. */
+        USER_ACTION,
+
+        /** The agent is stuck and asked the user what to do instead. */
+        NEEDS_GUIDANCE
+    }
+
+    @Volatile
+    var waitKind: WaitKind = WaitKind.USER_ACTION
+        private set
+
+    /** Guidance the user gave while the agent was stuck, folded into the goal. */
+    @Volatile
+    private var guidance: MutableList<String> = mutableListOf()
+
     /** Guards against two voice turns driving the browser at once. */
     @Volatile
     var isBusy: Boolean = false
@@ -104,30 +129,100 @@ object GlassBrowserEngine {
     // ------------------------------------------------------------- state gates
 
     /**
+     * Notified whenever [awaitingUser] flips, so a screen can put the blocked
+     * page in front of the user the moment it happens.
+     *
+     * Without this the wait-state was pollable but not observable, and the only
+     * thing that ever looked at it was WebBrowserActivity.onResume() — so the
+     * user had to already know something was stuck and walk to More → Web to
+     * find out. The home screen subscribes instead, and the handoff comes to
+     * them. Listeners are called on the main thread.
+     */
+    fun interface WaitListener {
+        /** [reason] is null when the engine stopped waiting (resumed/cancelled). */
+        fun onWaitChanged(reason: String?)
+    }
+
+    private val waitListeners = java.util.concurrent.CopyOnWriteArrayList<WaitListener>()
+
+    /**
+     * Subscribes [listener] and immediately replays the current state, so a
+     * screen that comes up *after* the block happened still shows it — the
+     * common case, since the user is usually looking at the glasses, not the
+     * phone, when the agent gets stuck.
+     */
+    fun addWaitListener(listener: WaitListener) {
+        waitListeners.addIfAbsent(listener)
+        val reason = pendingReason
+        if (reason != null) main.post { listener.onWaitChanged(reason) }
+    }
+
+    fun removeWaitListener(listener: WaitListener) {
+        waitListeners.remove(listener)
+    }
+
+    private fun notifyWaitChanged() {
+        val reason = pendingReason
+        main.post { waitListeners.forEach { it.onWaitChanged(reason) } }
+    }
+
+    /**
      * Marks the engine as needing the user. The glasses speak [reason] and the
      * browser stays put until [resume] or [cancel].
      */
-    fun requireUser(reason: String, goal: String?) {
+    fun requireUser(
+        reason: String,
+        goal: String?,
+        kind: WaitKind = WaitKind.USER_ACTION
+    ) {
         awaitingUser = true
         pendingReason = reason
         interruptedGoal = goal
-        Log.d(TAG, "Waiting on user: $reason")
+        waitKind = kind
+        Log.d(TAG, "Waiting on user ($kind): $reason")
+        notifyWaitChanged()
     }
 
-    /** The user says they've done their part. Returns the goal to resume. */
-    fun resume(): String? {
+    /**
+     * The user says they've done their part. Returns the goal to resume.
+     *
+     * [instruction] is what they said, when they were answering a stuck agent
+     * rather than just finishing a login. It is appended to the goal so the
+     * planner actually sees it next time round — without this the agent resumed
+     * on the identical goal and got stuck in the identical place, which is what
+     * made being stuck unrecoverable.
+     */
+    fun resume(instruction: String? = null): String? {
         awaitingUser = false
         pendingReason = null
+
+        if (!instruction.isNullOrBlank()) guidance.add(instruction.trim())
+
         val goal = interruptedGoal
         interruptedGoal = null
-        return goal
+        waitKind = WaitKind.USER_ACTION
+        notifyWaitChanged()
+
+        if (goal == null) return null
+        if (guidance.isEmpty()) return goal
+
+        return buildString {
+            append(goal)
+            append("\n\nTHE USER HAS SINCE TOLD YOU:")
+            guidance.forEach { append("\n- ").append(it) }
+            append("\nFollow that. Do not go back to an approach they have ruled out.")
+        }
     }
 
     fun cancel() {
         awaitingUser = false
         pendingReason = null
         interruptedGoal = null
+        waitKind = WaitKind.USER_ACTION
+        // Guidance belongs to the abandoned task, not the next one.
+        guidance.clear()
         isBusy = false
+        notifyWaitChanged()
     }
 
     fun markBusy(busy: Boolean) {
@@ -161,6 +256,63 @@ object GlassBrowserEngine {
         withContext(Dispatchers.Main) {
             PageReader.read(ensureWebView(appContext!!))
         }
+
+    /**
+     * A JPEG of the current page, base64-encoded, or null if it can't be taken.
+     *
+     * The LAST resort for understanding a page. Everything else here reads the
+     * DOM, which is cheap, instant and exact — but a site that draws its
+     * controls as plain <div>s can leave that summary genuinely empty, and no
+     * amount of DOM widening finds a control that isn't marked up as one. A
+     * picture is what a person would use in that situation.
+     *
+     * Deliberately not called unless the text summary comes back with nothing
+     * to act on: an image costs ~2000 input tokens per step and adds a second
+     * or two, against ~0 for the DOM read.
+     */
+    suspend fun screenshotBase64(): String? = withContext(Dispatchers.Main) {
+        try {
+            val view = ensureWebView(appContext!!)
+            val width = view.width.takeIf { it > 0 } ?: VIRTUAL_WIDTH
+            val height = view.height.takeIf { it > 0 } ?: VIRTUAL_HEIGHT
+
+            // This WebView is never attached to a window, so there is no
+            // surface to capture — draw it into a bitmap by hand instead.
+            val bitmap = android.graphics.Bitmap.createBitmap(
+                width, height, android.graphics.Bitmap.Config.RGB_565
+            )
+            view.draw(android.graphics.Canvas(bitmap))
+
+            // Downscale before encoding. Gemini tiles an image into 768px
+            // squares at 258 tokens each, so height is what costs money here.
+            val scaled = if (height > MAX_SHOT_HEIGHT) {
+                val ratio = MAX_SHOT_HEIGHT.toFloat() / height
+                android.graphics.Bitmap.createScaledBitmap(
+                    bitmap, (width * ratio).toInt(), MAX_SHOT_HEIGHT, true
+                ).also { bitmap.recycle() }
+            } else {
+                bitmap
+            }
+
+            val out = java.io.ByteArrayOutputStream()
+            scaled.compress(android.graphics.Bitmap.CompressFormat.JPEG, SHOT_QUALITY, out)
+            scaled.recycle()
+
+            android.util.Base64.encodeToString(out.toByteArray(), android.util.Base64.NO_WRAP)
+        } catch (e: Exception) {
+            Log.w(TAG, "Screenshot failed", e)
+            null
+        }
+    }
+
+    /** The size the screenshot was taken at, so tap coordinates can be scaled back. */
+    suspend fun viewportSize(): Pair<Int, Int> = withContext(Dispatchers.Main) {
+        val view = ensureWebView(appContext!!)
+        Pair(
+            view.width.takeIf { it > 0 } ?: VIRTUAL_WIDTH,
+            view.height.takeIf { it > 0 } ?: VIRTUAL_HEIGHT
+        )
+    }
 
     /** Reads the page's prose, for summarising. */
     suspend fun readContent(): PageContentExtractor.Content =
@@ -200,5 +352,9 @@ object GlassBrowserEngine {
 
     private const val VIRTUAL_WIDTH = 1280
     private const val VIRTUAL_HEIGHT = 2000
+
+    /** Screenshots are scaled to this height before encoding, to cap tokens. */
+    private const val MAX_SHOT_HEIGHT = 1536
+    private const val SHOT_QUALITY = 70
     private const val SETTLE_MS = 2500L
 }

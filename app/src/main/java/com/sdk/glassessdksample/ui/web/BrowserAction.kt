@@ -31,6 +31,16 @@ sealed class BrowserAction {
     /** Scroll the page. [amount] is in viewport-heights, negative scrolls up. */
     data class Scroll(val amount: Double) : BrowserAction()
 
+    /**
+     * Tap at a point on the page, in CSS pixels.
+     *
+     * Only produced by the vision fallback, which sees a picture rather than
+     * the DOM and so has coordinates rather than selectors. Every other path
+     * addresses elements properly and should keep doing so — a coordinate is
+     * blind to what it lands on.
+     */
+    data class TapAt(val x: Int, val y: Int, val label: String) : BrowserAction()
+
     object Back : BrowserAction()
     object Forward : BrowserAction()
     object Reload : BrowserAction()
@@ -61,6 +71,7 @@ sealed class BrowserAction {
         is Click -> "Tapping $label"
         is Type -> "Typing into the page"
         is Scroll -> if (amount >= 0) "Scrolling down" else "Scrolling up"
+        is TapAt -> "Tapping $label"
         Back -> "Going back"
         Forward -> "Going forward"
         Reload -> "Reloading"
@@ -111,6 +122,14 @@ sealed class BrowserAction {
                 }
 
                 "scroll" -> Scroll(json.optDouble("amount", 0.8))
+
+                // Vision-only: coordinates instead of a selector.
+                "tap_at" -> {
+                    val x = json.optInt("x", -1)
+                    val y = json.optInt("y", -1)
+                    if (x < 0 || y < 0) null
+                    else TapAt(x, y, json.optString("label").ifBlank { "that" })
+                }
                 "back" -> Back
                 "forward" -> Forward
                 "reload" -> Reload

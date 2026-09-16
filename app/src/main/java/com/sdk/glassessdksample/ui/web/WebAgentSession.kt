@@ -202,7 +202,8 @@ class WebAgentSession(
         if (steps >= MAX_STEPS) {
             listener.onFinished(
                 false,
-                "I've taken $MAX_STEPS steps without finishing. Stopping so this doesn't run away."
+                "I've done $MAX_STEPS steps and I'm not finished. Pausing here rather than " +
+                    "running on indefinitely — say what to do next and I'll carry on."
             )
         }
     }
@@ -240,8 +241,16 @@ class WebAgentSession(
     companion object {
         private const val TAG = "WebAgentSession"
 
-        /** Hard cap so a confused agent can't browse forever on the user's data. */
-        private const val MAX_STEPS = 15
+        /**
+         * Hard cap so a confused agent can't browse forever on the user's data.
+         *
+         * Raised from 15 for the same reason as the headless runner's: an
+         * ordinary shopping or booking task spends most of its budget just
+         * navigating, and stopping there ended tasks that were going fine.
+         * Higher here than headless because the user is watching this one and
+         * can hit Stop the moment it looks wrong.
+         */
+        private const val MAX_STEPS = 50
         private const val STEP_GAP_MS = 350L
 
         private const val RESUMED = "__resumed__"

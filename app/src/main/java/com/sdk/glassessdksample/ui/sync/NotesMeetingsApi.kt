@@ -81,24 +81,44 @@ class NotesMeetingsApi(context: Context) {
     fun bulkImportNotes(notes: List<QuickNote>): Result<Int> {
         val items = JSONArray()
         notes.forEach { items.put(noteToJson(it)) }
-        val body = JSONObject().put("items", items)
-        return request("POST", "/v1/notes/bulk", body) { it.optInt("imported", 0) }
+        // The endpoint's array field is `notes` (sending `items` returns 400
+        // VALIDATION_ERROR), and the response count comes back as `created`.
+        val body = JSONObject().put("notes", items)
+        return request("POST", "/v1/notes/bulk", body) { it.optInt("created", 0) }
     }
 
+    /**
+     * Uploads an image and returns its absolute URL.
+     *
+     * NOTE: the image is NOT attached to the note. `noteSchema` has no settable
+     * `imageUrl` field, and `POST /v1/notes/:id/image` does not exist, so there
+     * is currently no way to link an upload to a note through this API — the
+     * upload is stored against the user and otherwise orphaned. [noteId] is kept
+     * for logging and so call sites don't change when the server adds support.
+     */
     fun uploadNoteImage(noteId: String, imageFile: File): Result<String> {
         val token = authApi.ensureValidAccessToken()
             ?: return Result.Err("Not signed in", auth = true)
         val mime = if (imageFile.extension.equals("png", true)) "image/png" else "image/jpeg"
         val multipart = MultipartBody.Builder()
             .setType(MultipartBody.FORM)
-            .addFormDataPart("file", imageFile.name, imageFile.asRequestBody(mime.toMediaType()))
+            .addFormDataPart("image", imageFile.name, imageFile.asRequestBody(mime.toMediaType()))
+            .addFormDataPart("source", "app")
             .build()
+        // POST /v1/notes/:id/image does not exist (that route is DELETE-only) —
+        // uploads go to /v1/upload/image and return a URL for the caller to use.
         val req = Request.Builder()
-            .url("${AuthApi.BASE_URL}/v1/notes/$noteId/image")
+            .url("${AuthApi.BASE_URL}/v1/upload/image")
             .post(multipart)
             .addHeader("Authorization", "Bearer $token")
             .build()
-        return execute(req) { it.optString("imageUrl") }
+        return execute(req) {
+            val url = it.optString("url")
+            val absolute =
+                if (url.isBlank() || url.startsWith("http")) url else "${AuthApi.BASE_URL}$url"
+            Log.d(TAG, "Uploaded image for note $noteId -> $absolute (not linked; server gap)")
+            absolute
+        }
     }
 
     // ---------------------------------------------------------------------
@@ -141,7 +161,9 @@ class NotesMeetingsApi(context: Context) {
     }
 
     fun appendTranscript(meetingId: String, text: String): Result<MeetingMinute> {
-        val body = JSONObject().put("text", text)
+        // The endpoint's field is `chunk`; sending `text` returns 400
+        // VALIDATION_ERROR and appends nothing.
+        val body = JSONObject().put("chunk", text)
         return request("PATCH", "/v1/meetings/$meetingId/transcript", body) { parseMeeting(it) }
     }
 
@@ -233,7 +255,8 @@ class NotesMeetingsApi(context: Context) {
         title = json.optString("title"),
         content = json.optString("content"),
         imagePath = json.optString("imageUrl").takeIf { it.isNotBlank() && it != "null" },
-        timestamp = json.optLong("noteTime", System.currentTimeMillis()),
+        // Responses carry `timestamp`; `noteTime` is the request-side name only.
+        timestamp = json.optLong("timestamp", json.optLong("noteTime", System.currentTimeMillis())),
         createdBy = if (json.optString("origin").equals("AI", true)) {
             QuickNote.CreatedBy.AI
         } else {

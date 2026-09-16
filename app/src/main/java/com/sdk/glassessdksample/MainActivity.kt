@@ -37,8 +37,6 @@ import android.view.animation.DecelerateInterpolator
 import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
-import android.view.accessibility.AccessibilityManager
-import android.accessibilityservice.AccessibilityServiceInfo
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
@@ -275,7 +273,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private val mainScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val REQUEST_RECORD_AUDIO_CODE = 201
     private val REQUEST_READ_CONTACTS = 302
-    private val REQUEST_CALL_PHONE = 303
     private var pendingContactCallName: String? = null
     private val REQUEST_BLUETOOTH_CONNECT = 401
     private val REQUEST_POST_NOTIFICATIONS = 501
@@ -313,6 +310,36 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         SystemBarsInsets.apply(this)
 
         multiBluetoothBanner = com.sdk.glassessdksample.ui.MultiBluetoothBanner(this, binding.multiBluetoothBanner.root)
+
+        // The voice browser can get stuck on a login/CAPTCHA while the user is
+        // looking at the glasses, not the phone. The overlay subscribes to the
+        // engine and puts that step on this screen the moment it happens (and
+        // replays one that is already pending), so the user never has to go and
+        // find More → Web to unblock it.
+        binding.browserHandoffOverlay.attach()
+        binding.browserHandoffOverlay.onResolved = { resumed ->
+            if (resumed) {
+                android.widget.Toast.makeText(
+                    this,
+                    "Done — say \"continue\" to carry on.",
+                    android.widget.Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
+        // Back must dismiss the overlay, not the app: without this the user is
+        // stranded behind a full-screen page with only Cancel as a way out.
+        onBackPressedDispatcher.addCallback(
+            this,
+            object : androidx.activity.OnBackPressedCallback(false) {
+                override fun handleOnBackPressed() {
+                    binding.browserHandoffOverlay.visibility = android.view.View.GONE
+                }
+            }.also { cb ->
+                binding.browserHandoffOverlay.viewTreeObserver.addOnGlobalLayoutListener {
+                    cb.isEnabled = binding.browserHandoffOverlay.isShowing
+                }
+            }
+        )
 
         // Decode the wake chime up front. SoundPool loads asynchronously, and a
         // cold decode on the first "Hey IMI" was one reason that first chime was
@@ -440,10 +467,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) {
             permissionsNeeded.add(Manifest.permission.READ_CONTACTS)
-        }
-        
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CALL_PHONE) != PackageManager.PERMISSION_GRANTED) {
-            permissionsNeeded.add(Manifest.permission.CALL_PHONE)
         }
         
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
@@ -1026,6 +1049,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
     override fun onDestroy() {
         // OPTIMIZATION: Clean up BEFORE super.onDestroy to prevent leaks
+        binding.browserHandoffOverlay.detach()
         dismissGlassConnectingPopup()
         try {
             scoConnectionReceiver?.let { unregisterReceiver(it) }
@@ -1111,13 +1135,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 } else {
                     pendingContactCallName = null
                     speakOut("Contacts permission denied. Can't access phonebook.", "ERROR")
-                }
-            }
-            REQUEST_CALL_PHONE -> {
-                if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                    Toast.makeText(this, "Call permission granted", Toast.LENGTH_SHORT).show()
-                } else {
-                    speakOut("Call permission denied", "ERROR")
                 }
             }
             REQUEST_BLUETOOTH_CONNECT -> {
@@ -4100,49 +4117,28 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         return null
     }
 
+    /**
+     * Opens the user's dialer with the number pre-filled; they tap call to
+     * connect. ACTION_DIAL needs no permission — CALL_PHONE was removed for
+     * Google Play policy compliance (restricted to default Phone handlers).
+     */
     private fun makePhoneCall(phoneNumber: String, contactName: String) {
-        // Check for call permission (Android 6.0+)
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CALL_PHONE) != PackageManager.PERMISSION_GRANTED) {
-            // Request permission first
-            speakOut("I need call permission to make calls", "INFO")
-            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CALL_PHONE), REQUEST_CALL_PHONE)
-            // Store pending call for retry
-            Handler(Looper.getMainLooper()).postDelayed({
-                if (ContextCompat.checkSelfPermission(this, Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED) {
-                    makePhoneCall(phoneNumber, contactName)
-                }
-            }, 1500)
-            return
-        }
-        
-        // Actually place the call - ACTION_CALL auto-dials
         try {
-            speakOut("Calling $contactName", "ACTION")
-            val intent = Intent(Intent.ACTION_CALL).apply {
+            speakOut("Opening the dialer for $contactName", "ACTION")
+            val intent = Intent(Intent.ACTION_DIAL).apply {
                 data = Uri.parse("tel:$phoneNumber")
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK
             }
             startActivity(intent)
-            Log.d(TAG, "📞 Auto-dialing $contactName at $phoneNumber")
-            
-            // Continue listening in background during call
+            Log.d(TAG, "📞 Opening dialer for $contactName at $phoneNumber")
+
+            // Continue listening in background once the dialer is up
             Handler(Looper.getMainLooper()).postDelayed({
                 if (isInConversationMode) startListening()
             }, 1000)
         } catch (e: Exception) {
-            Log.e(TAG, "Call error: ${e.message}")
-            // Fallback: Try again with ACTION_CALL
-            try {
-                val callIntent = Intent(Intent.ACTION_CALL).apply {
-                    data = Uri.parse("tel:$phoneNumber")
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                }
-                startActivity(callIntent)
-                speakOut("Calling $contactName now", "ACTION")
-            } catch (ex: Exception) {
-                Log.e(TAG, "Final call attempt failed: ${ex.message}")
-                speakOut("Unable to make call", "ERROR")
-            }
+            Log.e(TAG, "Dialer error: ${e.message}")
+            speakOut("Unable to open the dialer", "ERROR")
         }
     }
     
@@ -7333,7 +7329,14 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     }
     
     /**
-     * Send WhatsApp message
+     * Opens WhatsApp with the message pre-filled; the user taps Send.
+     *
+     * This previously used an AccessibilityService (WhatsAppAutoSendService) to
+     * tap Send automatically. That service was removed: Google Play's
+     * Accessibility API policy requires apps to "use limited, more narrowly
+     * scoped APIs and permissions in lieu of the Accessibility API when
+     * possible", and the wa.me deep link below achieves the same result without
+     * it. Nothing else about voice dictation or contact lookup changed.
      */
     private fun sendWhatsAppMessage(contactName: String, message: String) {
         try {
@@ -7344,155 +7347,23 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 val uri = Uri.parse("https://wa.me/$formattedNumber?text=${Uri.encode(message)}")
                 val intent = Intent(Intent.ACTION_VIEW, uri)
                 intent.setPackage("com.whatsapp")
-                
-                // Check if accessibility service is enabled
-                val isAccessibilityEnabled = isAccessibilityServiceEnabled()
-                
-                if (isAccessibilityEnabled) {
-                    // Service is enabled, proceed with auto-send
-                    Log.d(TAG, "Accessibility service enabled - will auto-send message")
-                    enableWhatsAppAutoSend()
-                    Handler(Looper.getMainLooper()).postDelayed({
-                        if (intent.resolveActivity(packageManager) != null) {
-                            startActivity(intent)
-                        } else {
-                            startActivity(Intent(Intent.ACTION_VIEW, uri))
-                        }
-                    }, 100)
+                if (intent.resolveActivity(packageManager) != null) {
+                    startActivity(intent)
                 } else {
-                    // Service is NOT enabled - show dialog asking user to enable it
-                    showAccessibilityDialog(contactName, message, uri)
+                    // WhatsApp not installed (or not the standard package) - let the
+                    // system resolve the wa.me link instead of failing outright.
+                    startActivity(Intent(Intent.ACTION_VIEW, uri))
                 }
+                speakOut("Message ready in WhatsApp - tap Send", "MSG_INFO")
             } else {
                 speakOut("Could not find contact $contactName", "MSG_ERROR")
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to send WhatsApp message: ${e.message}")
-            speakOut("Failed to send message to $contactName", "MSG_ERROR")
+            Log.e(TAG, "Failed to open WhatsApp message: ${e.message}")
+            speakOut("Failed to open message to $contactName", "MSG_ERROR")
         }
     }
-    
-    /**
-     * Show dialog to enable accessibility service
-     */
-    private fun showAccessibilityDialog(contactName: String, message: String, uri: Uri) {
-        AlertDialog.Builder(this)
-            .setTitle("Enable Auto-Send?")
-            .setMessage("To automatically send WhatsApp messages, you need to enable 'WhatsApp Auto-Send' in Accessibility Settings.\n\nWould you like to enable it now?")
-            .setPositiveButton("Enable Accessibility") { _, _ ->
-                // Open accessibility settings
-                openAccessibilitySettings()
-                // Still open WhatsApp for manual send as fallback
-                Handler(Looper.getMainLooper()).postDelayed({
-                    try {
-                        val intent = Intent(Intent.ACTION_VIEW, uri)
-                        intent.setPackage("com.whatsapp")
-                        if (intent.resolveActivity(packageManager) != null) {
-                            startActivity(intent)
-                        } else {
-                            startActivity(Intent(Intent.ACTION_VIEW, uri))
-                        }
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Error opening WhatsApp: ${e.message}")
-                    }
-                }, 500)
-            }
-            .setNegativeButton("Send Without Auto-Send") { _, _ ->
-                // Open WhatsApp for manual send
-                try {
-                    val intent = Intent(Intent.ACTION_VIEW, uri)
-                    intent.setPackage("com.whatsapp")
-                    if (intent.resolveActivity(packageManager) != null) {
-                        startActivity(intent)
-                    } else {
-                        startActivity(Intent(Intent.ACTION_VIEW, uri))
-                    }
-                    speakOut("Message opened in WhatsApp - tap Send manually", "MSG_INFO")
-                } catch (e: Exception) {
-                    Log.e(TAG, "Error opening WhatsApp: ${e.message}")
-                }
-            }
-            .setNeutralButton("Cancel") { dialog, _ ->
-                dialog.dismiss()
-                speakOut("Message sending cancelled", "MSG_INFO")
-            }
-            .show()
-    }
-    
-    /**
-     * Open accessibility settings for user to enable the service
-     */
-    private fun openAccessibilitySettings() {
-        try {
-            val intent = Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)
-            startActivity(intent)
-            Log.d(TAG, "Opened Accessibility Settings")
-        } catch (e: Exception) {
-            Log.e(TAG, "Error opening accessibility settings: ${e.message}")
-            Toast.makeText(this, "Please manually enable accessibility at Settings > Accessibility", Toast.LENGTH_LONG).show()
-        }
-    }
-    
-    /**
-     * Check if WhatsAppAutoSendService accessibility service is enabled
-     */
-    private fun isAccessibilityServiceEnabled(): Boolean {
-        val am = getSystemService(Context.ACCESSIBILITY_SERVICE) as AccessibilityManager
-        // Get all enabled accessibility services
-        val allFeedbackTypes = AccessibilityServiceInfo.FEEDBACK_SPOKEN or
-                              AccessibilityServiceInfo.FEEDBACK_HAPTIC or
-                              AccessibilityServiceInfo.FEEDBACK_AUDIBLE or
-                              AccessibilityServiceInfo.FEEDBACK_VISUAL or
-                              AccessibilityServiceInfo.FEEDBACK_GENERIC
-        val enabledServices = am.getEnabledAccessibilityServiceList(allFeedbackTypes)
-        
-        for (service in enabledServices) {
-            if (service.id.contains("WhatsAppAutoSendService")) {
-                Log.d(TAG, "WhatsAppAutoSendService is enabled")
-                return true
-            }
-        }
-        
-        Log.d(TAG, "WhatsAppAutoSendService is NOT enabled")
-        return false
-    }
-    
-    /**
-     * Enable auto-send in the accessibility service
-     */
-    private fun enableWhatsAppAutoSend() {
-        try {
-            // Get the service instance via broadcast or direct call
-            val am = getSystemService(Context.ACCESSIBILITY_SERVICE) as AccessibilityManager
-            // Get all enabled accessibility services
-            val allFeedbackTypes = AccessibilityServiceInfo.FEEDBACK_SPOKEN or
-                                  AccessibilityServiceInfo.FEEDBACK_HAPTIC or
-                                  AccessibilityServiceInfo.FEEDBACK_AUDIBLE or
-                                  AccessibilityServiceInfo.FEEDBACK_VISUAL or
-                                  AccessibilityServiceInfo.FEEDBACK_GENERIC
-            val enabledServices = am.getEnabledAccessibilityServiceList(allFeedbackTypes)
-            
-            for (service in enabledServices) {
-                if (service.id.contains("WhatsAppAutoSendService")) {
-                    Log.d(TAG, "Found WhatsAppAutoSendService, enabling auto-send")
-                    // The service will activate based on window state changes
-                    // We'll set a shared preference flag that the service can check
-                    val prefs = getSharedPreferences("whatsapp_auto_send", Context.MODE_PRIVATE)
-                    prefs.edit().putBoolean("should_auto_send", true).apply()
-                    
-                    // Reset the flag after 5 seconds to avoid unintended auto-sending
-                    Handler(Looper.getMainLooper()).postDelayed({
-                        prefs.edit().putBoolean("should_auto_send", false).apply()
-                    }, 5000)
-                    
-                    return
-                }
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error enabling WhatsApp auto-send: ${e.message}")
-        }
-    }
-    
+
     /**
      * Set a reminder
      */
@@ -7710,13 +7581,22 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                     // this reply finishes playing — arming the shutdown here would
                     // close the very session that has to speak the description.
                     // The session ends normally on the next turn once vision is done.
+                    // 📋 ...and NOT in the middle of a task, for the same reason.
+                    // A task ASKS the user things ("how many people are flying?")
+                    // and needs them to answer out loud. Counting that question as
+                    // "the one reply" closed the session as soon as it finished
+                    // speaking, dropping the user back to the wake word with the
+                    // question hanging. The task owns the session until it ends.
                     val continuousChat = prefs.getBoolean("continuous_chat", CONTINUOUS_CHAT_DEFAULT)
                     val visionInFlight = visionBusy || visionChatOpenFlag
-                    if (!continuousChat && trimmedInput.isNotEmpty() && !visionInFlight) {
+                    val taskInFlight = com.sdk.glassessdksample.ui.web.TaskSession.isActive
+                    if (!continuousChat && trimmedInput.isNotEmpty() && !visionInFlight && !taskInFlight) {
                         Log.d(TAG, "🔂 Continuous Chat off - ending session once this reply finishes playing")
                         endSessionAfterCurrentReply("Continuous Chat off")
                     } else if (visionInFlight) {
                         Log.d(TAG, "👁️ Vision in flight - keeping session open to speak the result")
+                    } else if (taskInFlight) {
+                        Log.d(TAG, "📋 Task in progress - keeping session open for the user's answer")
                     }
 
                     // ❌ REMOVED: Vision Chat triggers from Gemini Live - Vision Chat sirf manual open hoga

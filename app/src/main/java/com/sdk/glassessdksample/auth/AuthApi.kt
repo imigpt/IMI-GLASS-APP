@@ -241,7 +241,7 @@ class AuthApi(context: Context) {
 
     companion object {
         private const val TAG = "AuthApi"
-        const val BASE_URL = "http://136.243.196.163:8080"
+        const val BASE_URL = "https://imi-app-backend.onrender.com"
         private const val DEFAULT_EXPIRES_IN = 3600L
         private val JSON_MEDIA = "application/json; charset=utf-8".toMediaType()
     }

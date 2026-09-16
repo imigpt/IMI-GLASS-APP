@@ -27,13 +27,13 @@ def safeQuote(value) {
 
 android {
     namespace = "com.sdk.glassessdksample"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.aselea.imiglass"
         minSdk = 24
-        targetSdk = 35
-        versionCode = 20
+        targetSdk = 36
+        versionCode = 25
         versionName = "2.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
 

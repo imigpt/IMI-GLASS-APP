@@ -537,6 +537,17 @@ class ListeningService : Service() {
             // stray/empty turn, or a greeting) must not consume the single reply.
             // The actual stop happens in onAudioPlaybackEnd() so the reply is heard
             // in full instead of being cut off mid-sentence.
+            // …but NOT in the middle of a task. A task asks the user questions
+            // ("how many people are flying?") and the whole point is that they
+            // answer out loud. Treating that question as "the one reply" closed
+            // the session the moment it finished speaking, so the answer had
+            // nowhere to go and the user was dropped back to the wake word
+            // mid-conversation. The task owns the session until it is done.
+            if (com.sdk.glassessdksample.ui.web.TaskSession.isActive) {
+                Log.i(TAG, "📋 Task in progress — keeping the session open for the user's answer")
+                return
+            }
+
             if (!isContinuousChatEnabled() && fullInput.trim().isNotEmpty()) {
                 Log.i(TAG, "🔂 Continuous Chat off — ending background session once this reply finishes")
                 endBackgroundSessionAfterCurrentReply("Continuous Chat off")
@@ -699,9 +710,10 @@ class ListeningService : Service() {
     }
 
     /**
-     * Places a call with the phone locked. ACTION_CALL dials directly (needs
-     * CALL_PHONE); otherwise we fall back to ACTION_DIAL. FLAG_ACTIVITY_NEW_TASK is
-     * required to launch from a Service.
+     * Opens the user's dialer with the contact's number pre-filled; the user
+     * confirms the call with one tap. Uses ACTION_DIAL, which needs no
+     * permission — CALL_PHONE was removed for Google Play policy compliance.
+     * FLAG_ACTIVITY_NEW_TASK is required to launch from a Service.
      */
     private fun bgPhoneCall(args: Map<String, Any>): String {
         val name = args["name"] as? String ?: args["contact"] as? String
@@ -738,19 +750,16 @@ class ListeningService : Service() {
         val num = number ?: return "I couldn't find $name in your contacts."
 
         return try {
-            val canCallDirectly = ContextCompat.checkSelfPermission(
-                this, Manifest.permission.CALL_PHONE
-            ) == PackageManager.PERMISSION_GRANTED
             val intent = Intent(
-                if (canCallDirectly) Intent.ACTION_CALL else Intent.ACTION_DIAL,
+                Intent.ACTION_DIAL,
                 android.net.Uri.parse("tel:$num")
             ).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
             startActivity(intent)
-            // The call takes over the audio route, so end our session cleanly.
+            // The dialer takes over the audio route, so end our session cleanly.
             endBackgroundConversation()
-            if (canCallDirectly) "Calling ${matched ?: name}." else "Opening the dialer for ${matched ?: name}."
+            "Opening the dialer for ${matched ?: name}. Tap call to connect."
         } catch (e: Exception) {
-            "I couldn't start the call: ${e.message}"
+            "I couldn't open the dialer: ${e.message}"
         }
     }
 
@@ -800,18 +809,22 @@ class ListeningService : Service() {
         }
         val num = number ?: return "I couldn't find $name in your contacts."
 
-        return if (ContextCompat.checkSelfPermission(this, Manifest.permission.SEND_SMS)
-            == PackageManager.PERMISSION_GRANTED
-        ) {
-            try {
-                val sms = android.telephony.SmsManager.getDefault()
-                sms.sendTextMessage(num, null, body, null, null)
-                "Message sent to $name."
-            } catch (e: Exception) {
-                "I couldn't send the message: ${e.message}"
+        // Hand the message to the user's own SMS app with recipient and body
+        // pre-filled; they send it with one tap. ACTION_SENDTO needs no
+        // permission — SEND_SMS was removed for Google Play policy compliance.
+        return try {
+            val intent = Intent(
+                Intent.ACTION_SENDTO,
+                android.net.Uri.parse("smsto:$num")
+            ).apply {
+                putExtra("sms_body", body)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
-        } else {
-            "I need SMS permission — please open the IMI app once to grant it."
+            startActivity(intent)
+            endBackgroundConversation()
+            "I've opened your messages app with the text for $name ready to send."
+        } catch (e: Exception) {
+            "I couldn't open your messages app: ${e.message}"
         }
     }
 

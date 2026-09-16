@@ -36,10 +36,9 @@ class SplashActivity : AppCompatActivity() {
         // Check authentication and onboarding status
         val sharedPreferences = getSharedPreferences("IMI_PREFS", MODE_PRIVATE)
         
-        // Login screen hidden: the app always starts as if the user were signed in.
-        // Set to false to bring the login flow back (LoginActivity / SignUpActivity
-        // are still present and declared in the manifest).
-        val skipAuth = true
+        // Login flow is live: an unauthenticated launch goes to LoginActivity.
+        // (Set to true only to temporarily bypass auth during local testing.)
+        val skipAuth = false
 
         val isLoggedIn = sharedPreferences.getBoolean("is_logged_in", false) || skipAuth
         val hasCompletedOnboarding = true // onboarding screen hidden
@@ -51,6 +50,11 @@ class SplashActivity : AppCompatActivity() {
         }
         
         Handler(Looper.getMainLooper()).postDelayed({
+            proceedFromSplash(isLoggedIn, hasCompletedOnboarding)
+        }, SPLASH_DISPLAY_LENGTH)
+    }
+
+    private fun proceedFromSplash(isLoggedIn: Boolean, hasCompletedOnboarding: Boolean) {
             try {
                 val intent = when {
                     !isLoggedIn -> {
@@ -83,6 +87,5 @@ class SplashActivity : AppCompatActivity() {
                 startActivity(fallbackIntent)
                 finish()
             }
-        }, SPLASH_DISPLAY_LENGTH)
     }
 }

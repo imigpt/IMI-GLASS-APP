@@ -817,16 +817,50 @@ class WebBrowserActivity : AppCompatActivity() {
     private fun continueGlassHandoff() {
         isShowingGlassHandoff = false
         binding.btnAgentStop.text = "Stop"
-        GlassBrowserEngine.resume()
-        showAgentStrip(
-            "Done — say \"continue\" to your glasses to carry on.",
-            showStop = false,
-            showContinue = false,
-            busy = false
-        )
-        binding.layoutAgentStatus.postDelayed({
-            if (agent?.isRunning != true) binding.layoutAgentStatus.visibility = View.GONE
-        }, RESULT_LINGER_MS)
+
+        // Cookies from the sign-in the user just completed have to be on disk
+        // before the off-screen engine reuses the session.
+        WebSessionManager.persist()
+
+        // Actually CARRY ON. This used to call resume() purely for its
+        // side-effect of clearing the wait flag, throw away the goal it hands
+        // back, and tell the user to say "continue" to their glasses — so
+        // tapping Continue did nothing at all, and the spoken route was dead
+        // too whenever the session had moved on. The tap now runs the task.
+        val goal = GlassBrowserEngine.resume()
+        if (goal == null) {
+            showAgentStrip("Nothing was waiting to continue.", false, false, busy = false)
+            binding.layoutAgentStatus.postDelayed({
+                if (agent?.isRunning != true) binding.layoutAgentStatus.visibility = View.GONE
+            }, RESULT_LINGER_MS)
+            return
+        }
+
+        showAgentStrip("Carrying on…", showStop = true, showContinue = false)
+        lifecycleScope.launch {
+            val outcome = try {
+                HeadlessAgentRunner(this@WebBrowserActivity) { progress ->
+                    runOnUiThread {
+                        showAgentStrip(progress, showStop = true, showContinue = false)
+                    }
+                }.run(goal, resuming = true)
+            } catch (e: Exception) {
+                HeadlessAgentRunner.Outcome(false, "Something went wrong finishing that.")
+            }
+
+            // Another block (a second sign-in, a CAPTCHA) re-arms the engine and
+            // showGlassHandoffIfWaiting() repaints for it — don't overwrite that.
+            if (GlassBrowserEngine.awaitingUser) {
+                showGlassHandoffIfWaiting()
+                return@launch
+            }
+
+            showAgentStrip(outcome.spokenResult, showStop = false, showContinue = false, busy = false)
+            speaker?.speak(outcome.spokenResult)
+            binding.layoutAgentStatus.postDelayed({
+                if (agent?.isRunning != true) binding.layoutAgentStatus.visibility = View.GONE
+            }, RESULT_LINGER_MS)
+        }
     }
 
     /**

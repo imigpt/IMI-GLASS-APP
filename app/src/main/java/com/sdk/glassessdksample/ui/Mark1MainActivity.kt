@@ -139,6 +139,24 @@ class Mark1MainActivity : AppCompatActivity(), GeminiLiveService.GeminiLiveCallb
 
         multiBluetoothBanner = MultiBluetoothBanner(this, binding.multiBluetoothBanner.root)
 
+        // See MainActivity: the voice browser's login/CAPTCHA step comes to
+        // whichever home screen is open, rather than the user having to find
+        // More → Web to unblock it.
+        binding.browserHandoffOverlay.attach()
+        // Back must dismiss the overlay, not the app.
+        onBackPressedDispatcher.addCallback(
+            this,
+            object : androidx.activity.OnBackPressedCallback(false) {
+                override fun handleOnBackPressed() {
+                    binding.browserHandoffOverlay.visibility = android.view.View.GONE
+                }
+            }.also { cb ->
+                binding.browserHandoffOverlay.viewTreeObserver.addOnGlobalLayoutListener {
+                    cb.isEnabled = binding.browserHandoffOverlay.isShowing
+                }
+            }
+        )
+
         // Decode the wake chime up front. SoundPool loads asynchronously, and a
         // cold decode on the first "Hey IMI" was one reason that first chime was
         // routinely missed.
@@ -279,6 +297,7 @@ class Mark1MainActivity : AppCompatActivity(), GeminiLiveService.GeminiLiveCallb
 
     override fun onDestroy() {
         super.onDestroy()
+        binding.browserHandoffOverlay.detach()
         wakeWordHandler.removeCallbacksAndMessages(null)
         bleGateHandler.removeCallbacksAndMessages(null)
         tts?.stop()
@@ -1251,7 +1270,13 @@ class Mark1MainActivity : AppCompatActivity(), GeminiLiveService.GeminiLiveCallb
         // 🔂 Continuous Chat off: end the session once this reply has finished
         // PLAYING, not right now — stopping here cut the answer off mid-sentence.
         // The isNotEmpty guard stops an empty/greeting turn consuming the one reply.
-        if (isSingleShotMode() && fullInput.isNotBlank()) {
+        // 📋 ...but NOT mid-task. A task asks the user questions and needs them
+        // answered out loud; treating the question as "the one reply" closed the
+        // session the moment it finished speaking and dropped the user back to
+        // the wake word with the question unanswered.
+        if (com.sdk.glassessdksample.ui.web.TaskSession.isActive) {
+            Log.d(TAG, "📋 Task in progress - keeping session open for the user's answer")
+        } else if (isSingleShotMode() && fullInput.isNotBlank()) {
             Log.d(TAG, "🔂 Continuous Chat off - ending session once this reply finishes playing")
             runOnUiThread { endSessionAfterCurrentReply("Continuous Chat off") }
         }
@@ -1493,18 +1518,16 @@ class Mark1MainActivity : AppCompatActivity(), GeminiLiveService.GeminiLiveCallb
         runOnUiThread {
             if (number != null) {
                 val uri = android.net.Uri.parse("tel:$number")
-                val intent = if (ContextCompat.checkSelfPermission(this, Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED) {
-                    Intent(Intent.ACTION_CALL, uri)
-                } else {
-                    Intent(Intent.ACTION_DIAL, uri)
-                }
-                startActivity(intent)
+                // ACTION_DIAL pre-fills the user's dialer; they tap call to
+                // connect. Needs no permission (CALL_PHONE was removed for
+                // Google Play policy compliance).
+                startActivity(Intent(Intent.ACTION_DIAL, uri))
             } else {
                 startActivity(Intent(Intent.ACTION_DIAL))
                 Toast.makeText(this, "Contact '$name' not found", Toast.LENGTH_SHORT).show()
             }
         }
-        return if (number != null) "Calling $name." else "Contact not found, opening dial pad."
+        return if (number != null) "Opening the dialer for $name." else "Contact not found, opening dial pad."
     }
 
     private fun handleDirections(args: Map<String, Any>): String {
@@ -1703,9 +1726,7 @@ class Mark1MainActivity : AppCompatActivity(), GeminiLiveService.GeminiLiveCallb
         val needed = mutableListOf<String>()
         val perms = mutableListOf(
             Manifest.permission.RECORD_AUDIO,
-            Manifest.permission.READ_CONTACTS,
-            Manifest.permission.CALL_PHONE,
-            Manifest.permission.SEND_SMS
+            Manifest.permission.READ_CONTACTS
         )
         // Android 12+ gates ALL Bluetooth queries behind BLUETOOTH_CONNECT. Without
         // it, getProfileConnectionState() reports DISCONNECTED and getConnectedDevices()

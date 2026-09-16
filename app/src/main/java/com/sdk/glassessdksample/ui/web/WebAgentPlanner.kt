@@ -50,8 +50,18 @@ class WebAgentPlanner(private val context: Context?) {
         {"action":"failed","reason":"..."}
 
         Hard rules:
-        1. Use ONLY selectors that appear verbatim in the page summary. Never
-           invent a selector.
+        1. Use selectors that appear verbatim in the page summary wherever one
+           exists. Never invent a CSS selector.
+           ONE exception, for "click" only: when you need to pick something the
+           page has just created in response to your own typing — an option in
+           an autocomplete or suggestion dropdown, which cannot be in a summary
+           taken before you typed — put the option's EXACT VISIBLE TEXT in
+           "selector" instead, and what it is in "label". The browser will match
+           it by what is on screen. Use this only for that case; for anything
+           already listed in the summary, quote its real selector.
+           After typing into a city, airport, station or address field, expect a
+           dropdown: read the next summary, and if the option you want is listed
+           there, click it by its real selector.
         2. NEVER type into a field marked [SENSITIVE]. Never type passwords,
            OTPs, card numbers or PINs anywhere. For those, use "handoff".
         3. If the CURRENT page shows a login screen or a CAPTCHA and the goal
@@ -71,6 +81,16 @@ class WebAgentPlanner(private val context: Context?) {
         7. If you are stuck or the site blocks automation, use "failed" with a
            plain explanation. Do not loop.
         8. Do not repeat an action that has just failed. Try something else.
+        9. You CAN navigate this browser's history. "back" and "forward" are
+           yours to use and need no permission from anyone — going back to a
+           search results page to try a different result is a normal, expected
+           move. The page summary tells you CAN_GO_BACK and CAN_GO_FORWARD; use
+           "back" whenever that says true and stepping back is useful.
+           If CAN_GO_BACK is false there is simply no earlier page in this
+           browser yet — that is a fact about the history, NOT a restriction on
+           you. In that case use "open" or "search" to get where you need to be.
+           NEVER tell the user you are not allowed to navigate between pages, or
+           that you lack permission to go back. That is untrue.
 
         Reply with JSON only.
     """.trimIndent()
@@ -122,9 +142,25 @@ class WebAgentPlanner(private val context: Context?) {
             }
         } catch (e: Exception) {
             Log.e(TAG, "Planner error: ${e.message}", e)
-            null
+            // Running out of output budget is a DIFFERENT thing from not
+            // understanding the page, and collapsing both into null told the
+            // user the agent was confused when it had actually been cut off
+            // mid-sentence. Say what happened instead of guessing.
+            if (isMaxTokens(e)) {
+                BrowserAction.Failed(
+                    "That page was too big for me to work through. Try a simpler " +
+                        "page, or narrow down what you're after."
+                )
+            } else {
+                null
+            }
         }
     }
+
+    /** True when generation stopped because it hit the output cap. */
+    private fun isMaxTokens(e: Exception): Boolean =
+        e.message.orEmpty().contains("MAX_TOKENS", ignoreCase = true) ||
+            e is com.google.ai.client.generativeai.type.ResponseStoppedException
 
     private fun model(modelName: String) = GenerativeModel(
         modelName = modelName,
@@ -135,7 +171,15 @@ class WebAgentPlanner(private val context: Context?) {
         generationConfig = generationConfig {
             temperature = 0.1f          // planning wants determinism, not flair
             responseMimeType = "application/json"
-            maxOutputTokens = 400
+            // 400 was too tight and failed in a way that looked like the whole
+            // feature was broken. One action is small, but "done" and "failed"
+            // carry a written summary, and a reasoning model spends tokens
+            // before it emits any JSON at all — so on a big page (an Amazon
+            // search result) generation stopped at the cap, the SDK threw
+            // ResponseStoppedException(MAX_TOKENS), and the catch below turned
+            // that into a null the user heard as "I couldn't work out how to do
+            // that." Output tokens are cheap; a dead task is not.
+            maxOutputTokens = 2048
         }
     )
 
