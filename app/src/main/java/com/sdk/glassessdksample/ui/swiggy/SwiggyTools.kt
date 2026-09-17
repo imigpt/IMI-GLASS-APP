@@ -501,8 +501,17 @@ object SwiggyTools {
                     for (k in keys) {
                         val v = node.opt(k)
                         if (v != null && v != JSONObject.NULL) {
-                            val s = v.toString()
-                            if (s.isNotBlank() && s != "0" && s != "null") return s
+                            // The match is often a display object, not a number:
+                            // {"label":"To Pay","value":"₹125"}. toString() on
+                            // that is raw JSON, which got read out loud verbatim.
+                            val s = if (v is JSONObject) {
+                                v.optString("value").takeIf { it.isNotBlank() }
+                                    ?: v.optString("amount").takeIf { it.isNotBlank() }
+                                    ?: v.optString("text")
+                            } else {
+                                v.toString()
+                            }
+                            if (!s.isNullOrBlank() && s != "0" && s != "null") return s
                         }
                     }
                     node.keys().forEach { k -> search(node.opt(k), depth + 1)?.let { return it } }
@@ -516,6 +525,10 @@ object SwiggyTools {
             return null
         }
         return search(cart, 0)?.let { raw ->
+            // Already formatted by Swiggy ("₹125") — leave it alone rather than
+            // prefixing a second symbol.
+            if (raw.contains('₹')) return@let raw.trim()
+
             // Swiggy returns paise in some fields and rupees in others; a
             // four-figure "amount" for one milk packet is paise.
             val n = raw.toDoubleOrNull()
@@ -747,6 +760,22 @@ object SwiggyTools {
         if (!confirmed) {
             session.reset()
             return "Order cancelled. Nothing was placed and no money was spent."
+        }
+
+        // The user is agreeing to a number they heard. If that quote is old,
+        // re-price rather than charge them against it: stock and fees move, and
+        // the order cannot be cancelled once placed.
+        if (session.summaryIsStale()) {
+            val server = session.server
+            session.backToGathering()
+            session.setCartTotal(null)
+            if (server != null) {
+                session.setCartTotal(buildCartAndGetTotal(context, server))
+            }
+            session.awaitConfirmation()
+            return "That price was quoted a while ago, so I checked again: " +
+                "${session.summary()}. Read this back to the user and ask whether " +
+                "to place it. Do NOT place it in this turn."
         }
 
         return orderMutex.withLock {

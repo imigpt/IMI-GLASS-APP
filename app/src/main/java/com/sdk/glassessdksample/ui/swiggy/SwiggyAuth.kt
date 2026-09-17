@@ -44,7 +44,7 @@ import java.util.concurrent.TimeUnit
  * Tokens land in [SwiggyTokenStore], mirroring how auth.SessionManager keeps the
  * IMI session.
  */
-object SwiggyAuth {
+object SwiggyAuth { 
 
     private const val TAG = "SwiggyAuth"
 

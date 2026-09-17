@@ -345,10 +345,28 @@ object SwiggyOrderSession {
         touch()
     }
 
+    /** When the summary now awaiting a yes was quoted, for [summaryIsStale]. */
+    @Volatile private var summaryQuotedAt: Long = 0L
+
+    /** A price quoted longer ago than this must be re-checked before ordering. */
+    private const val SUMMARY_TTL_MS = 3 * 60 * 1000L
+
     fun awaitConfirmation() {
         phase = Phase.AWAITING_CONFIRMATION
+        summaryQuotedAt = System.currentTimeMillis()
         touch()
     }
+
+    /**
+     * True when the total read out to the user is too old to order against.
+     *
+     * Quick-commerce prices, stock and delivery fees move, and the user is
+     * agreeing to a specific number they heard. Confirming a stale quote could
+     * charge them something they never agreed to — and Swiggy orders cannot be
+     * cancelled from here, so the cart is rebuilt and re-quoted instead.
+     */
+    fun summaryIsStale(): Boolean =
+        summaryQuotedAt > 0L && System.currentTimeMillis() - summaryQuotedAt > SUMMARY_TTL_MS
 
     fun backToGathering() {
         phase = Phase.GATHERING
