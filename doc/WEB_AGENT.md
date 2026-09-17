@@ -22,6 +22,9 @@ It is **not** a script. A script says "click the third button" and breaks the
 day the site changes. This reads the page, asks a model what to do next, does
 one thing, and looks again.
 
+**Scope:** it reaches `chatgpt.com` and `claude.ai` and nothing else. That is a
+deliberate cost limit, enforced in code at every navigation point — see §7.
+
 ### The loop
 
 ```
@@ -120,11 +123,12 @@ Both share `WebAgentPlanner`, `ActionValidator`, `ActionExecutor`, `PageReader`.
 | `VisionPlanner` | Decides one action from a **screenshot**, when the page code is not describing the page. |
 | `PageReader` | Injected JS that turns the live page into a compact summary — visible inputs, buttons, links, each with a stable selector. |
 | `ActionValidator` | The security boundary. Every action crosses it. |
+| `AllowedSites` | The allow-list: ChatGPT and Claude only. See §7. |
 | `ActionExecutor` | Performs the action against the WebView. |
 | `HeadlessAgentRunner` | The loop, for voice. |
 | `WebAgentSession` | The loop, for the Web screen. |
 | `BrowserHandoffOverlay` | Full-screen overlay on the home screen showing a blocked page or a plan awaiting approval. |
-| `SignInSite` / `SignInAccountsActivity` | Settings → More → Signed-in sites. Pre-authenticate the sites the agent will act on. |
+| `SignInSite` / `SignInAccountsActivity` | Settings → More → Signed-in sites. Pre-authenticate ChatGPT and Claude. |
 | `WebSessionManager` | The shared cookie jar. Why any of this works. |
 | `WebBrowserActivity` | The manual in-app browser (Web section). |
 
@@ -265,17 +269,45 @@ indefinitely could run a long way on a misunderstanding with nobody watching.
 
 ## 7. Sites
 
-Amazon works well. The DOM read describes it accurately.
+The browser reaches **two sites only**: `chatgpt.com` and `claude.ai`. Everything
+else is refused, and there is no web search.
 
-**MakeMyTrip is the hostile case** and worth understanding before optimising for
-it. It has produced `ERR_HTTP2_PROTOCOL_ERROR` — the server closing the
-connection at the protocol level, which is bot detection rejecting the WebView
-before any page renders. That is not fixable by better parsing. Its form is also
-entirely custom `<div>` widgets, which is what motivated the vision fallback.
+This is a cost control. Every step of the loop is a paid model call, and an
+open-ended browser spent most of its budget on sites it was bad at anyway — see
+the MakeMyTrip note below. Two text-heavy sites the user is signed into is the
+case the agent is actually good at.
 
-Flight OTAs and ticketing sites are the hardest targets on the web. A site the
-user is signed into and that is not actively defending itself is the case this
-agent is good at.
+`AllowedSites` is the single source of truth. Both hostnames for ChatGPT are
+allowed because they redirect into each other, and a short list of identity
+providers (Google, Apple, Microsoft, OpenAI's own auth host) is allowed too —
+without those, "Continue with Google" would break mid-sign-in, which is the one
+step the agent explicitly hands to the user.
+
+It is enforced at **every** point a URL can reach a WebView, not just one:
+
+| Where | What it stops |
+|---|---|
+| `ActionValidator.validateOpen` | The agent planning a navigation off-list. |
+| `ActionExecutor` | An action built without validation. |
+| `GlassBrowserEngine.open` + its `WebViewClient` | Direct `browser_*` voice tools, and links the agent clicks. |
+| `WebBrowserActivity.loadUrl` + `shouldOverrideUrlLoading` | The address bar, the chips, and links the user taps. |
+| `BrowserHandoffOverlay` | The handoff screen becoming a general browser. |
+| `PopupWindowRouter` | `window.open` as a way around the list. |
+
+Both planner prompts and the `start_task` declaration state the limit as well,
+so an out-of-scope task is refused in conversation rather than after burning
+steps discovering it. `TaskPlanner`'s PHASE 0 feasibility check refuses them
+before any browsing happens at all. Those are prompt-level and therefore not
+guarantees; the table above is what actually holds.
+
+### The hostile case, kept for context
+
+**MakeMyTrip** produced `ERR_HTTP2_PROTOCOL_ERROR` — the server closing the
+connection at the protocol level, bot detection rejecting the WebView before any
+page renders. Not fixable by better parsing. Its form was also entirely custom
+`<div>` widgets, which is what motivated the vision fallback in §4. Flight OTAs
+and ticketing sites are the hardest targets on the web. It is out of scope now,
+but the reasoning is why the vision path exists.
 
 ---
 

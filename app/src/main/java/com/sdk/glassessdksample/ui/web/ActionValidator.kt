@@ -66,10 +66,18 @@ object ActionValidator {
         return when (action) {
             is BrowserAction.Type -> validateType(action, page)
             is BrowserAction.Click -> validateClick(action, page)
-            is BrowserAction.Open -> validateOpen(action)
+            is BrowserAction.Open -> validateOpen(action, page)
+            // A web search is by definition a route to an arbitrary site, so
+            // there is no version of it that stays inside the allowed set.
+            // Rejected rather than handed off: the planner can act on this and
+            // go to one of the two sites directly, whereas a handoff would put
+            // a page in front of the user that they are equally not allowed to
+            // browse from.
             is BrowserAction.Search ->
-                if (action.query.isBlank()) Verdict.Reject("Empty search query.")
-                else Verdict.Allow
+                Verdict.Reject(
+                    "Web search is turned off. " + AllowedSites.BLOCKED_MESSAGE +
+                        " Use Open with one of those sites instead."
+                )
 
             is BrowserAction.Scroll ->
                 if (action.amount == 0.0) Verdict.Reject("Scroll amount was zero.")
@@ -94,6 +102,18 @@ object ActionValidator {
         if (page?.isSensitive(action.selector) == true) {
             return Verdict.Handoff(
                 "That field is a password or security code. Please type it yourself, then tap Continue."
+            )
+        }
+
+        // Typing into a signed-out page is worse than useless: the site accepts
+        // the text and then silently refuses to act on it, so the run reports
+        // success for something that never happened. Observed on a logged-out
+        // ChatGPT, which took "hello" into its composer and would not send it.
+        // Hand off instead — signing in is the user's step anyway.
+        if (page?.signedOut == true) {
+            return Verdict.Handoff(
+                "You're not signed in to this site, so I can't send anything. " +
+                    "Please log in, then tap Continue and I'll carry on."
             )
         }
 
@@ -175,14 +195,62 @@ object ActionValidator {
         return Verdict.Allow
     }
 
-    private fun validateOpen(action: BrowserAction.Open): Verdict {
+    private fun validateOpen(
+        action: BrowserAction.Open,
+        page: PageReader.PageSnapshot?
+    ): Verdict {
         val url = action.url.trim()
+
+        // Re-opening the page you are already on discards everything that has
+        // loaded and returns you to the same state, so the next turn makes the
+        // same decision — a loop that reports "ok" every step while going
+        // nowhere. Observed on ChatGPT: three consecutive "Opening chatgpt.com"
+        // steps against a page that was already open and merely slow to render.
+        // The prompt says not to; this makes it so.
+        if (page != null && sameLocation(page.url, url)) {
+            return Verdict.Reject(
+                "You are already on $url. Do not re-open it — act on the page, " +
+                    "or wait for it to finish loading."
+            )
+        }
         // Only real web pages. javascript: and data: URLs are how a page would
         // try to get arbitrary code executed through the agent.
         if (!url.startsWith("https://") && !url.startsWith("http://")) {
             return Verdict.Reject("Only http and https URLs can be opened.")
         }
+        // The allow-list is enforced here, at the same boundary as the
+        // credential and payment rules, so it is a property of the code rather
+        // than a request in a prompt. Reject, not Handoff: the planner is told
+        // why and can pick an allowed site on its next turn.
+        if (!AllowedSites.isPrimarySite(url)) {
+            return Verdict.Reject(
+                AllowedSites.BLOCKED_MESSAGE +
+                    " Open chatgpt.com or claude.ai instead."
+            )
+        }
         return Verdict.Allow
+    }
+
+    /**
+     * Whether two URLs point at the same page.
+     *
+     * Host + path only: the query and fragment are ignored deliberately, since
+     * a re-open that differs solely by "?" or "#" lands on the same place.
+     * Trailing slashes are normalised so "chatgpt.com" and "chatgpt.com/" match,
+     * while "chatgpt.com/c/123" correctly does not match the root.
+     */
+    private fun sameLocation(current: String?, target: String): Boolean {
+        if (current.isNullOrBlank()) return false
+        return try {
+            val a = java.net.URI(current)
+            val b = java.net.URI(target)
+            val hostA = a.host?.lowercase(Locale.ROOT)?.removePrefix("www.") ?: return false
+            val hostB = b.host?.lowercase(Locale.ROOT)?.removePrefix("www.") ?: return false
+            hostA == hostB &&
+                a.path.orEmpty().trimEnd('/') == b.path.orEmpty().trimEnd('/')
+        } catch (_: Exception) {
+            false
+        }
     }
 
     /**

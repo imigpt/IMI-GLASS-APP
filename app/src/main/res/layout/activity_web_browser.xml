@@ -159,64 +159,12 @@
                 android:textSize="14sp"
                 android:lineSpacingExtra="3dp" />
 
-            <!-- Quick links -->
+            <!-- The only two sites the browser may open. See AllowedSites. -->
             <LinearLayout
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:orientation="horizontal"
                 android:layout_marginTop="26dp">
-
-                <TextView
-                    android:id="@+id/chipGoogle"
-                    android:layout_width="wrap_content"
-                    android:layout_height="38dp"
-                    android:gravity="center"
-                    android:paddingStart="18dp"
-                    android:paddingEnd="18dp"
-                    android:text="Google"
-                    android:textColor="#FFFFFF"
-                    android:textSize="14sp"
-                    android:background="@drawable/bg_web_toolbar"
-                    android:clickable="true"
-                    android:focusable="true" />
-
-                <TextView
-                    android:id="@+id/chipYoutube"
-                    android:layout_width="wrap_content"
-                    android:layout_height="38dp"
-                    android:layout_marginStart="10dp"
-                    android:gravity="center"
-                    android:paddingStart="18dp"
-                    android:paddingEnd="18dp"
-                    android:text="YouTube"
-                    android:textColor="#FFFFFF"
-                    android:textSize="14sp"
-                    android:background="@drawable/bg_web_toolbar"
-                    android:clickable="true"
-                    android:focusable="true" />
-
-                <TextView
-                    android:id="@+id/chipGemini"
-                    android:layout_width="wrap_content"
-                    android:layout_height="38dp"
-                    android:layout_marginStart="10dp"
-                    android:gravity="center"
-                    android:paddingStart="18dp"
-                    android:paddingEnd="18dp"
-                    android:text="Gemini"
-                    android:textColor="#FFFFFF"
-                    android:textSize="14sp"
-                    android:background="@drawable/bg_web_toolbar"
-                    android:clickable="true"
-                    android:focusable="true" />
-            </LinearLayout>
-
-            <!-- AI services: sign in once here, then ask about your work -->
-            <LinearLayout
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:layout_marginTop="10dp">
 
                 <TextView
                     android:id="@+id/chipClaude"

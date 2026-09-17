@@ -62,6 +62,16 @@ class BrowserHandoffOverlay @JvmOverloads constructor(
     /** The URL the engine was stuck on, so we only reload when it changes. */
     private var loadedUrl: String? = null
 
+    /**
+     * Whether [webView] has ever actually loaded a page.
+     *
+     * [loadedUrl] alone cannot answer this: it is reset to null on hide(), and
+     * on the voice-approved path it is never set at all — so "loadedUrl is
+     * null" does not distinguish "nothing loaded yet" from "loaded, then
+     * cleared". Showing the WebView in the first case is a black rectangle.
+     */
+    private var hasLoadedPage = false
+
     /** True once a resumed run has finished and its result is on screen. */
     private var isRunFinished = false
 
@@ -172,7 +182,19 @@ class BrowserHandoffOverlay @JvmOverloads constructor(
 
         webView = WebView(context).apply {
             WebSessionManager.configure(this, desktopMode = true)
-            webViewClient = WebViewClient()
+            // The allow-list holds here too. This overlay is where the user
+            // finishes a sign-in by hand, so it must reach the identity
+            // providers — which AllowedSites permits — without becoming a way
+            // to browse anywhere else.
+            webViewClient = object : WebViewClient() {
+                override fun shouldOverrideUrlLoading(
+                    view: WebView?,
+                    request: android.webkit.WebResourceRequest?
+                ): Boolean {
+                    val url = request?.url?.toString() ?: return false
+                    return !AllowedSites.isAllowed(url)
+                }
+            }
             // Same OAuth-popup routing as the engine and the Web screen: without
             // it, "Continue with Google" waits forever on a popup that never
             // opens — and sign-in is one of the main reasons we're here at all.
@@ -324,7 +346,6 @@ class BrowserHandoffOverlay @JvmOverloads constructor(
         // and the page the user actually had to deal with was invisible.
         isShowingPlan = false
         planScroll.visibility = View.GONE
-        webView.visibility = View.VISIBLE
 
         // The reason already ends in its own instruction ("…then tap Continue."),
         // so appending another one produced the same sentence twice on screen.
@@ -337,8 +358,13 @@ class BrowserHandoffOverlay @JvmOverloads constructor(
             val stuckUrl = GlassBrowserEngine.currentUrl()
             if (!stuckUrl.isNullOrBlank() && stuckUrl != loadedUrl) {
                 loadedUrl = stuckUrl
+                hasLoadedPage = true
                 webView.loadUrl(stuckUrl)
             }
+            // Same reasoning as showResult(): only show the WebView once there
+            // is something in it, or the user gets a black rectangle and no
+            // sign of what they are meant to be unblocking.
+            webView.visibility = if (hasLoadedPage) View.VISIBLE else View.GONE
         }
     }
 
@@ -440,12 +466,31 @@ class BrowserHandoffOverlay @JvmOverloads constructor(
         // so put it up and let them carry on from there by hand.
         isShowingPlan = false
         planScroll.visibility = View.GONE
-        webView.visibility = View.VISIBLE
+
+        // Deliberately NOT made visible yet. A task approved by voice never put
+        // a page on this overlay, so the WebView has loaded nothing and showing
+        // it here is a full-screen black rectangle under the result text —
+        // which reads as the task having broken, when it had in fact just
+        // succeeded. It becomes visible below, once there is something in it.
         scope.launch {
             val endedOn = GlassBrowserEngine.currentUrl()
-            if (!endedOn.isNullOrBlank() && endedOn != loadedUrl) {
-                loadedUrl = endedOn
-                webView.loadUrl(endedOn)
+            when {
+                // Nothing to show: the engine was already cleared, or it never
+                // left about:blank. Keep the WebView hidden so the result text
+                // stands on its own instead of floating above a black void.
+                endedOn.isNullOrBlank() -> webView.visibility = View.GONE
+
+                // Already displaying this exact page — just reveal it. Skipping
+                // the reload keeps the user's scroll position.
+                endedOn == loadedUrl && hasLoadedPage ->
+                    webView.visibility = View.VISIBLE
+
+                else -> {
+                    loadedUrl = endedOn
+                    hasLoadedPage = true
+                    webView.loadUrl(endedOn)
+                    webView.visibility = View.VISIBLE
+                }
             }
         }
     }

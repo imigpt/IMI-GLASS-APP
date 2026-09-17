@@ -24,6 +24,12 @@ object WebSessionManager {
 
     /** Applies the browser configuration this feature depends on. */
     fun configure(webView: WebView, desktopMode: Boolean = false) {
+        // Lets `chrome://inspect` attach to these WebViews from a dev machine.
+        // Debug builds only: this exposes page contents to anything that can
+        // reach adb, which is not something a shipped app should offer.
+        if (com.sdk.glassessdksample.BuildConfig.DEBUG) {
+            WebView.setWebContentsDebuggingEnabled(true)
+        }
         with(webView.settings) {
             javaScriptEnabled = true
             domStorageEnabled = true
@@ -58,7 +64,22 @@ object WebSessionManager {
             setAcceptThirdPartyCookies(webView, true)
         }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        // Dark mode. forceDark is a NO-OP once the app targets Android 13+ —
+        // the log says so outright ("setForceDark() is a no-op in an app with
+        // targetSdkVersion>=T"), and this app targets 36. With it silently
+        // doing nothing, the WebView rendered in light mode while the sites
+        // themselves followed the system dark theme and painted light text.
+        // Light text on an undarkened background, inside this app's black
+        // chrome, is an entirely blank-looking page — which is exactly how
+        // chatgpt.com/auth/login presented.
+        //
+        // isAlgorithmicDarkeningAllowed is the replacement: it lets the page's
+        // own prefers-color-scheme decide, and only applies automatic darkening
+        // where the site has no dark styling of its own.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            webView.settings.isAlgorithmicDarkeningAllowed = true
+        } else {
+            @Suppress("DEPRECATION")
             webView.settings.forceDark = WebSettings.FORCE_DARK_AUTO
         }
     }

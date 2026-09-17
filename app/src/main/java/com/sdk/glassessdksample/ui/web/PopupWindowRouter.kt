@@ -37,7 +37,11 @@ object PopupWindowRouter {
                 request: android.webkit.WebResourceRequest?
             ): Boolean {
                 val url = request?.url?.toString() ?: return false
-                target.loadUrl(url)
+                // A popup is a navigation like any other, so it goes through
+                // the allow-list too — otherwise window.open would be a way
+                // out of it. Identity providers are allowed, which is what
+                // keeps "Continue with Google" working.
+                if (AllowedSites.isAllowed(url)) target.loadUrl(url)
                 // The throwaway view has done its one job; let it go.
                 popup.stopLoading()
                 popup.destroy()

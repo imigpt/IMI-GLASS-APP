@@ -198,6 +198,35 @@ object PageReader {
         })();
         var hasPassword = document.querySelectorAll('input[type="password"]').length > 0;
 
+        // Is this page signed OUT? Without this the agent happily typed into a
+        // logged-out ChatGPT composer, which accepts the text and then refuses
+        // to send it — so the run reported "sent your message" for a message
+        // that never left the box. Nothing in the snapshot said the session was
+        // missing, so no handoff was ever triggered.
+        //
+        // Two signals, both cheap: the URL (both allowed sites serve a distinct
+        // unauthenticated bundle) and a prominent log-in control with no
+        // sign of an account. Deliberately narrow — a false positive parks a
+        // working run and asks the user to sign in for no reason.
+        var signedOut = (function () {
+          try {
+            var href = location.href;
+            if (/\/unauth|\/auth\/login|\/login\b/i.test(href)) return true;
+
+            // A visible "Log in" / "Sign up" control in the page's own chrome.
+            var nodes = document.querySelectorAll('button, a');
+            for (var i = 0; i < nodes.length; i++) {
+              var n = nodes[i];
+              var t = (n.innerText || n.textContent || '').trim().toLowerCase();
+              if (t !== 'log in' && t !== 'login' &&
+                  t !== 'sign in' && t !== 'sign up') continue;
+              var r = n.getBoundingClientRect();
+              if (r.width > 0 && r.height > 0 && r.top < window.innerHeight) return true;
+            }
+            return false;
+          } catch (e) { return false; }
+        })();
+
         return JSON.stringify({
           ok: true,
           url: location.href,
@@ -209,6 +238,7 @@ object PageReader {
                     ((document.body ? document.body.scrollHeight : 0) - 40),
           hasCaptcha: hasCaptcha,
           hasPasswordField: hasPassword,
+          signedOut: signedOut,
           inputs: inputs,
           buttons: buttons,
           links: links,
@@ -227,6 +257,8 @@ object PageReader {
         val title: String,
         val hasCaptcha: Boolean,
         val hasPasswordField: Boolean,
+        /** The site is showing its signed-out state; the session is missing. */
+        val signedOut: Boolean = false,
         val atBottom: Boolean,
         /** Whether this browser has somewhere to go back to / forward to. */
         val canGoBack: Boolean = false,
@@ -243,6 +275,13 @@ object PageReader {
             sb.append("TITLE: ").append(title).append('\n')
             if (hasCaptcha) sb.append("WARNING: a CAPTCHA is present on this page.\n")
             if (hasPasswordField) sb.append("WARNING: a password field is present.\n")
+            if (signedOut) {
+                sb.append(
+                    "WARNING: this page is SIGNED OUT. The user is not logged in here, " +
+                        "so anything you type will not send. Use \"handoff\" and ask them " +
+                        "to log in — do NOT try to type or send.\n"
+                )
+            }
             sb.append("AT_BOTTOM: ").append(atBottom).append('\n')
             // Stated every turn so the planner never has to guess whether
             // navigating through history is available to it.
@@ -385,6 +424,7 @@ object PageReader {
                 url = json.optString("url"),
                 title = json.optString("title"),
                 hasCaptcha = json.optBoolean("hasCaptcha"),
+                signedOut = json.optBoolean("signedOut"),
                 hasPasswordField = json.optBoolean("hasPasswordField"),
                 atBottom = json.optBoolean("atBottom"),
                 canGoBack = canGoBack,

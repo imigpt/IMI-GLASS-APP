@@ -38,17 +38,21 @@ class ActionExecutor(private val webView: WebView) {
 
     private suspend fun executeOnMain(action: BrowserAction): ActionResult = when (action) {
         is BrowserAction.Open -> {
-            webView.loadUrl(action.url)
-            awaitPageSettle()
-            ActionResult(action, true, "Opened ${action.url}")
+            // Belt and braces with ActionValidator: this is the last point
+            // before a URL reaches the WebView, so a future caller that builds
+            // an action without validating it still cannot get out of the
+            // allow-list.
+            if (!AllowedSites.isAllowed(action.url)) {
+                ActionResult(action, false, AllowedSites.BLOCKED_MESSAGE)
+            } else {
+                webView.loadUrl(action.url)
+                awaitPageSettle()
+                ActionResult(action, true, "Opened ${action.url}")
+            }
         }
 
-        is BrowserAction.Search -> {
-            val url = searchUrl(action.query, action.engine)
-            webView.loadUrl(url)
-            awaitPageSettle()
-            ActionResult(action, true, "Searched for \"${action.query}\"")
-        }
+        is BrowserAction.Search ->
+            ActionResult(action, false, AllowedSites.BLOCKED_MESSAGE)
 
         is BrowserAction.Click -> runClick(action)
         is BrowserAction.Type -> runType(action)
@@ -273,7 +277,34 @@ class ActionExecutor(private val webView: WebView) {
             var value = ${action.text.toJsString()};
 
             if (el.isContentEditable) {
-              el.textContent = value;
+              // ChatGPT and Claude both use a rich-text editor (ProseMirror)
+              // that keeps its OWN document model and only trusts the events a
+              // real keypress produces. Assigning textContent mutates the DOM
+              // underneath it: the text appears on screen, the editor's model
+              // stays empty, and Send submits nothing — which read as "I sent
+              // your message" while no message existed.
+              //
+              // insertText goes through the browser's editing pipeline, so the
+              // editor sees beforeinput/input exactly as it would from typing.
+              el.focus();
+              var sel = window.getSelection();
+              var range = document.createRange();
+              range.selectNodeContents(el);
+              sel.removeAllRanges();
+              sel.addRange(range);
+              var inserted = false;
+              try {
+                inserted = document.execCommand('insertText', false, value);
+              } catch (e) { inserted = false; }
+              if (!inserted) {
+                // Fallback for engines where execCommand is unavailable: a
+                // synthetic beforeinput/input pair carrying the same data.
+                el.textContent = value;
+                el.dispatchEvent(new InputEvent('beforeinput',
+                  {bubbles:true, cancelable:true, inputType:'insertText', data:value}));
+                el.dispatchEvent(new InputEvent('input',
+                  {bubbles:true, cancelable:true, inputType:'insertText', data:value}));
+              }
             } else {
               // Assign through the native setter so React/Vue see the change;
               // writing .value directly is swallowed by their value tracker.
@@ -285,22 +316,42 @@ class ActionExecutor(private val webView: WebView) {
               else { el.value = value; }
             }
 
-            el.dispatchEvent(new Event('input', {bubbles:true}));
-            el.dispatchEvent(new Event('change', {bubbles:true}));
+            // execCommand already fired these for the contenteditable path;
+            // re-firing a bare Event with no data confuses some editors, so
+            // only the plain-field path needs them.
+            if (!el.isContentEditable) {
+              el.dispatchEvent(new Event('input', {bubbles:true}));
+              el.dispatchEvent(new Event('change', {bubbles:true}));
+            }
 
             if (${action.submit}) {
               var form = el.form || el.closest('form');
               el.dispatchEvent(new KeyboardEvent('keydown',
-                {bubbles:true, cancelable:true, key:'Enter', keyCode:13, which:13}));
+                {bubbles:true, cancelable:true, key:'Enter', code:'Enter',
+                 keyCode:13, which:13}));
               el.dispatchEvent(new KeyboardEvent('keyup',
-                {bubbles:true, cancelable:true, key:'Enter', keyCode:13, which:13}));
-              if (form && typeof form.requestSubmit === 'function') {
-                form.requestSubmit();
-              } else if (form) {
-                form.submit();
+                {bubbles:true, cancelable:true, key:'Enter', code:'Enter',
+                 keyCode:13, which:13}));
+              // A rich-text editor has no <form>: Enter is the whole submit
+              // mechanism, and calling form.submit() would be a full page POST
+              // that throws the SPA away. Only fall back to the form for a
+              // genuine form field.
+              if (!el.isContentEditable) {
+                if (form && typeof form.requestSubmit === 'function') {
+                  form.requestSubmit();
+                } else if (form) {
+                  form.submit();
+                }
               }
             }
-            return JSON.stringify({ok:true});
+            // Report what the field ACTUALLY holds, not merely that the script
+            // ran. A rich-text editor can reject a programmatic change and
+            // leave the field empty, and reporting success for that is how a
+            // run ends up announcing it sent a message that never existed.
+            var landed = el.isContentEditable
+              ? (el.textContent || '')
+              : (el.value || '');
+            return JSON.stringify({ok:true, landed:landed});
           } catch (e) {
             return JSON.stringify({ok:false, error:String(e)});
           }
@@ -314,6 +365,24 @@ class ActionExecutor(private val webView: WebView) {
         // to click. Give a non-submitting type long enough for the suggestions
         // to render.
         if (action.submit) awaitPageSettle() else delay(AUTOCOMPLETE_SETTLE_MS)
+
+        // Did the text actually go in? On a submitting type the field is
+        // legitimately empty afterwards (the editor clears on send), so this
+        // only judges the non-submitting case, where the text must still be
+        // sitting there.
+        if (res.optBoolean("ok") && !action.submit) {
+            val landed = res.optString("landed")
+            if (!landed.contains(action.text)) {
+                return ActionResult(
+                    action,
+                    false,
+                    "The text did not go into that field — it still reads " +
+                        "\"${landed.take(40)}\". This field may be a rich-text editor " +
+                        "that rejected the input. Try clicking it first, or pick a " +
+                        "different field."
+                )
+            }
+        }
 
         return if (res.optBoolean("ok")) {
             ActionResult(
@@ -392,16 +461,6 @@ class ActionExecutor(private val webView: WebView) {
         }
         // Let client-side rendering paint before the next page read.
         delay(RENDER_MS)
-    }
-
-    private fun searchUrl(query: String, engine: String): String {
-        val q = java.net.URLEncoder.encode(query, "UTF-8")
-        return when (engine.lowercase()) {
-            "youtube" -> "https://m.youtube.com/results?search_query=$q"
-            "bing" -> "https://www.bing.com/search?q=$q"
-            "duckduckgo" -> "https://duckduckgo.com/?q=$q"
-            else -> "https://www.google.com/search?q=$q"
-        }
     }
 
     companion object {

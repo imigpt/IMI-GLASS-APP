@@ -9,6 +9,7 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
 
 /**
  * A browser the glasses can drive without anyone looking at the phone.
@@ -141,7 +142,19 @@ object GlassBrowserEngine {
 
         val view = WebView(context.applicationContext)
         WebSessionManager.configure(view, desktopMode = true)
-        view.webViewClient = WebViewClient()
+        // Links the agent clicks can navigate anywhere, so the allow-list is
+        // enforced on navigation as well as on the open() call that started it.
+        view.webViewClient = object : WebViewClient() {
+            override fun shouldOverrideUrlLoading(
+                view: WebView?,
+                request: android.webkit.WebResourceRequest?
+            ): Boolean {
+                val url = request?.url?.toString() ?: return false
+                if (AllowedSites.isAllowed(url)) return false
+                Log.d(TAG, "Blocked in-page navigation to $url")
+                return true
+            }
+        }
         // Same OAuth-popup fix as WebBrowserActivity (see PopupWindowRouter):
         // without this, "Continue with Google" during a voice-driven sign-in
         // would leave this WebView waiting on a popup that never opens.
@@ -288,21 +301,23 @@ object GlassBrowserEngine {
     /** The URL currently loaded, or null when nothing has been opened. */
     suspend fun currentUrl(): String? = onMain { it.url?.takeIf { u -> u != "about:blank" } }
 
-    /** Navigates and waits for the page to settle. */
-    suspend fun open(url: String): Boolean = onMain { view ->
-        view.loadUrl(url)
-        true
-    }.also { settle() }
-
-    /** Runs a web search. */
-    suspend fun search(query: String, engine: String = "google"): Boolean {
-        val q = java.net.URLEncoder.encode(query, "UTF-8")
-        val url = when (engine.lowercase()) {
-            "youtube" -> "https://m.youtube.com/results?search_query=$q"
-            "bing" -> "https://www.bing.com/search?q=$q"
-            else -> "https://www.google.com/search?q=$q"
+    /**
+     * Navigates and waits for the page to settle.
+     *
+     * The allow-list is checked here as well as in [ActionValidator] because
+     * this is the chokepoint every engine navigation goes through, including
+     * the direct browser_* voice tools that never build a BrowserAction and so
+     * never reach the validator at all.
+     */
+    suspend fun open(url: String): Boolean {
+        if (!AllowedSites.isAllowed(url)) {
+            Log.d(TAG, "Blocked navigation to $url")
+            return false
         }
-        return open(url)
+        return onMain { view ->
+            view.loadUrl(url)
+            true
+        }.also { settle() }
     }
 
     /** Reads the page's interactive summary, for the agent loop. */
@@ -379,13 +394,45 @@ object GlassBrowserEngine {
         withContext(Dispatchers.Main) { ActionExecutor(ensureWebView(appContext!!)) }
 
     /**
-     * Gives a freshly loaded page time to render before it is read.
+     * Waits until a freshly loaded page actually has something on it.
      *
-     * A fixed pause rather than an onPageFinished hook: most navigation on the
-     * sites this is used with is client-side and never fires it.
+     * This used to be a flat 2.5s delay. That is fine for a server-rendered
+     * page, but both sites this agent can reach are client-rendered React apps
+     * whose first paint routinely takes longer than that on a phone — so the
+     * read landed on an empty DOM, PageReader returned nothing, and the agent
+     * concluded "the page is completely blank" about a page that was merely
+     * still booting. It then either asked the user what was wrong or burned its
+     * vision budget photographing a white rectangle.
+     *
+     * So: poll for real content instead of guessing a duration. Returns as soon
+     * as the document is complete AND has an interactive element, which on a
+     * fast connection is well under the old fixed wait.
      */
     private suspend fun settle() {
-        kotlinx.coroutines.delay(SETTLE_MS)
+        val view = webView ?: return
+        var waited = 0L
+        while (waited < MAX_SETTLE_MS) {
+            val ready = withContext(Dispatchers.Main) {
+                suspendCancellableCoroutine { cont ->
+                    view.evaluateJavascript(
+                        "(function(){try{" +
+                            "if(document.readyState!=='complete')return 'false';" +
+                            // An empty <body> means React has not mounted yet.
+                            "return String(!!document.querySelector(" +
+                            "'input,textarea,button,a,[contenteditable=\"true\"]'));" +
+                            "}catch(e){return 'false';}})();"
+                    ) { result ->
+                        if (cont.isActive) cont.resume(result?.contains("true") == true) {}
+                    }
+                }
+            }
+            if (ready) break
+            kotlinx.coroutines.delay(SETTLE_POLL_MS)
+            waited += SETTLE_POLL_MS
+        }
+        // A short grace period after the first interactive element appears, so
+        // the rest of the view has painted before the summary is taken.
+        kotlinx.coroutines.delay(SETTLE_GRACE_MS)
     }
 
     /** Releases the WebView. Called when the app tears the voice session down. */
@@ -410,5 +457,17 @@ object GlassBrowserEngine {
     /** Screenshots are scaled to this height before encoding, to cap tokens. */
     private const val MAX_SHOT_HEIGHT = 1536
     private const val SHOT_QUALITY = 70
-    private const val SETTLE_MS = 2500L
+    /**
+     * Longest wait for a client-rendered page to show something interactive.
+     *
+     * Generous because the cost of giving up early is the agent declaring a
+     * working page blank; the cost of waiting is a few seconds on a slow load,
+     * and the poll returns as soon as content appears.
+     */
+    private const val MAX_SETTLE_MS = 12_000L
+
+    private const val SETTLE_POLL_MS = 250L
+
+    /** Grace period after first interactive element, for the rest to paint. */
+    private const val SETTLE_GRACE_MS = 600L
 }

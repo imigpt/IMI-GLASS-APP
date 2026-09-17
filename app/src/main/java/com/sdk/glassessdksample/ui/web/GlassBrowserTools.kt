@@ -77,7 +77,11 @@ object GlassBrowserTools {
                 "karna hai'. NEVER call it for an ordinary question, however much it " +
                 "sounds like something on the web: 'what are flights to Jaipur', " +
                 "'how much is this', 'what's the score' are all answered by you directly " +
-                "with your own search, not by this. This tool starts a conversation: it " +
+                "with your own search, not by this. The browser can ONLY reach two sites: " +
+                "ChatGPT (chatgpt.com) and Claude (claude.ai). If the task needs any other " +
+                "site - shopping, booking, email, YouTube - do NOT call this: say you can " +
+                "only do tasks on ChatGPT and Claude at the moment. This tool starts a " +
+                "conversation: it " +
                 "returns a QUESTION for you to ask the user out loud, and you pass their " +
                 "reply to task_answer. It does not browse anything yet.",
             "parameters" to mapOf(
@@ -740,7 +744,7 @@ object GlassBrowserTools {
         question: String?
     ): String {
         val service = AiService.match(serviceName)
-            ?: return "I can check Claude, ChatGPT or Gemini. Which one?"
+            ?: return "I can check Claude or ChatGPT. Which one?"
 
         GlassBrowserEngine.markBusy(true)
         return try {

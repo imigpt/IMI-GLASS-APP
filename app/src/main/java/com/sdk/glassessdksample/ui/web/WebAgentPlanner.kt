@@ -38,7 +38,6 @@ class WebAgentPlanner(private val context: Context?) {
 
         Allowed actions (JSON shapes):
         {"action":"open","url":"https://..."}
-        {"action":"search","query":"...","engine":"google|youtube|bing|duckduckgo"}
         {"action":"click","selector":"<selector from the page summary>","label":"what it is"}
         {"action":"type","selector":"<selector>","text":"...","submit":true|false}
         {"action":"scroll","amount":0.8}
@@ -68,20 +67,30 @@ class WebAgentPlanner(private val context: Context?) {
            actually requires using THIS page (reading it, clicking something on
            it, submitting a form on it), use "handoff" and explain what the
            user should do. But if the goal is to go somewhere else entirely
-           (e.g. goal is "open YouTube" but the current page happens to be some
-           other site's login/CAPTCHA screen), just "open" or "search" to the
-           site the goal actually asks for - leaving an unrelated blocked page
-           needs no handoff, since you are not interacting with it.
+           (e.g. the goal is about Claude but the current page happens to be
+           some other login/CAPTCHA screen), just "open" the site the goal
+           actually asks for - leaving an unrelated blocked page needs no
+           handoff, since you are not interacting with it.
         4. If you need information only the user has (an address, a date, a
            choice between options), use "ask_user" with one clear question.
-        5. "search" runs a WEB search (Google). Use it to FIND a site, not to
-           search inside one you are already on. When the goal names a site and
-           you are on it, use that site's OWN search box: type into the field
-           whose label or placeholder looks like search, with submit true.
-           A search box is an input — look under INPUTS in the summary, not
-           BUTTONS. If the summary was truncated and you cannot find it, scroll
-           or reload and read again; do not invent a selector, and do not fall
-           back to a web search for something you were asked to do on that site.
+        5a. NEVER "open" a URL you are ALREADY on. Look at the CURRENT PAGE url
+           first: if you are on chatgpt.com and the goal is a ChatGPT task, the
+           page is already there — act on it, do not reload it. Re-opening the
+           same page throws away everything that has loaded and puts you back
+           where you started, which is an infinite loop, not progress. If the
+           page looks empty, prefer "wait" once to let it finish rendering.
+        5. You can ONLY reach two sites: https://chatgpt.com and
+           https://claude.ai. "open" any other URL and it will be refused.
+           There is NO web search — no Google, no Bing. If the goal needs a
+           different site, do not try to navigate there and do not look for a
+           way around it: use "failed" and say the browser is limited to
+           ChatGPT and Claude.
+           To search WITHIN one of these two sites, use that site's own search
+           box: type into the field whose label or placeholder looks like
+           search, with submit true. A search box is an input — look under
+           INPUTS in the summary, not BUTTONS. If the summary was truncated and
+           you cannot find it, scroll or reload and read again; do not invent a
+           selector.
         6. When the goal is met, use "done" with a short summary that answers
            the user's actual question. If you have read what the user asked
            for, put the answer in the summary itself.
@@ -105,7 +114,7 @@ class WebAgentPlanner(private val context: Context?) {
            "back" whenever that says true and stepping back is useful.
            If CAN_GO_BACK is false there is simply no earlier page in this
            browser yet — that is a fact about the history, NOT a restriction on
-           you. In that case use "open" or "search" to get where you need to be.
+           you. In that case use "open" to get where you need to be.
            NEVER tell the user you are not allowed to navigate between pages, or
            that you lack permission to go back. That is untrue.
 

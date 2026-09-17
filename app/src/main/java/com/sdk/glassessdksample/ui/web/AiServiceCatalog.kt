@@ -29,12 +29,10 @@ enum class AiService(
         displayName = "ChatGPT",
         homeUrl = "https://chatgpt.com",
         keywords = listOf("chatgpt", "chat gpt", "gpt", "openai")
-    ),
-    GEMINI(
-        displayName = "Gemini",
-        homeUrl = "https://gemini.google.com/app",
-        keywords = listOf("gemini", "bard")
     );
+    // Gemini used to be here. It was removed with the allow-list: the browser
+    // can no longer open gemini.google.com, so offering it as a destination
+    // only produced a blocked-site message. See AllowedSites.
 
     companion object {
         /** Finds the service a command refers to, or null. */

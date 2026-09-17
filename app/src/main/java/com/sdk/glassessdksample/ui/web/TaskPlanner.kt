@@ -77,6 +77,11 @@ class TaskPlanner(private val context: Context?) {
         PHASE 0 - CHECK IT IS POSSIBLE. Do this FIRST, before asking anything.
         Work out whether a browser on the user's phone could really carry this
         out. Things it CANNOT do:
+        - anything on a site other than ChatGPT (chatgpt.com) and Claude
+          (claude.ai). Those are the ONLY two sites reachable, and there is no
+          web search. Shopping, booking, email, YouTube, maps and every other
+          site are all out of scope — refuse those in PHASE 0 rather than
+          planning a task that cannot run.
         - anything that needs a phone app rather than a website (WhatsApp, UPI
           apps, native banking apps)
         - anything needing the user's card details or a payment to complete —

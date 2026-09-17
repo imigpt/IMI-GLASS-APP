@@ -24,53 +24,21 @@ enum class SignInSite(
     /** What the agent can do here once signed in, shown as the row subtitle. */
     val purpose: String
 ) {
-    AMAZON(
-        displayName = "Amazon",
-        signInUrl = "https://www.amazon.in/ap/signin",
-        cookieDomain = "https://www.amazon.in",
-        purpose = "Shopping, orders, deliveries"
+    // Only the sites the browser can actually open appear here. The list used
+    // to carry Amazon, Flipkart, MakeMyTrip, IRCTC, Swiggy, Zomato, Gmail and
+    // YouTube; with the allow-list in place, signing into those bought the user
+    // nothing, because no task could ever navigate to them. See AllowedSites.
+    CHATGPT(
+        displayName = "ChatGPT",
+        signInUrl = "https://chatgpt.com/auth/login",
+        cookieDomain = "https://chatgpt.com",
+        purpose = "Asking and reading your chats"
     ),
-    FLIPKART(
-        displayName = "Flipkart",
-        signInUrl = "https://www.flipkart.com/account/login",
-        cookieDomain = "https://www.flipkart.com",
-        purpose = "Shopping and orders"
-    ),
-    MAKEMYTRIP(
-        displayName = "MakeMyTrip",
-        signInUrl = "https://www.makemytrip.com/",
-        cookieDomain = "https://www.makemytrip.com",
-        purpose = "Flights, hotels, trains"
-    ),
-    IRCTC(
-        displayName = "IRCTC",
-        signInUrl = "https://www.irctc.co.in/nget/train-search",
-        cookieDomain = "https://www.irctc.co.in",
-        purpose = "Train tickets"
-    ),
-    SWIGGY(
-        displayName = "Swiggy",
-        signInUrl = "https://www.swiggy.com/",
-        cookieDomain = "https://www.swiggy.com",
-        purpose = "Food delivery"
-    ),
-    ZOMATO(
-        displayName = "Zomato",
-        signInUrl = "https://www.zomato.com/",
-        cookieDomain = "https://www.zomato.com",
-        purpose = "Food and restaurants"
-    ),
-    GMAIL(
-        displayName = "Gmail",
-        signInUrl = "https://mail.google.com/",
-        cookieDomain = "https://mail.google.com",
-        purpose = "Reading and searching mail"
-    ),
-    YOUTUBE(
-        displayName = "YouTube",
-        signInUrl = "https://m.youtube.com/",
-        cookieDomain = "https://m.youtube.com",
-        purpose = "Watching and searching"
+    CLAUDE(
+        displayName = "Claude",
+        signInUrl = "https://claude.ai/login",
+        cookieDomain = "https://claude.ai",
+        purpose = "Asking and reading your chats"
     );
 
     /**

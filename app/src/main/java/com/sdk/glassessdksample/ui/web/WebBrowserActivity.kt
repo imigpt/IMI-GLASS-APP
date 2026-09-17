@@ -118,6 +118,17 @@ class WebBrowserActivity : AppCompatActivity() {
                     ).show()
                     return true
                 }
+                // Links tapped inside a page never go through loadUrl(), so
+                // this is where the allow-list actually contains browsing: a
+                // link out of ChatGPT or Claude to anywhere else stops here.
+                if (!AllowedSites.isAllowed(url)) {
+                    Toast.makeText(
+                        this@WebBrowserActivity,
+                        AllowedSites.BLOCKED_MESSAGE,
+                        Toast.LENGTH_LONG
+                    ).show()
+                    return true
+                }
                 return false
             }
 
@@ -220,7 +231,16 @@ class WebBrowserActivity : AppCompatActivity() {
         if (input.isBlank()) return
         hideKeyboard()
         binding.etAddress.clearFocus()
-        loadUrl(WebSessionManager.toUrlOrSearch(input))
+
+        // Free text would become a Google search, which the allow-list blocks.
+        // Saying so beats loadUrl() reporting that google.com is not allowed,
+        // which reads as a bug when the user typed a question, not a site.
+        val target = WebSessionManager.toUrlOrSearch(input)
+        if (!AllowedSites.isAllowed(target)) {
+            Toast.makeText(this, AllowedSites.BLOCKED_MESSAGE, Toast.LENGTH_LONG).show()
+            return
+        }
+        loadUrl(target)
     }
 
     /** Shows the friendly host while idle, the full URL while editing. */
@@ -244,9 +264,6 @@ class WebBrowserActivity : AppCompatActivity() {
 
         binding.btnCommand.setOnClickListener { toggleCommandBar() }
 
-        binding.chipGoogle.setOnClickListener { loadUrl("https://www.google.com") }
-        binding.chipYoutube.setOnClickListener { loadUrl("https://m.youtube.com") }
-        binding.chipGemini.setOnClickListener { loadUrl(AiService.GEMINI.homeUrl) }
         binding.chipClaude.setOnClickListener { loadUrl(AiService.CLAUDE.homeUrl) }
         binding.chipChatGpt.setOnClickListener { loadUrl(AiService.CHATGPT.homeUrl) }
 
@@ -350,7 +367,15 @@ class WebBrowserActivity : AppCompatActivity() {
         binding.btnForward.alpha = if (binding.webView.canGoForward()) 1f else 0.35f
     }
 
+    /**
+     * The single place this activity puts a URL into the WebView, so the
+     * allow-list has one gate to hold rather than one per caller.
+     */
     private fun loadUrl(url: String) {
+        if (!AllowedSites.isAllowed(url)) {
+            Toast.makeText(this, AllowedSites.BLOCKED_MESSAGE, Toast.LENGTH_LONG).show()
+            return
+        }
         binding.layoutStartScreen.visibility = View.GONE
         binding.webView.loadUrl(url)
     }

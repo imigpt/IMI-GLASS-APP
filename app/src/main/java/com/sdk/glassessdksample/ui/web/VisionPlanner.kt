@@ -48,7 +48,6 @@ class VisionPlanner(private val context: Context?) {
         {"action":"tap_at","x":<int>,"y":<int>,"label":"what you are tapping"}
         {"action":"scroll","amount":0.8}
         {"action":"open","url":"https://..."}
-        {"action":"search","query":"..."}
         {"action":"back"}
         {"action":"ask_user","question":"..."}
         {"action":"done","summary":"..."}
@@ -67,6 +66,8 @@ class VisionPlanner(private val context: Context?) {
           plainly — a person has to do that part.
         - If you cannot see what the goal needs, "scroll" to look further down
           before giving up.
+        - "open" can only reach https://chatgpt.com and https://claude.ai. Any
+          other URL is refused, and there is no web search.
 
         JSON only.
     """.trimIndent()
