@@ -342,7 +342,7 @@
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
                     android:layout_marginStart="14dp"
-                    android:text="Signed-in sites"
+                    android:text="What IMI knows about you"
                     android:textColor="#ADADAD"
                     android:textSize="16sp" />
 

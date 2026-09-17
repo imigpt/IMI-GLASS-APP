@@ -58,6 +58,21 @@ object WebSessionManager {
             userAgentString = if (desktopMode) DESKTOP_UA else userAgentString
         }
 
+        // Force the WebView to composite opaquely.
+        //
+        // The app theme's window background is a gradient WITH ALPHA, so the
+        // window is TRANSLUCENT. A WebView in a translucent window can end up
+        // composited as fully transparent — Chrome's own devtools reported the
+        // page as `empty:false, width:1080, height:1665, visible:false`: real
+        // content, correct size, never drawn. On a dark app background that is
+        // an entirely black rectangle, which reads as "the page didn't load"
+        // when in fact it loaded perfectly.
+        //
+        // setBackgroundColor on its own is not enough; the layer type must be
+        // hardware for the opaque path to be taken.
+        webView.setBackgroundColor(android.graphics.Color.WHITE)
+        webView.setLayerType(WebView.LAYER_TYPE_HARDWARE, null)
+
         // Third-party cookies are required by most SSO / login flows.
         CookieManager.getInstance().apply {
             setAcceptCookie(true)

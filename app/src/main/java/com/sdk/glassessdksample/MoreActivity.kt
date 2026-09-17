@@ -67,8 +67,11 @@ class MoreActivity : AppCompatActivity() {
         binding.cardCamera.setOnClickListener { open(CameraActivity::class.java) }
         binding.cardQuickNotes.setOnClickListener { open(QuickNotesActivity::class.java) }
         binding.cardWeb.setOnClickListener { open(WebBrowserActivity::class.java) }
+        // Was "Signed-in sites", which existed to keep the browser agent logged
+        // in. The profile import borrows an account for one question and signs
+        // out again, so standing sessions are no longer something to manage.
         binding.cardSignInSites.setOnClickListener {
-            open(com.sdk.glassessdksample.ui.web.SignInAccountsActivity::class.java)
+            open(com.sdk.glassessdksample.ui.profile.UserProfileActivity::class.java)
         }
         binding.cardMeetingMinutes.setOnClickListener { open(MeetingMinutesActivity::class.java) }
         binding.cardConversationHistory.setOnClickListener { open(ConversationHistoryActivity::class.java) }

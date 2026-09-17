@@ -220,6 +220,20 @@
             android:exported="false"
             android:label="User AI Summary" />
 
+        <!-- PROFILE - what IMI knows about the user, and where it came from -->
+        <activity
+            android:name=".ui.profile.UserProfileActivity"
+            android:exported="false"
+            android:label="What IMI knows about you" />
+
+        <!-- PROFILE IMPORT - ask the user's own AI what it knows about them -->
+        <activity
+            android:name=".ui.profile.ProfileImportActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:windowSoftInputMode="adjustResize"
+            android:label="Import your profile" />
+
         <!-- WEB - IN-APP BROWSER (command control arrives in a later module) -->
         <activity
             android:name=".ui.web.WebBrowserActivity"

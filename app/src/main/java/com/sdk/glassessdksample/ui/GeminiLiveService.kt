@@ -1881,6 +1881,23 @@ class GeminiLiveService(
     /**
      * Send session.update to configure the OpenAI Realtime session with tools
      */
+    /**
+     * What the user imported from their own AI, as a system-instruction block.
+     *
+     * Read fresh on every connect rather than cached, so importing a profile or
+     * deleting one takes effect on the next conversation instead of surviving
+     * until the process restarts. Empty string when nothing is imported, which
+     * leaves the instruction exactly as it was.
+     */
+    private fun userProfileBlock(): String = try {
+        com.sdk.glassessdksample.ui.profile.UserProfileStore(context)
+            .asSystemInstructionBlock()
+    } catch (e: Exception) {
+        // A profile that cannot be read must never stop the assistant starting.
+        Log.w(TAG, "Could not load user profile: ${e.message}")
+        ""
+    }
+
     private fun sendSetupMessage(webSocket: WebSocket, systemInstruction: String) {
         // Define tools/functions for OpenAI Realtime format
         val allTools = listOf(
@@ -2307,7 +2324,7 @@ For "where is my Uber", "has the driver arrived", "driver kahan hai", call uber_
 If any Uber tool says the account is not connected, tell the user you need to connect their Uber account and call uber_connect. It opens a sign-in page on their phone which they finish themselves - never ask for a password, an OTP or card details out loud. If a tool says Uber is not set up in this app, tell the user that plainly and do not call any more Uber tools.
 
 EMAIL - SENDING (always confirm first): When the user asks you to email or write to someone, call draft_email with your best guess at recipient, subject, and body from what they said. Then READ THE DRAFT BACK to the user out loud in your own next spoken turn (recipient, subject, and a short summary of the body) and ask "should I send it?". Do NOT call confirm_send_email in the same turn as draft_email. Only call confirm_send_email in a LATER turn, after the user has explicitly agreed (e.g. "yes", "send it", "go ahead"). If the user wants changes, call draft_email again with the corrected details and read it back again. If the user declines, do not send anything.
-$visionInstruction"""
+$visionInstruction${userProfileBlock()}"""
 
         if (activeProvider == ModelProvider.GPT_REALTIME) {
             // ====== OpenAI Realtime: session.update event ======

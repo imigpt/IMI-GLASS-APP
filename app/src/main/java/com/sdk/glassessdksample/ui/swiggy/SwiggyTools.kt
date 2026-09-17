@@ -229,6 +229,11 @@ object SwiggyTools {
             // to connect instead of announcing a failure.
             "Swiggy isn't connected yet. Tell the user you need to connect their " +
                 "Swiggy account, then call swiggy_connect."
+        } catch (e: SwiggyMcpClient.RateLimitedException) {
+            // Also an instruction: the order is still intact, so the model must
+            // not restart it — only wait and repeat the same step.
+            Log.w(TAG, "Rate limited on '$toolName': ${e.message}")
+            "${e.message} The order is still in progress — do not start it again."
         } catch (e: Exception) {
             Log.e(TAG, "Swiggy tool '$toolName' failed", e)
             "Swiggy couldn't do that: ${e.message ?: "something went wrong"}."

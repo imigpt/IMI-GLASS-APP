@@ -94,9 +94,9 @@ arbitrary — address first, because search itself needs it.
 
 | File | Lines | What it does |
 |---|---|---|
-| `SwiggyTools.kt` | 1024 | Tool declarations, the conversation, response parsing |
-| `SwiggyOrderSession.kt` | 520 | The half-built order; speech → intent resolution |
-| `SwiggyMcpClient.kt` | 383 | JSON-RPC/MCP transport, schema dumper |
+| `SwiggyTools.kt` | 1058 | Tool declarations, the conversation, response parsing |
+| `SwiggyOrderSession.kt` | 538 | The half-built order; speech → intent resolution |
+| `SwiggyMcpClient.kt` | 555 | JSON-RPC/MCP transport, retry, rate limits, schema dumper |
 | `SwiggyAuth.kt` | 356 | OAuth 2.1 + PKCE, loopback redirect, token refresh |
 | `SwiggyTokenStore.kt` | 59 | Token persistence |
 | `SwiggyDebugReceiver.kt` | 41 | Debug-only broadcast hook |
@@ -316,20 +316,48 @@ a display object, not a number, and `toString()` on it yields JSON.
 already-formatted `₹` string alone rather than prefixing a second symbol. Built
 but not yet re-tested on device.
 
-### Not built, and required for production
+### The go-live checklist
 
-Swiggy's go-live checklist asks for several things this does not yet do:
+Most of Swiggy's production checklist is now in `SwiggyMcpClient`. Built and
+compiling, but **only lightly exercised on device** — a clean-install run of the
+OAuth and Instamart order flow passed, which means nothing here broke the happy
+path. The retry and 429 branches have not been made to fire on purpose.
 
-- Retry with exponential backoff (500ms → 1s → 2s → 4s), capped at 30s
-- Check-then-retry on order placement (never blind retry — it would double-order)
-- Session id logged on every tool call
-- Latency and error-rate metrics (p50/p95/p99)
-- Hashing user ids at rest
-- Watching `_meta.swiggy.deprecation` for breaking changes
-- Gradual traffic ramp (1% → 10% → 50% → 100%)
+- **Retry with backoff** — 500ms → 1s → 2s → 4s against a 30s total budget
+  (`RETRY_DELAYS_MS`, `RETRY_BUDGET_MS`). Only network faults, 5xx and 429 are
+  retried; any other 4xx is a contract error that will fail the same way twice.
+- **429 handling** — was previously a generic "returned an error (429)" that
+  gave up. Now retried, and `Retry-After` is honoured when the server sends it.
+- **Rate limiting** — 70 req/min per server, 30/min for writes, checked
+  *before* the request goes out rather than discovered as a 429 mid-order.
+  Raises `RateLimitedException`, which the tool layer turns into an instruction
+  ("the order is still in progress — do not start it again") so the model waits
+  rather than restarting the order.
+- **Session id and latency logged** on every attempt — `adb logcat -s
+  SwiggyMetrics`. One line per attempt carrying server, tool, attempt number,
+  elapsed ms, session id and outcome; p50/p95/p99 are computed from these
+  rather than tracked in the app.
+- **Deprecation watching** — `_meta.swiggy.deprecation` is read off every
+  result and logged as a warning.
 
-Rate limits are **70 req/min per user per server**, 30/min for writes, with 2×
-burst over 10s. Nothing in the code tracks this yet.
+**Writes are never retried.** `checkout`, `place_food_order`, `book_table`,
+`update_cart`, `update_food_cart` and `create_cart` are listed in
+`NON_RETRYABLE_TOOLS`. A retry of a checkout whose *response* was merely lost
+would be a second real order, real money, with no cancel API to undo it — so a
+failed write tells the user to check the Swiggy app instead. This is the safe
+half of Swiggy's "check-then-retry, never blind retry" rule; the check half
+needs an order-status tool and is **not built**.
+
+On **hashing user ids at rest**: not done, deliberately. Nothing identifying the
+user is written to logs at all, which is a stronger position than hashing.
+
+### Still not built
+
+- **Check-then-retry on order placement** — needs an order-status lookup so a
+  lost response can be resolved without ordering twice. Until then, writes fail
+  closed (above).
+- **Gradual traffic ramp** (1% → 10% → 50% → 100%) — a release process, not
+  code.
 
 ---
 
@@ -400,3 +428,24 @@ needs no approval; production does.
 
 The redirect-URI problem in §4 should be raised **in the application**, not
 after approval.
+
+### Application status
+
+A demo video has been recorded against a clean install, so it shows the OAuth
+consent flow from scratch as well as an order. The form and the covering email
+to `builders@swiggy.in` are the remaining step.
+
+Four details the form asks for that are not facts about the code:
+
+- Organisation name
+- Expected volume (req/min peak, users at launch)
+- **Static / gateway IPs** — there are none. `SwiggyMcpClient` calls
+  `mcp.swiggy.com` directly from the handset, so every user's traffic arrives
+  from a different mobile-network address. The honest answer is "mobile
+  clients, no static egress IP". If Swiggy requires one, the calls have to move
+  behind our own backend, which is a real architecture change and not a config
+  toggle.
+- Security contact
+
+Proof of a working integration is order `248533084992381`, which Swiggy can
+verify on their side — worth citing rather than placing a fresh order.

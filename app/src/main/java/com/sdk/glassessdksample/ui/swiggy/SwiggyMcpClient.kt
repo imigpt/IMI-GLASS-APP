@@ -54,6 +54,43 @@ object SwiggyMcpClient {
 
     private val requestId = AtomicInteger(1)
 
+    /**
+     * Tools that spend money or mutate a cart. These are never retried.
+     *
+     * Swiggy has no cancel API, so a blind retry of a call that actually
+     * succeeded but whose response was lost is a second real order. Swiggy's own
+     * go-live guidance is check-then-retry for placement; until that check
+     * exists, a write that fails is reported to the user rather than repeated.
+     */
+    private val NON_RETRYABLE_TOOLS = setOf(
+        "checkout", "place_food_order", "book_table",
+        "update_cart", "update_food_cart", "create_cart"
+    )
+
+    /**
+     * Retry schedule for reads: 500ms, 1s, 2s, 4s, capped at 30s total.
+     *
+     * Only network faults, 5xx and 429 are retried. A 4xx other than 429 is a
+     * contract error and will fail identically on a second attempt.
+     */
+    private val RETRY_DELAYS_MS = longArrayOf(500, 1000, 2000, 4000)
+    private const val RETRY_BUDGET_MS = 30_000L
+
+    /**
+     * Swiggy's published limits: 70 req/min per user per server, 30/min for
+     * writes, with a 2x burst allowance over 10s.
+     *
+     * Tracked client-side so we throttle ourselves rather than discovering the
+     * limit as a 429 mid-order. Timestamps older than the window are dropped on
+     * each check, so this stays a fixed-size structure per server.
+     */
+    private const val RATE_WINDOW_MS = 60_000L
+    private const val READ_LIMIT_PER_MIN = 70
+    private const val WRITE_LIMIT_PER_MIN = 30
+
+    private val callTimes = mutableMapOf<Server, ArrayDeque<Long>>()
+    private val writeTimes = mutableMapOf<Server, ArrayDeque<Long>>()
+
     /** Session id per server, returned by initialize and echoed on later calls. */
     private val sessions = mutableMapOf<Server, String>()
 
@@ -62,6 +99,108 @@ object SwiggyMcpClient {
 
     /** Raised when the token is gone or rejected, so callers can prompt a reconnect. */
     class NotConnectedException(message: String) : Exception(message)
+
+    /** Raised when our own rate-limit budget is spent, before any request goes out. */
+    class RateLimitedException(message: String) : Exception(message)
+
+    /** Marks a failure worth retrying: network fault, 5xx, or 429. */
+    private class RetryableException(message: String, val retryAfterMs: Long = 0L) : Exception(message)
+
+    /**
+     * Records this call against the rate-limit window, or throws if the budget
+     * is spent.
+     *
+     * Checked before the request rather than after a 429, because a 429 during
+     * checkout is the one place we cannot safely retry.
+     */
+    private fun checkRateLimit(server: Server, isWrite: Boolean) {
+        val now = System.currentTimeMillis()
+        synchronized(callTimes) {
+            val all = callTimes.getOrPut(server) { ArrayDeque() }
+            val writes = writeTimes.getOrPut(server) { ArrayDeque() }
+            while (all.isNotEmpty() && now - all.first() > RATE_WINDOW_MS) all.removeFirst()
+            while (writes.isNotEmpty() && now - writes.first() > RATE_WINDOW_MS) writes.removeFirst()
+
+            if (all.size >= READ_LIMIT_PER_MIN) {
+                throw RateLimitedException(
+                    "Too many Swiggy requests just now. Ask the user to try again in a moment."
+                )
+            }
+            if (isWrite && writes.size >= WRITE_LIMIT_PER_MIN) {
+                throw RateLimitedException(
+                    "Too many Swiggy cart changes just now. Ask the user to try again in a moment."
+                )
+            }
+            all.addLast(now)
+            if (isWrite) writes.addLast(now)
+        }
+    }
+
+    /**
+     * Runs [block] with backoff, and logs latency and outcome for every attempt.
+     *
+     * [retryable] is false for writes: see [NON_RETRYABLE_TOOLS]. A non-retryable
+     * call still goes through here so that it gets the same timing and session-id
+     * logging as everything else.
+     */
+    private fun <T> withRetry(
+        server: Server,
+        label: String,
+        retryable: Boolean,
+        block: () -> T
+    ): T {
+        val startedAt = System.currentTimeMillis()
+        var attempt = 0
+        while (true) {
+            val attemptStart = System.currentTimeMillis()
+            try {
+                val result = block()
+                logCall(server, label, attemptStart, attempt, "ok")
+                return result
+            } catch (e: RetryableException) {
+                logCall(server, label, attemptStart, attempt, "retryable: ${e.message}")
+                val elapsed = System.currentTimeMillis() - startedAt
+                if (!retryable || attempt >= RETRY_DELAYS_MS.size || elapsed >= RETRY_BUDGET_MS) {
+                    throw Exception(
+                        if (retryable) "Swiggy ${server.label} is not responding. Tell the user to try again."
+                        else "Swiggy ${server.label} did not complete that. " +
+                            "Do NOT retry it — tell the user to check the Swiggy app."
+                    )
+                }
+                // Honour Retry-After when the server sends one, else back off.
+                val wait = maxOf(RETRY_DELAYS_MS[attempt], e.retryAfterMs)
+                    .coerceAtMost(RETRY_BUDGET_MS - elapsed)
+                if (wait <= 0) {
+                    throw Exception("Swiggy ${server.label} is not responding. Tell the user to try again.")
+                }
+                Thread.sleep(wait)
+                attempt++
+            } catch (e: Exception) {
+                logCall(server, label, attemptStart, attempt, "failed: ${e.message}")
+                throw e
+            }
+        }
+    }
+
+    /**
+     * One line per attempt, carrying the session id Swiggy asks us to log.
+     *
+     * Deliberately not the user id: nothing identifying the user is written to
+     * logs at all, which is a stronger position than hashing it.
+     */
+    private fun logCall(
+        server: Server,
+        label: String,
+        attemptStart: Long,
+        attempt: Int,
+        outcome: String
+    ) {
+        val ms = System.currentTimeMillis() - attemptStart
+        val sid = sessions[server] ?: "-"
+        Log.i(METRICS_TAG, "${server.slug} $label attempt=$attempt ms=$ms session=$sid $outcome")
+    }
+
+    private const val METRICS_TAG = "SwiggyMetrics"
 
     /**
      * Calls one tool and returns its result as text.
@@ -264,9 +403,25 @@ object SwiggyMcpClient {
             put("method", method)
             put("params", params)
         }
-        val bodyText = postRaw(context, server, token, payload)
+
+        // A tools/call is named by its tool; anything else is protocol traffic.
+        val toolName = params.optString("name").takeIf { it.isNotBlank() }
+        val isWrite = toolName != null && toolName in NON_RETRYABLE_TOOLS
+        val label = toolName ?: method
+
+        checkRateLimit(server, isWrite)
+
+        val bodyText = withRetry(server, label, retryable = !isWrite) {
+            postRaw(context, server, token, payload)
+        }
         val json = parseBody(bodyText)
             ?: throw Exception("Swiggy returned an unreadable response.")
+
+        // Swiggy publishes breaking changes on a 6-month window via _meta.
+        json.optJSONObject("result")?.optJSONObject("_meta")
+            ?.optJSONObject("swiggy")?.optString("deprecation")
+            ?.takeIf { it.isNotBlank() }
+            ?.let { Log.w(METRICS_TAG, "DEPRECATION ${server.slug} $label: $it") }
 
         json.optJSONObject("error")?.let { err ->
             val msg = err.optString("message", "unknown error")
@@ -292,7 +447,15 @@ object SwiggyMcpClient {
             .post(payload.toString().toRequestBody(JSON))
             .build()
 
-        client.newCall(req).execute().use { resp ->
+        val resp = try {
+            client.newCall(req).execute()
+        } catch (e: java.io.IOException) {
+            // Connection reset, DNS, timeout: the request may never have reached
+            // Swiggy, so this is safe to retry for reads.
+            throw RetryableException("network: ${e.message}")
+        }
+
+        resp.use {
             val body = resp.body?.string().orEmpty()
 
             if (resp.code == 401) {
@@ -304,6 +467,15 @@ object SwiggyMcpClient {
                     sessions.remove(server)
                 }
                 throw NotConnectedException("Swiggy sign-in has expired.")
+            }
+            if (resp.code == 429 || resp.code >= 500) {
+                // Rate limited or a server fault: transient by definition.
+                Log.w(TAG, "${server.slug} ${resp.code}: ${body.take(200)}")
+                val retryAfter = resp.header("Retry-After")
+                    ?.toLongOrNull()
+                    ?.times(1000L)
+                    ?: 0L
+                throw RetryableException("http ${resp.code}", retryAfter)
             }
             if (!resp.isSuccessful) {
                 Log.e(TAG, "${server.slug} ${resp.code}: ${body.take(300)}")
