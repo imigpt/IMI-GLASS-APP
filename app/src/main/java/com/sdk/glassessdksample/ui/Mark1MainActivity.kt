@@ -845,8 +845,10 @@ class Mark1MainActivity : AppCompatActivity(), GeminiLiveService.GeminiLiveCallb
         }
 
         sb.append("## Available Tools\n")
-        sb.append("You have access to these tools: create_note, capture_photo_note, start_meeting, ")
-        sb.append("play_music, play_youtube, make_phone_call, get_directions, get_weather, ")
+        // capture_photo_note was listed here but Mark 1 has no camera and no
+        // handler for it, so the model offered a photo it could never take.
+        sb.append("You have access to these tools: create_note, start_meeting, ")
+        sb.append("play_music, play_youtube, make_phone_call, open_maps, get_weather, ")
         sb.append("read_notifications, ")
         sb.append("mute_ai, ")
         sb.append("read_notifications, say_goodbye.\n\n")
@@ -1300,7 +1302,10 @@ class Mark1MainActivity : AppCompatActivity(), GeminiLiveService.GeminiLiveCallb
             "play_music" -> handlePlayMusic(args)
             "play_youtube" -> handlePlayYoutube(args)
             "make_phone_call" -> handlePhoneCall(args)
-            "get_directions" -> handleDirections(args)
+            // The tool schema declares this as "open_maps"; "get_directions" was
+            // the only name handled here, so every navigation request fell through
+            // to "not yet implemented" and nothing opened. Accept both.
+            "open_maps", "get_directions" -> handleDirections(args)
             "get_weather" -> handleWeather(args)
             "web_search" -> handleWebSearch(args)
             "define_word" -> handleDefineWord(args)
@@ -1325,6 +1330,15 @@ class Mark1MainActivity : AppCompatActivity(), GeminiLiveService.GeminiLiveCallb
             in com.sdk.glassessdksample.ui.uber.UberTools.TOOL_NAMES ->
                 com.sdk.glassessdksample.ui.uber.UberTools
                     .handle(this@Mark1MainActivity, toolName, args)
+            // 👁️ Camera tools are filtered out of Mark 1's schema, but if one is
+            // called anyway say what is actually true instead of the generic
+            // "not implemented" — which the model would paraphrase as a vague
+            // failure rather than telling the user this needs Mark 2.
+            "analyze_view", "capture_new_frame", "open_camera",
+            "take_photo", "record_video", "capture_photo_note" ->
+                "Mark 1 has no camera, so you cannot see or take photos. Tell the " +
+                    "user in one short line that this needs Mark 2 glasses, and do " +
+                    "not describe or guess at anything."
             else -> "Tool $toolName not yet implemented."
         }
     }
@@ -1404,7 +1418,12 @@ class Mark1MainActivity : AppCompatActivity(), GeminiLiveService.GeminiLiveCallb
     }
 
     private fun handlePlayMusic(args: Map<String, Any>): String {
-        val query = args["query"] as? String ?: args["song"] as? String ?: return "Please specify a song."
+        // Schema sends "song_or_artist"; accept the other spellings too.
+        val query = (args["song_or_artist"] as? String
+            ?: args["query"] as? String
+            ?: args["song"] as? String
+            ?: args["artist"] as? String)?.trim()?.takeIf { it.isNotEmpty() }
+            ?: return "Please specify a song."
         runOnUiThread {
             Toast.makeText(this, "Searching for: $query", Toast.LENGTH_SHORT).show()
         }
@@ -1501,62 +1520,216 @@ class Mark1MainActivity : AppCompatActivity(), GeminiLiveService.GeminiLiveCallb
     }
 
     private fun handlePlayYoutube(args: Map<String, Any>): String {
-        val query = args["query"] as? String ?: args["video"] as? String ?: return "Please specify a video."
+        // Schema sends "search_query"; accept the other spellings too. An empty
+        // arg is valid here and means a bare "open youtube".
+        val query = (args["search_query"] as? String
+            ?: args["query"] as? String
+            ?: args["video"] as? String
+            ?: "").trim()
+        val yt = "com.google.android.youtube"
+        // A bare "open youtube" carries no real search term; opening the app's home
+        // is what the user means, not a search for the word "trending".
+        val isBareOpen = query.isBlank() ||
+            query.trim().lowercase().removePrefix("open").trim()
+                .removePrefix("youtube").trim().length < 3
+
         runOnUiThread {
             try {
-                val searchUri = android.net.Uri.parse("https://www.youtube.com/results?search_query=${java.net.URLEncoder.encode(query, "UTF-8")}")
-                val intent = Intent(Intent.ACTION_VIEW, searchUri)
-                startActivity(intent)
+                if (isBareOpen) {
+                    val home = packageManager.getLaunchIntentForPackage(yt)
+                    if (home != null) {
+                        home.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        startActivity(home)
+                    } else {
+                        startActivity(
+                            Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://m.youtube.com/"))
+                                .apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+                        )
+                    }
+                    return@runOnUiThread
+                }
+
+                val encoded = java.net.URLEncoder.encode(query, "UTF-8")
+                try {
+                    // Prefer the app so playback lands in YouTube itself.
+                    startActivity(
+                        Intent(
+                            Intent.ACTION_VIEW,
+                            android.net.Uri.parse("vnd.youtube://results?search_query=$encoded")
+                        ).apply {
+                            setPackage(yt)
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                    )
+                } catch (e: Exception) {
+                    startActivity(
+                        Intent(
+                            Intent.ACTION_VIEW,
+                            android.net.Uri.parse("https://www.youtube.com/results?search_query=$encoded")
+                        ).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+                    )
+                }
             } catch (e: Exception) {
                 Toast.makeText(this, "Could not open YouTube", Toast.LENGTH_SHORT).show()
             }
         }
-        return "Opening YouTube for: $query"
+        return if (isBareOpen) "Opening YouTube." else "Opening YouTube for: $query"
     }
 
     private fun handlePhoneCall(args: Map<String, Any>): String {
-        val name = args["name"] as? String ?: return "Please specify who to call."
+        // The schema sends "contact_name"; only "name" was read here, so every
+        // call bailed out with "Please specify who to call" before ever reaching
+        // contacts. Accept every spelling the model might use.
+        val name = (args["contact_name"] as? String
+            ?: args["name"] as? String
+            ?: args["contact"] as? String
+            ?: args["number"] as? String)?.trim()?.takeIf { it.isNotEmpty() }
+            ?: return "Please specify who to call."
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) {
             return "Contacts permission required to make calls."
         }
-        var number: String? = null
-        val cursor = contentResolver.query(
-            android.provider.ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
-            arrayOf(android.provider.ContactsContract.CommonDataKinds.Phone.NUMBER),
-            "${android.provider.ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} LIKE ?",
-            arrayOf("%$name%"),
-            null
-        )
-        cursor?.use { if (it.moveToFirst()) number = it.getString(0) }
+
+        // Fuzzy match, same as Mark 2. The old `LIKE '%name%'` took whatever row
+        // came back first, so a mis-transcribed name found nothing at all while a
+        // short one ("Abhi") could land on an unrelated contact.
+        val match = findContactFuzzy(name)
+        val spokenDigits = name.filter { it.isDigit() || it == '+' }
+        val number = match?.second ?: spokenDigits.takeIf { d -> d.count { it.isDigit() } >= 7 }
+        val label = match?.first ?: number ?: name
 
         runOnUiThread {
             if (number != null) {
-                val uri = android.net.Uri.parse("tel:$number")
                 // ACTION_DIAL pre-fills the user's dialer; they tap call to
                 // connect. Needs no permission (CALL_PHONE was removed for
-                // Google Play policy compliance).
-                startActivity(Intent(Intent.ACTION_DIAL, uri))
+                // Google Play policy compliance). FLAG_ACTIVITY_NEW_TASK is
+                // required — without it the launch throws and nothing opens.
+                startActivity(
+                    Intent(Intent.ACTION_DIAL, android.net.Uri.parse("tel:$number"))
+                        .apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+                )
             } else {
-                startActivity(Intent(Intent.ACTION_DIAL))
+                startActivity(
+                    Intent(Intent.ACTION_DIAL)
+                        .apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+                )
                 Toast.makeText(this, "Contact '$name' not found", Toast.LENGTH_SHORT).show()
             }
         }
-        return if (number != null) "Opening the dialer for $name." else "Contact not found, opening dial pad."
+        return if (number != null) "Opening the dialer for $label." else "I couldn't find $name in your contacts."
+    }
+
+    /**
+     * Closest-matching contact for a spoken name, as display name to number.
+     * Mirrors Mark 2's matcher: exact hit wins, otherwise score every contact and
+     * take the best, rejecting anything below 0.5 as more likely wrong than right.
+     */
+    private fun findContactFuzzy(spokenRaw: String): Pair<String, String>? {
+        val spoken = spokenRaw.trim().lowercase()
+        if (spoken.isEmpty()) return null
+
+        val candidates = mutableListOf<Pair<String, String>>()
+        try {
+            contentResolver.query(
+                android.provider.ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+                arrayOf(
+                    android.provider.ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
+                    android.provider.ContactsContract.CommonDataKinds.Phone.NUMBER
+                ),
+                null, null, null
+            )?.use { c ->
+                while (c.moveToNext()) {
+                    val dn = c.getString(0) ?: continue
+                    val num = c.getString(1) ?: continue
+                    candidates.add(dn to num)
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Contact lookup failed: ${e.message}")
+            return null
+        }
+        if (candidates.isEmpty()) return null
+
+        candidates.firstOrNull { it.first.equals(spoken, ignoreCase = true) }?.let { return it }
+
+        val best = candidates.maxByOrNull { contactScore(spoken, it.first.lowercase()) } ?: return null
+        return if (contactScore(spoken, best.first.lowercase()) < 0.5) null else best
+    }
+
+    private fun contactScore(spoken: String, contactName: String): Double {
+        if (contactName.contains(spoken) || spoken.contains(contactName)) {
+            val ratio = minOf(spoken.length, contactName.length).toDouble() /
+                maxOf(spoken.length, contactName.length).toDouble()
+            return 0.85 + 0.15 * ratio
+        }
+        val parts = contactName.split(" ", "\t").filter { it.isNotBlank() } + listOf(contactName)
+        return parts.maxOf { part ->
+            val d = levenshtein(spoken, part)
+            val maxLen = maxOf(spoken.length, part.length)
+            if (maxLen == 0) 0.0 else 1.0 - (d.toDouble() / maxLen.toDouble())
+        }
+    }
+
+    private fun levenshtein(a: String, b: String): Int {
+        val dp = Array(a.length + 1) { IntArray(b.length + 1) }
+        for (i in 0..a.length) dp[i][0] = i
+        for (j in 0..b.length) dp[0][j] = j
+        for (i in 1..a.length) for (j in 1..b.length) {
+            dp[i][j] = if (a[i - 1] == b[j - 1]) dp[i - 1][j - 1]
+            else 1 + minOf(dp[i - 1][j - 1], dp[i - 1][j], dp[i][j - 1])
+        }
+        return dp[a.length][b.length]
     }
 
     private fun handleDirections(args: Map<String, Any>): String {
-        val destination = args["destination"] as? String ?: return "Please specify a destination."
+        val destination = (args["destination"] as? String
+            ?: args["location"] as? String
+            ?: args["place"] as? String
+            ?: args["query"] as? String)?.trim()?.takeIf { it.isNotEmpty() }
+            ?: return "Please specify a destination."
         val mode = (args["mode"] as? String ?: "").lowercase()
+        val encoded = java.net.URLEncoder.encode(destination, "UTF-8")
+
         runOnUiThread {
-            val uri = when {
-                "train" in mode -> android.net.Uri.parse("https://www.irctc.co.in")
-                "bus" in mode -> android.net.Uri.parse("https://www.redbus.in")
-                "flight" in mode || "plane" in mode ->
-                    android.net.Uri.parse("https://www.google.com/flights?q=flights+to+${java.net.URLEncoder.encode(destination, "UTF-8")}")
-                else ->
-                    android.net.Uri.parse("https://maps.google.com/maps?daddr=${java.net.URLEncoder.encode(destination, "UTF-8")}")
+            // Every launch needs FLAG_ACTIVITY_NEW_TASK: this runs from a tool
+            // callback, not a user tap, so without it startActivity throws and
+            // the user is told navigation opened while nothing happened.
+            fun open(uri: android.net.Uri, pkg: String? = null): Boolean = try {
+                startActivity(
+                    Intent(Intent.ACTION_VIEW, uri).apply {
+                        pkg?.let { setPackage(it) }
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                )
+                true
+            } catch (e: Exception) {
+                Log.w(TAG, "Directions launch failed for $uri: ${e.message}")
+                false
             }
-            startActivity(Intent(Intent.ACTION_VIEW, uri))
+
+            val opened = when {
+                "train" in mode -> open(android.net.Uri.parse("https://www.irctc.co.in"))
+                "bus" in mode -> open(android.net.Uri.parse("https://www.redbus.in"))
+                "flight" in mode || "plane" in mode ->
+                    open(android.net.Uri.parse("https://www.google.com/flights?q=flights+to+$encoded"))
+                else -> {
+                    val navMode = when {
+                        "walk" in mode -> "w"
+                        "transit" in mode || "public" in mode -> "r"
+                        else -> "d"
+                    }
+                    // Turn-by-turn in the Maps app first, then the Maps app via a
+                    // web URL, then any browser.
+                    open(android.net.Uri.parse("google.navigation:q=$encoded&mode=$navMode"),
+                        "com.google.android.apps.maps") ||
+                        open(android.net.Uri.parse("https://www.google.com/maps/dir/?api=1&destination=$encoded"),
+                            "com.google.android.apps.maps") ||
+                        open(android.net.Uri.parse("https://www.google.com/maps/dir/?api=1&destination=$encoded"))
+                }
+            }
+
+            if (!opened) {
+                Toast.makeText(this, "Could not open Maps", Toast.LENGTH_SHORT).show()
+            }
         }
         return "Opening directions to $destination."
     }

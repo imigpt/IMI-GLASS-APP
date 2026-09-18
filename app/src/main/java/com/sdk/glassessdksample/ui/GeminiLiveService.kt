@@ -67,7 +67,13 @@ class GeminiLiveService(
          * (MainActivity.handleGeminiToolCall → VisionChatActivity), so they are
          * filtered out of the declared tool list on Mark 1.
          */
-        private val VISION_TOOL_NAMES = setOf("analyze_view", "capture_new_frame")
+        // Every tool that needs the glasses camera. Mark 1 has no camera and no
+        // handler for any of these, so offering them only gets the model to call
+        // something that comes back "not yet implemented".
+        private val VISION_TOOL_NAMES = setOf(
+            "analyze_view", "capture_new_frame",
+            "open_camera", "take_photo", "record_video", "capture_photo_note"
+        )
 
         // SharedPreferences key for model selection
         const val PREF_NAME = "imi_model_prefs"
@@ -410,9 +416,33 @@ class GeminiLiveService(
     private val pendingSpeakLock = Any()
     private var pendingSpeakText: Pair<String, Boolean>? = null
 
+    // 🎤 Mic frames captured after the wake chime but BEFORE the server acked setup.
+    // These used to be dropped outright, so anything said in that window was lost and
+    // the user had to speak a second time to be heard. Hold them here and flush them
+    // the moment setup completes, so the very first utterance lands.
+    private val preSetupAudioLock = Any()
+    private val preSetupAudioFrames = ArrayDeque<ByteArray>()
+    private var preSetupAudioBytes = 0
+    // Ceiling on what we retain (~5s of 16kHz mono 16-bit ≈ 160KB). Past this the
+    // oldest frames are discarded: a backlog longer than the utterance itself would
+    // just replay stale room noise into the session.
+    private val preSetupAudioMaxBytes = 160_000
+
 
     // Echo cancellation and noise suppression
     private val isAIPlaying = AtomicBoolean(false) // Half-duplex flag: true when AI is speaking
+
+    /**
+     * Whether the user's voice may cut IMI off mid-reply (barge-in).
+     *
+     * Default OFF: while IMI is speaking it should only speak, not listen. The
+     * server-side VAD still fires speech_started on IMI's own voice bleeding back
+     * through the glasses mic, which truncated replies mid-sentence and looked
+     * like IMI randomly giving up on an answer. MainActivity had a flag for this
+     * but the service ignored it, so nothing actually honoured the setting.
+     */
+    @Volatile
+    var allowBargeIn: Boolean = false
     private var acousticEchoCanceler: AcousticEchoCanceler? = null
     private var noiseSuppressor: NoiseSuppressor? = null
     private var automaticGainControl: AutomaticGainControl? = null
@@ -766,12 +796,16 @@ class GeminiLiveService(
 
         scope.launch {
             try {
+                // A previous session may have left frames buffered (e.g. it ended
+                // before setup landed). Start clean so we never replay old audio.
+                clearPreSetupAudio()
+
                 // Initialize audio components
                 initializeAudioComponents()
-                
+
                 // Connect to WebSocket
                 connectWebSocket(apiKey, systemInstruction)
-                
+
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to start live conversation", e)
                 callbacks.onError("Failed to start: ${e.message}")
@@ -908,6 +942,60 @@ class GeminiLiveService(
      * vision result asked for on a dead session is still spoken on the new one
      * instead of being silently dropped.
      */
+    /**
+     * Streams the mic frames captured between the wake chime and setupComplete.
+     * Without this the user's first sentence was thrown away and they had to
+     * repeat themselves — the "IMI only answers the second time" bug.
+     */
+    private fun flushPreSetupAudio() {
+        val ws = webSocket ?: return
+        val frames: List<ByteArray>
+        synchronized(preSetupAudioLock) {
+            if (preSetupAudioFrames.isEmpty()) return
+            frames = preSetupAudioFrames.toList()
+            preSetupAudioFrames.clear()
+            preSetupAudioBytes = 0
+        }
+
+        Log.d(TAG, "🎤 Flushing ${frames.size} buffered pre-setup mic frames")
+        for (pcm in frames) {
+            val base64Data = Base64.encodeToString(pcm, Base64.NO_WRAP)
+            val json = if (activeProvider == ModelProvider.GPT_REALTIME) {
+                gson.toJson(
+                    mapOf(
+                        "type" to "input_audio_buffer.append",
+                        "audio" to base64Data
+                    )
+                )
+            } else {
+                gson.toJson(
+                    mapOf(
+                        "realtime_input" to mapOf(
+                            "media_chunks" to listOf(
+                                mapOf(
+                                    "data" to base64Data,
+                                    "mime_type" to "audio/pcm;rate=${inputSampleRate}"
+                                )
+                            )
+                        )
+                    )
+                )
+            }
+            if (!ws.send(json)) {
+                Log.w(TAG, "⚠️ Failed to flush a buffered mic frame")
+                break
+            }
+        }
+    }
+
+    /** Drops anything buffered before setup (session end / reconnect). */
+    private fun clearPreSetupAudio() {
+        synchronized(preSetupAudioLock) {
+            preSetupAudioFrames.clear()
+            preSetupAudioBytes = 0
+        }
+    }
+
     private fun flushPendingSpeakText() {
         val pending = synchronized(pendingSpeakLock) {
             val p = pendingSpeakText
@@ -2254,7 +2342,13 @@ When the user asks about anything in their surroundings - "what is in front of m
 Call the tool FIRST, before saying anything. Do not describe the scene from memory or guess.
 NEVER say you cannot see, that you have no camera, that you are only a voice assistant, or ask the user to send/describe a photo. That is wrong - you have a camera, so use it.
 If the user then asks about something NEW after already getting a description, call capture_new_frame to take a fresh photo rather than reusing the old one.
-""" else ""
+""" else """
+
+VISION - NOT AVAILABLE ON MARK 1: These are Mark 1 glasses, which have NO camera. You cannot see anything.
+When the user asks about their surroundings - "what is in front of me", "what's this", "what do you see", "who is in front of me", "describe this", "what am I looking at", "read this for me", "mere samne kya hai", "ye kya hai", "kya dikh raha hai", "dekho kya hai" - do NOT guess, do NOT describe anything, and do NOT ask them to send or describe a photo.
+Say exactly one short line telling them this needs Mark 2, for example "I can't see - that needs Mark 2 glasses, which have a camera." Say it in the user's own language. Then stop.
+Never invent or imagine a scene, and never claim you can see.
+"""
 
         // Enhanced system instruction
         val enhancedInstruction = """$systemInstruction
@@ -2458,9 +2552,23 @@ $visionInstruction${userProfileBlock()}"""
 
                         // Don't stream mic audio before the server has acknowledged
                         // setup - those frames are refused (1007) and take the
-                        // session down with them. Drop them; the user hasn't been
-                        // prompted to speak yet at this point anyway.
+                        // session down with them. They are NOT dropped, though:
+                        // the wake chime has already sounded, so the user is very
+                        // likely talking right now. Discarding this window is what
+                        // made the first utterance vanish and forced people to say
+                        // everything twice. Hold the frames and flush them from
+                        // flushPreSetupAudio() as soon as setup lands.
                         if (!isSetupComplete.get()) {
+                            val pending = shortArrayToByteArray(buffer, readSize)
+                            synchronized(preSetupAudioLock) {
+                                preSetupAudioFrames.addLast(pending)
+                                preSetupAudioBytes += pending.size
+                                while (preSetupAudioBytes > preSetupAudioMaxBytes &&
+                                    preSetupAudioFrames.isNotEmpty()
+                                ) {
+                                    preSetupAudioBytes -= preSetupAudioFrames.removeFirst().size
+                                }
+                            }
                             continue
                         }
 
@@ -2830,6 +2938,7 @@ $visionInstruction${userProfileBlock()}"""
                     autoReconnects = 0
                     if (!wasSetupComplete) {
                         callbacks.onConnectionStatusChanged(true)
+                        flushPreSetupAudio()
                         flushPendingSpeakText()
                     }
                     // Greet only once, on the initial session.created (session.updated
@@ -2840,8 +2949,13 @@ $visionInstruction${userProfileBlock()}"""
                 // Input audio buffer speech started (VAD detected speech)
                 "input_audio_buffer.speech_started" -> {
                     Log.d(TAG, "🎤 Speech detected - user is speaking")
-                    // Interrupt current AI response if playing
-                    if (isAIPlaying.get()) {
+                    // Interrupt current AI response if playing — only when barge-in
+                    // is explicitly allowed. Otherwise let IMI finish: the "speech"
+                    // detected here is very often IMI's own audio returning through
+                    // the glasses mic, and acting on it cut replies short.
+                    if (!allowBargeIn && isAIPlaying.get()) {
+                        Log.d(TAG, "🔇 Barge-in disabled - letting IMI finish speaking")
+                    } else if (isAIPlaying.get()) {
                         Log.d(TAG, "⚠️ User interrupted AI - clearing audio queue")
                         stopThinkingSound()
                         synchronized(audioQueueLock) {
@@ -3045,6 +3159,7 @@ $visionInstruction${userProfileBlock()}"""
                 // longer needed for this connection.
                 autoReconnects = 0
                 callbacks.onConnectionStatusChanged(true)
+                flushPreSetupAudio()
                 flushPendingSpeakText()
                 maybeSendGreeting()
                 return

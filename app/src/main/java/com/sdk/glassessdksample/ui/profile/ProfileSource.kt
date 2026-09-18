@@ -21,7 +21,11 @@ enum class ProfileSource(
     CHATGPT(
         displayName = "ChatGPT",
         signInUrl = "https://chatgpt.com/auth/login",
-        newChatUrl = "https://chatgpt.com/?temporary-chat=false",
+        // The plain root, not ?temporary-chat=false. A temporary chat is
+        // explicitly memory-less, so the query string risked landing on the one
+        // variant that can never answer this question — and the root already
+        // opens a fresh conversation.
+        newChatUrl = "https://chatgpt.com/",
         cookieDomain = "https://chatgpt.com",
         logoutUrl = "https://chatgpt.com/auth/logout"
     ),
@@ -44,30 +48,31 @@ enum class ProfileSource(
      * user to read and edit, and it becomes background text in another model's
      * system prompt. Both of those want readable sentences.
      *
-     * The explicit "say you don't have it" clause matters. Without it a model
-     * asked "what do you know about me" will cheerfully invent a plausible
-     * person, and an invented profile is worse than no profile — it would make
-     * the assistant confidently wrong about someone's life.
+     * Deliberately plain, and deliberately WITHOUT an escape clause.
+     *
+     * An earlier version stacked hedges — "based only on what you actually
+     * remember", "only where you genuinely know it", "do not guess or invent
+     * anything" — and offered NO_MEMORY_AVAILABLE as a way out. Asked that way,
+     * ChatGPT replied NO_MEMORY_AVAILABLE on an account that demonstrably had
+     * memory: the same account, asked the plain question "what do you know
+     * about me", answered with real details. The hedging primed it toward
+     * caution, and the escape hatch was the safest thing in reach.
+     *
+     * So this now asks the way a person would. The risk that motivated the
+     * hedges — a model inventing a plausible stranger — is handled after the
+     * fact instead: the user reads and edits the profile before it is saved,
+     * which catches invention far more reliably than an instruction can.
      */
     val extractionPrompt: String
         get() = """
-            Based only on what you actually remember about me from our previous
-            conversations and your saved memory, write a short profile of me for
-            another AI assistant that has never met me.
+            What do you know about me? Write it as a short profile I can give to
+            another AI assistant so it understands who I am.
 
-            Cover, only where you genuinely know it:
-            - who I am: work, role, where I live
-            - what I am currently working on or focused on
-            - how I prefer to be talked to: tone, length, language
-            - anything you have learned that would help an assistant help me
+            Include whatever you know about my work, what I'm building or focused
+            on, where I'm based, and how I like to be talked to.
 
-            Write it as plain prose in the third person, about 150-250 words, no
-            headings and no bullet points.
-
-            This is important: if you do not actually have memories of me — for
-            example if memory is turned off or we have not spoken before — do not
-            guess or invent anything. Reply with exactly this instead:
-            NO_MEMORY_AVAILABLE
+            Write it as plain prose in the third person, around 150-250 words.
+            No headings, no bullet points.
         """.trimIndent()
 
     companion object {

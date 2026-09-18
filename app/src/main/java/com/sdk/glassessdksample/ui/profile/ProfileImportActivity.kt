@@ -70,7 +70,33 @@ class ProfileImportActivity : AppCompatActivity() {
         binding.tvTitle.text = "Import from ${source.displayName}"
 
         WebSessionManager.configure(binding.webView, desktopMode = false)
-        binding.webView.webViewClient = WebViewClient()
+        // Report what the page is actually doing. A WebView that fails to load
+        // shows the same blank rectangle whatever the cause, so without this
+        // every failure looks identical from the screen and has to be
+        // diagnosed by attaching devtools.
+        binding.webView.webViewClient = object : WebViewClient() {
+            override fun onPageFinished(view: WebView?, url: String?) {
+                super.onPageFinished(view, url)
+                Log.d(TAG, "Page finished: $url")
+            }
+
+            override fun onReceivedError(
+                view: WebView?,
+                request: android.webkit.WebResourceRequest?,
+                error: android.webkit.WebResourceError?
+            ) {
+                super.onReceivedError(view, request, error)
+                if (request?.isForMainFrame == true) {
+                    val reason = error?.description ?: "unknown"
+                    Log.w(TAG, "Page load failed: ${request.url} -> $reason")
+                    runOnUiThread {
+                        binding.tvStatus.text =
+                            "Couldn't load ${source.displayName}: $reason. " +
+                                "Check your connection and try again."
+                    }
+                }
+            }
+        }
 
         // "Continue with Google" opens its flow in a JS popup (window.open),
         // not a normal navigation. Without an onCreateWindow handler the
@@ -146,9 +172,13 @@ class ProfileImportActivity : AppCompatActivity() {
 
     private fun showSignIn() {
         stage = Stage.SIGN_IN
-        binding.tvStatus.text =
+        binding.tvStatus.text = if (ProfileImporter.SKIP_SIGN_OUT) {
+            "Sign in to ${source.displayName}. IMI will then ask it what it " +
+                "remembers about you and show you the answer."
+        } else {
             "Sign in to ${source.displayName}. IMI will then ask it what it " +
                 "remembers about you, show you the answer, and sign you back out."
+        }
         binding.webView.visibility = View.VISIBLE
         binding.reviewScroll.visibility = View.GONE
         binding.progress.visibility = View.GONE
@@ -263,11 +293,17 @@ class ProfileImportActivity : AppCompatActivity() {
         binding.progress.visibility = View.VISIBLE
         binding.btnPrimary.visibility = View.GONE
         binding.btnCancel.visibility = View.GONE
-        binding.tvStatus.text = "Signing you out of ${source.displayName}…"
+        // Wording follows what actually happens: with sign-out disabled for
+        // debugging, claiming "Signed out." would be a promise the code is not
+        // currently keeping.
+        binding.tvStatus.text = if (ProfileImporter.SKIP_SIGN_OUT) {
+            "Finishing…"
+        } else {
+            "Signing you out of ${source.displayName}…"
+        }
 
         lifecycleScope.launch {
             importer.signOut(binding.webView, source)
-            binding.tvStatus.text = "Signed out."
             finish()
         }
     }

@@ -66,21 +66,28 @@ class SplashActivity : AppCompatActivity() {
                         Intent(this, OnboardingActivity::class.java)
                     }
                     else -> {
-                        // Always show device selection so user can switch models
-                        Intent(this, DeviceSelectionActivity::class.java)
+                        // Go straight to the device the user last chose. The
+                        // selector is a first-run step, not something to sit
+                        // through on every launch — switching models afterwards
+                        // lives in Profile → Switch Device.
+                        when (DevicePreferenceManager.getDeviceType(this)) {
+                            DeviceType.MARK1 -> Intent(this, Mark1MainActivity::class.java)
+                            DeviceType.MARK2 -> Intent(this, com.sdk.glassessdksample.MainActivity::class.java)
+                            // Nothing chosen yet: first run, so ask.
+                            null -> Intent(this, DeviceSelectionActivity::class.java)
+                        }
                     }
                 }
-                // Clear any restored task (e.g. a Mark 2 MainActivity left over from a
-                // previous run) so launching the app ALWAYS lands on the select-device
-                // screen instead of resuming the last-used device's home screen.
+                // Splash is the task root here, so clear it out from under the
+                // destination rather than leaving Splash on the back stack for
+                // Back to return to.
                 intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
                 startActivity(intent)
                 finish()
             } catch (e: Exception) {
                 e.printStackTrace()
-                // Fall back to device selection — NEVER to a device home screen.
-                // (This previously fell back to Mark 2's MainActivity, which meant any
-                // stray exception here silently skipped the select-device screen.)
+                // Something went wrong working out where to go; the selector is the
+                // one screen that is always safe to show and lets the user proceed.
                 val fallbackIntent = Intent(this, DeviceSelectionActivity::class.java).apply {
                     flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
                 }

@@ -124,21 +124,23 @@ class UserProfileActivity : AppCompatActivity() {
     private fun render() {
         binding.listSites.removeAllViews()
 
-        val profile = store.load()
+        val profiles = store.loadAll()
         binding.listSites.addView(headerText(
-            if (profile == null) {
+            if (profiles.isEmpty()) {
                 "IMI doesn't know anything about you yet. Import your profile from " +
                     "ChatGPT or Claude and it can skip the questions you've already " +
                     "answered there."
             } else {
-                "This is what IMI knows about you. It's stored only on this phone."
+                "This is what IMI knows about you. It's stored only on this phone. " +
+                    "You can import from both — IMI uses everything it has."
             }
         ))
 
-        if (profile != null) binding.listSites.addView(profileCard(profile))
+        // One card per source, so importing a second does not hide the first.
+        profiles.forEach { binding.listSites.addView(profileCard(it)) }
 
         ProfileSource.entries.forEach { source ->
-            binding.listSites.addView(sourceRow(source, profile))
+            binding.listSites.addView(sourceRow(source, profiles))
         }
     }
 
@@ -178,20 +180,25 @@ class UserProfileActivity : AppCompatActivity() {
         })
 
         card.addView(TextView(this).apply {
-            text = "Delete what IMI knows"
+            // Names the source: with two profiles on screen, an unqualified
+            // "delete" gives no clue which one it would remove.
+            text = "Delete the ${profile.source.displayName} import"
             setTextColor(Color.parseColor("#FF6B6B"))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
             setPadding(0, dp(12), 0, 0)
             isClickable = true
             isFocusable = true
-            setOnClickListener { confirmDelete() }
+            setOnClickListener { confirmDelete(profile.source) }
         })
 
         return card
     }
 
-    private fun sourceRow(source: ProfileSource, current: UserProfileStore.Profile?): View {
-        val isCurrent = current?.source == source
+    private fun sourceRow(
+        source: ProfileSource,
+        profiles: List<UserProfileStore.Profile>
+    ): View {
+        val alreadyImported = profiles.any { it.source == source }
 
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -220,9 +227,14 @@ class UserProfileActivity : AppCompatActivity() {
         })
 
         column.addView(TextView(this).apply {
-            // States the whole bargain in one line, because this is the moment
-            // the user decides whether to hand over access at all.
-            text = "Sign in, import, sign out — IMI never keeps your login"
+            // States the bargain in one line, because this is the moment the
+            // user decides whether to hand over access at all. Follows the
+            // sign-out flag so it cannot promise something the build skips.
+            text = if (ProfileImporter.SKIP_SIGN_OUT) {
+                if (alreadyImported) "Imported — tap to update" else "Sign in and import"
+            } else {
+                "Sign in, import, sign out — IMI never keeps your login"
+            }
             setTextColor(Color.parseColor("#ADADAD"))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
             setPadding(0, dp(2), 0, 0)
@@ -231,7 +243,7 @@ class UserProfileActivity : AppCompatActivity() {
         row.addView(column)
 
         row.addView(TextView(this).apply {
-            text = if (isCurrent) "Refresh" else "Import"
+            text = if (alreadyImported) "Refresh" else "Import"
             setTextColor(Color.parseColor("#FF7F2E"))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
             setPadding(dp(10), dp(6), dp(10), dp(6))
@@ -246,15 +258,16 @@ class UserProfileActivity : AppCompatActivity() {
         startActivity(ProfileImportActivity.intent(this, source))
     }
 
-    private fun confirmDelete() {
+    private fun confirmDelete(source: ProfileSource) {
         AlertDialog.Builder(this)
-            .setTitle("Delete your profile?")
+            .setTitle("Delete the ${source.displayName} import?")
             .setMessage(
-                "IMI will forget everything it learned about you. You can import " +
-                    "it again at any time."
+                "IMI will forget what it learned from ${source.displayName}. " +
+                    "Anything imported from elsewhere is kept. You can import " +
+                    "again at any time."
             )
             .setPositiveButton("Delete") { _, _ ->
-                store.clear()
+                store.clear(source)
                 render()
             }
             .setNegativeButton("Keep", null)

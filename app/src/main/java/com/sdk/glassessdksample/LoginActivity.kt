@@ -56,8 +56,17 @@ class LoginActivity : AppCompatActivity() {
     }
 
     private fun goToNextScreen() {
-        // Onboarding screen hidden: go straight to device selection.
-        val intent = Intent(this, com.sdk.glassessdksample.ui.DeviceSelectionActivity::class.java)
+        // Onboarding screen hidden. A returning user already has a device saved,
+        // so send them to it rather than making them pick again; only a first-time
+        // login (nothing saved) sees the selector.
+        val target = when (com.sdk.glassessdksample.ui.DevicePreferenceManager.getDeviceType(this)) {
+            com.sdk.glassessdksample.ui.DeviceType.MARK1 ->
+                com.sdk.glassessdksample.ui.Mark1MainActivity::class.java
+            com.sdk.glassessdksample.ui.DeviceType.MARK2 ->
+                MainActivity::class.java
+            null -> com.sdk.glassessdksample.ui.DeviceSelectionActivity::class.java
+        }
+        val intent = Intent(this, target)
         intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
         startActivity(intent)
         finish()

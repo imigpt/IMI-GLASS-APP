@@ -70,6 +70,11 @@
         android:usesPermissionFlags="neverForLocation"
         tools:targetApi="s" />
 
+    <!--
+        Package visibility (API 30+). Anything we query with getPackageInfo /
+        getLaunchIntentForPackage, or launch with an implicit intent, must be
+        declared here or it is invisible to us and the launch silently fails.
+    -->
     <queries>
         <intent>
             <action android:name="android.speech.RecognitionService" />
@@ -77,6 +82,40 @@
         <package android:name="com.spotify.music" />
         <intent>
             <action android:name="android.media.action.MEDIA_PLAY_FROM_SEARCH" />
+        </intent>
+
+        <!-- CALLING: the dialer we hand tel: numbers to -->
+        <intent>
+            <action android:name="android.intent.action.DIAL" />
+            <data android:scheme="tel" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.DIAL" />
+        </intent>
+
+        <!-- YOUTUBE: app package + its vnd.youtube deep links -->
+        <package android:name="com.google.android.youtube" />
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="vnd.youtube" />
+        </intent>
+
+        <!-- MAPS: navigation is launched with setPackage(), so the package must
+             be visible or startActivity throws and nothing opens. -->
+        <package android:name="com.google.android.apps.maps" />
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="google.navigation" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="geo" />
+        </intent>
+
+        <!-- Browser fallback for http/https launches (YouTube web, maps, etc.) -->
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="https" />
         </intent>
     </queries>
 
@@ -92,11 +131,17 @@
         tools:targetApi="31">
 
         <!-- SPLASH SCREEN -->
+        <!--
+            clearTaskOnLaunch was set here, which tore down the running task every
+            time the user returned to the app from the launcher: Mark 1's home
+            screen was destroyed and Splash ran again. Returning to a minimised app
+            must resume it where it was, so the flag is gone. A genuinely cold
+            start still goes through Splash normally.
+        -->
         <activity
             android:name=".ui.SplashActivity"
             android:exported="true"
             android:launchMode="singleTask"
-            android:clearTaskOnLaunch="true"
             android:theme="@style/Theme.App.Starting">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

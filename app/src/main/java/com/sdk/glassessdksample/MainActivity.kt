@@ -3457,6 +3457,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         if (lowerCmd.contains("enable interrupt") || lowerCmd.contains("interrupt on") || 
             lowerCmd.contains("interrupt mode enable")) {
             isInterruptEnabled = true
+            geminiLiveService?.allowBargeIn = true
             Toast.makeText(this, "Interrupt Mode: ON", Toast.LENGTH_SHORT).show()
             return
         }
@@ -3464,6 +3465,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         if (lowerCmd.contains("disable interrupt") || lowerCmd.contains("interrupt off") || 
             lowerCmd.contains("interrupt mode disable")) {
             isInterruptEnabled = false
+            geminiLiveService?.allowBargeIn = false
             Toast.makeText(this, "Interrupt Mode: OFF", Toast.LENGTH_SHORT).show()
             return
         }
@@ -3586,19 +3588,21 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             return
         }
         
-        // YouTube commands
-        if (lowerCmd.contains("youtube") || lowerCmd.contains("video")) {
-            playYouTube(command)
-            return
-        }
-
-        // Call commands - support multiple patterns
+        // Call commands - support multiple patterns.
+        // Must be checked BEFORE the YouTube branch: that branch matches the bare
+        // word "video", which swallows "video call <name>" and opens YouTube instead.
         if (lowerCmd.contains("call") || lowerCmd.contains("phone") ||
             lowerCmd.contains("dial") || lowerCmd.contains("ring") ||
             // Hindi patterns
             lowerCmd.contains("call karo") || lowerCmd.contains("phone karo") ||
             lowerCmd.contains("ko call") || lowerCmd.contains("ko phone")) {
             callSomeone(command)
+            return
+        }
+
+        // YouTube commands
+        if (lowerCmd.contains("youtube") || lowerCmd.contains("video")) {
+            playYouTube(command)
             return
         }
         
@@ -3775,6 +3779,30 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         }, 500)
     }
     
+    /**
+     * Opens YouTube search results: tries the app's vnd.youtube deep link first,
+     * falling back to the web results page if the app is absent or the deep link
+     * has no handler. Always leaves the user somewhere, never a silent no-op.
+     */
+    private fun openYouTubeSearch(query: String) {
+        val encoded = Uri.encode(query)
+        try {
+            val appIntent = Intent(Intent.ACTION_VIEW,
+                Uri.parse("vnd.youtube://results?search_query=$encoded")).apply {
+                setPackage("com.google.android.youtube")
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            startActivity(appIntent)
+        } catch (e: Exception) {
+            Log.w(TAG, "YouTube app search failed, using web: ${e.message}")
+            val webIntent = Intent(Intent.ACTION_VIEW,
+                Uri.parse("https://www.youtube.com/results?search_query=$encoded")).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            startActivity(webIntent)
+        }
+    }
+
     private fun actuallyPlayYouTube(videoName: String) {
         try {
             val youtubePackage = "com.google.android.youtube"
@@ -3812,12 +3840,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                             } else {
                                 // API failed, fallback to search results
                                 Log.w(TAG, "No video found, showing search results")
-                                val searchIntent = Intent(Intent.ACTION_VIEW, 
-                                    Uri.parse("vnd.youtube://results?search_query=${Uri.encode(videoName)}")).apply {
-                                    setPackage(youtubePackage)
-                                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                                }
-                                startActivity(searchIntent)
+                                openYouTubeSearch(videoName)
                                 speakOut("Showing results for $videoName", "ACTION")
                                 opened = true
                             }
@@ -3826,12 +3849,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                         Log.e(TAG, "YouTube search error: ${e.message}")
                         withContext(Dispatchers.Main) {
                             // Fallback to search results page
-                            val searchIntent = Intent(Intent.ACTION_VIEW, 
-                                Uri.parse("vnd.youtube://results?search_query=${Uri.encode(videoName)}")).apply {
-                                setPackage(youtubePackage)
-                                flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                            }
-                            startActivity(searchIntent)
+                            openYouTubeSearch(videoName)
                             speakOut("Searching $videoName", "ACTION")
                             opened = true
                         }
@@ -3840,18 +3858,28 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 return // Exit function, coroutine handles the rest
             }
             
-            // PRIORITY 2: YouTube home for trending
-            if (!opened && videoName == "trending" && isPackageInstalled(youtubePackage)) {
+            // PRIORITY 2: YouTube home — no search term, just open the app
+            if (!opened && videoName == "trending") {
                 val homeIntent = packageManager.getLaunchIntentForPackage(youtubePackage)
-                homeIntent?.flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                startActivity(homeIntent)
-                speakOut("Opening YouTube", "ACTION")
-                opened = true
+                if (homeIntent != null) {
+                    homeIntent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                    startActivity(homeIntent)
+                    speakOut("Opening YouTube", "ACTION")
+                    opened = true
+                } else {
+                    // App not there — open the YouTube site, not a search for "trending"
+                    val webIntent = Intent(Intent.ACTION_VIEW,
+                        Uri.parse("https://m.youtube.com/"))
+                    webIntent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                    startActivity(webIntent)
+                    speakOut("Opening YouTube", "ACTION")
+                    opened = true
+                }
             }
-            
+
             // FALLBACK: Web YouTube in browser (will show search results)
             if (!opened) {
-                val webIntent = Intent(Intent.ACTION_VIEW, 
+                val webIntent = Intent(Intent.ACTION_VIEW,
                     Uri.parse("https://www.youtube.com/results?search_query=${Uri.encode(videoName)}"))
                 webIntent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
                 startActivity(webIntent)
@@ -3913,24 +3941,31 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         val lowerCmd = command.lowercase()
         var cleanName = command
         
-        // Remove common call-related words to extract the name
+        // Remove common call-related words to extract the name.
+        // Longest patterns first, so "call karo" is consumed before the bare "call",
+        // and match whole words only — a bare "call"/"ring" substring would otherwise
+        // eat part of a contact's name (e.g. "Ringo", "Callum").
         val patterns = listOf(
-            "call ", "phone ", "dial ", "ring ",
-            "call karo ", "phone karo ", "ko call ", "ko phone ",
-            "कॉल करो ", "फोन करो "
+            "call karo", "phone karo", "ko call", "ko phone",
+            "कॉल करो", "फोन करो",
+            "call", "phone", "dial", "ring"
         )
-        
+
         for (pattern in patterns) {
-            cleanName = cleanName.replace(pattern, "", ignoreCase = true)
+            cleanName = cleanName.replace(
+                Regex("(?<![\\p{L}])${Regex.escape(pattern)}(?![\\p{L}])", RegexOption.IGNORE_CASE),
+                " "
+            )
         }
-        
+
         // Further cleanup
-        cleanName = cleanName.trim()
-            .replace(" please", "", ignoreCase = true)
-            .replace(" now", "", ignoreCase = true)
-            .replace("karo", "", ignoreCase = true)
+        cleanName = cleanName
+            .replace(Regex("\\b(please|now|karo|ko|to|kar|do|video|audio)\\b", RegexOption.IGNORE_CASE), " ")
+            .replace(Regex("\\s+"), " ")
             .trim()
         
+        Log.d(TAG, "📞 callSomeone: raw='$command' extracted='$cleanName'")
+
         if (cleanName.isBlank() || cleanName.length < 2) {
             speakOut("Who do you want to call?", "QUERY")
             isInConversationMode = true
@@ -3969,12 +4004,20 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 speakOut("Calling $contactName", "ACTION")
                 makePhoneCall(phoneNumber, contactName)
             } else {
-                speakOut("I couldn't find $contactName in your contacts. Should I dial the number anyway?", "ERROR")
-                // Fallback to dialer with the spoken name
-                val intent = Intent(Intent.ACTION_DIAL).apply {
-                    data = Uri.parse("tel:")
+                // The spoken "name" may itself be a number ("call nine eight seven...").
+                val spokenDigits = contactName.filter { it.isDigit() || it == '+' }
+                if (spokenDigits.count { it.isDigit() } >= 7) {
+                    speakOut("Dialling $spokenDigits", "ACTION")
+                    makePhoneCall(spokenDigits, spokenDigits)
+                } else {
+                    speakOut("I couldn't find $contactName in your contacts", "ERROR")
+                    Log.w(TAG, "📞 No contact match for '$contactName' — opening empty dialer")
+                    val intent = Intent(Intent.ACTION_DIAL).apply {
+                        data = Uri.parse("tel:")
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                    }
+                    startActivity(intent)
                 }
-                startActivity(intent)
             }
         } catch (e: Exception) {
             speakOut("Failed to make call: ${e.message}", "ERROR")
@@ -5575,6 +5618,10 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         // Interrupt Mode Switch - Enable/Disable AI interruption when user speaks
         binding.switchInterruptMode.setOnCheckedChangeListener { _, isChecked ->
             isInterruptEnabled = isChecked
+            // The live session does its own barge-in handling, which used to ignore
+            // this switch entirely — turning it off stopped the local TTS path but
+            // Gemini still cut itself off. Keep the two in step.
+            geminiLiveService?.allowBargeIn = isChecked
             val status = if (isChecked) "ON - AI stops when you speak" else "OFF - AI finishes speaking"
             Toast.makeText(this, "Interrupt Mode: $status", Toast.LENGTH_SHORT).show()
             Log.d(TAG, "🎙️ Interrupt Mode: ${if (isChecked) "ENABLED" else "DISABLED"}")

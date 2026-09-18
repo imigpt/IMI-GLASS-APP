@@ -35,8 +35,18 @@ object WebSessionManager {
             domStorageEnabled = true
             databaseEnabled = true
 
-            loadWithOverviewMode = true
+            // useWideViewPort must stay ON. It makes the WebView honour the
+            // page's own <meta name="viewport">, which is how a responsive site
+            // lays out at the real screen width. Turning it off does NOT give a
+            // wider layout — the WebView falls back to a fixed ~360px CSS
+            // viewport, so the page renders cramped and, on ChatGPT, never
+            // finished loading at all.
+            //
+            // loadWithOverviewMode is the one that zooms out to fit, so that is
+            // the setting to leave off for mobile: the page then lays out at
+            // phone width and fills the view at 1:1 instead of being shrunk.
             useWideViewPort = true
+            loadWithOverviewMode = desktopMode
             builtInZoomControls = true
             displayZoomControls = false
 

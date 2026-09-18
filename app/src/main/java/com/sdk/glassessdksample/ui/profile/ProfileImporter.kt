@@ -59,19 +59,31 @@ class ProfileImporter(private val context: Context) {
 
             if (isSignedOut(webView)) return Result.NotSignedIn
 
+            // Both sites interrupt a fresh session with announcements and
+            // consent dialogs — ChatGPT's "More relevant, personalized replies"
+            // modal is one, and it sits in front of the composer. Typing then
+            // goes nowhere and the reply that comes back is the dialog's own
+            // text, so these have to be cleared before anything else.
+            dismissDialogs(webView)
+
             onProgress("Asking ${source.displayName} what it knows about you…")
             // The composer mounts after the rest of the page on both sites, so
             // looking once and giving up reports "the site may have changed"
             // for a box that simply had not appeared yet.
             if (!awaitComposer(webView)) {
+                // Log what IS on the page. "The site may have changed" told
+                // nobody anything, and diagnosing this from the phone screen
+                // alone meant guessing at selectors.
+                Log.w(TAG, "No composer found. Page state: ${describePage(webView)}")
                 return Result.Failed(
                     "Couldn't find the message box on ${source.displayName}. " +
                         "The site may have changed."
                 )
             }
             if (!sendPrompt(webView, source.extractionPrompt)) {
+                Log.w(TAG, "Typing failed. Page state: ${describePage(webView)}")
                 return Result.Failed(
-                    "Couldn't find the message box on ${source.displayName}. " +
+                    "Couldn't type into ${source.displayName}. " +
                         "The site may have changed."
                 )
             }
@@ -81,8 +93,34 @@ class ProfileImporter(private val context: Context) {
                 "${source.displayName} didn't reply in time."
             )
 
-            if (reply.contains(ProfileSource.NO_MEMORY_MARKER)) Result.NoMemory
-            else Result.Success(reply)
+            // Exact match: extractAnswer returns the bare marker and nothing
+            // else when the assistant genuinely had no memories, so a looser
+            // check here would misread a profile that merely mentions it.
+            if (reply.trim() == ProfileSource.NO_MEMORY_MARKER) {
+                Result.NoMemory
+            } else if (reply.trim().length < MIN_PROFILE_CHARS) {
+                // A handful of characters is not a profile. This caught a run
+                // that returned just "ChatGPT said:" — the page chrome — after
+                // a modal dialog blocked the composer, and presented it to the
+                // user as a successful import with an empty box to approve.
+                // Log the tail of the PAGE, not just the empty result: an empty
+                // reply means extraction cut in the wrong place, and the only
+                // way to see where is to see what it was cutting.
+                val page = withContext(Dispatchers.Main) {
+                    PageContentExtractor.extract(webView)
+                }.text
+                Log.w(
+                    TAG,
+                    "Reply too short (${reply.trim().length} chars). " +
+                        "Page tail: ${page.takeLast(400)}"
+                )
+                Result.Failed(
+                    "${source.displayName} didn't give a usable answer. " +
+                        "Please try again."
+                )
+            } else {
+                Result.Success(reply)
+            }
         } catch (e: Exception) {
             Log.w(TAG, "Import failed", e)
             Result.Failed("Something went wrong: ${e.message}")
@@ -102,6 +140,19 @@ class ProfileImporter(private val context: Context) {
      * request never lands.
      */
     suspend fun signOut(webView: WebView, source: ProfileSource) {
+        // TEMPORARILY DISABLED while the import is being debugged.
+        //
+        // Signing in and out of the same account repeatedly from one IP is
+        // exactly the pattern anti-bot systems flag, and both sites began
+        // returning 403 to this device after an afternoon of test runs. Keeping
+        // the session across attempts means one sign-in instead of twenty.
+        //
+        // This MUST go back before release: the screen promises the account is
+        // borrowed for one question, not held, and right now it is held.
+        if (SKIP_SIGN_OUT) {
+            Log.w(TAG, "Sign-out skipped (debug flag) — session left signed in")
+            return
+        }
         try {
             load(webView, source.logoutUrl, timeoutMs = LOGOUT_TIMEOUT_MS)
             delay(LOGOUT_GRACE_MS)
@@ -200,25 +251,113 @@ class ProfileImporter(private val context: Context) {
      */
     private val composerFinder = """
         function findComposer() {
+          // Deliberately NOT scoped to div: ChatGPT's editable node is a <p>
+          // inside the editor and Claude's is a ProseMirror div, so
+          // 'div[contenteditable]' missed the real target on both.
           var nodes = document.querySelectorAll(
-            'textarea, div[contenteditable], [role="textbox"]');
-          var best = null, bestArea = 0;
+            'textarea, [contenteditable="true"], [contenteditable=""], ' +
+            '[role="textbox"], .ProseMirror, #prompt-textarea');
+          var best = null, bestArea = -1;
           for (var i = 0; i < nodes.length; i++) {
             var el = nodes[i];
             if (el.disabled || el.readOnly) continue;
-            if (el.tagName !== 'TEXTAREA' &&
-                el.getAttribute('contenteditable') === 'false') continue;
-            var r = el.getBoundingClientRect();
-            if (r.width < 80 || r.height < 20) continue;
+            if (el.getAttribute('contenteditable') === 'false') continue;
             var st = window.getComputedStyle(el);
-            if (st.display === 'none' || st.visibility === 'hidden' ||
-                parseFloat(st.opacity) < 0.1) continue;
+            if (st.display === 'none' || st.visibility === 'hidden') continue;
+            var r = el.getBoundingClientRect();
             var area = r.width * r.height;
-            if (area > bestArea) { bestArea = area; best = el; }
+            // STRICTLY greater, and a real element must beat a zero-area one.
+            //
+            // ChatGPT ships a 0x0 `fallbackTextarea` that appears BEFORE the
+            // real composer in document order. With a >= comparison, or with
+            // bestArea starting below zero, that decoy won: typing went into an
+            // invisible textarea, the read-back was empty, and the import
+            // reported the message box missing — on a page where the composer
+            // was present, visible and already holding the text.
+            if (area > bestArea && (area > 0 || bestArea < 0)) {
+              bestArea = area; best = el;
+            }
+          }
+          // Prefer a contenteditable editor over a zero-area textarea even if
+          // the textarea somehow ranked first: the editor is what the site
+          // actually submits.
+          if (best && bestArea === 0) {
+            var real = document.querySelector(
+              '#prompt-textarea, .ProseMirror, [contenteditable="true"]');
+            if (real) best = real;
           }
           return best;
         }
     """.trimIndent()
+
+    /**
+     * A one-line description of what is actually on the page, for the log.
+     *
+     * Reports the URL and every editable-looking element with its tag, size and
+     * attributes — enough to write a correct selector from a log alone, rather
+     * than shipping a guess and waiting to hear whether it worked.
+     */
+    private suspend fun describePage(webView: WebView): String = js(
+        webView,
+        """
+        (function(){
+          try {
+            var out = 'url=' + location.href + ' ready=' + document.readyState;
+            var nodes = document.querySelectorAll(
+              'textarea, [contenteditable], [role="textbox"], .ProseMirror');
+            out += ' candidates=' + nodes.length + ' [';
+            for (var i = 0; i < nodes.length && i < 8; i++) {
+              var el = nodes[i];
+              var r = el.getBoundingClientRect();
+              out += el.tagName
+                + '#' + (el.id || '-')
+                + '.' + (String(el.className || '-').slice(0, 30))
+                + ' ce=' + el.getAttribute('contenteditable')
+                + ' ' + Math.round(r.width) + 'x' + Math.round(r.height) + '; ';
+            }
+            return out + ']';
+          } catch (e) { return 'describe failed: ' + e; }
+        })()
+        """.trimIndent()
+    )
+
+    /**
+     * Clears welcome and consent dialogs that cover the composer.
+     *
+     * Matched by BUTTON LABEL rather than by any dialog selector: the labels
+     * ("Got it", "Okay", "Continue") are stable and few, whereas the modals
+     * themselves are unnamed divs that change shape between releases. Runs
+     * twice because dismissing one can reveal another behind it.
+     */
+    private suspend fun dismissDialogs(webView: WebView) {
+        repeat(2) {
+            val dismissed = js(
+                webView,
+                """
+                (function(){
+                  try {
+                    var labels = ['got it','okay','ok','continue','accept',
+                                  'dismiss','close','not now','maybe later'];
+                    var buttons = document.querySelectorAll('button');
+                    for (var i = 0; i < buttons.length; i++) {
+                      var b = buttons[i];
+                      var t = (b.innerText || '').trim().toLowerCase();
+                      if (labels.indexOf(t) === -1) continue;
+                      var r = b.getBoundingClientRect();
+                      if (r.width <= 0 || r.height <= 0) continue;
+                      b.click();
+                      return 'clicked:' + t;
+                    }
+                    return 'none';
+                  } catch(e) { return 'err:' + e; }
+                })()
+                """.trimIndent()
+            )
+            if (dismissed.contains("none")) return
+            Log.d(TAG, "Dismissed dialog: $dismissed")
+            delay(DIALOG_SETTLE_MS)
+        }
+    }
 
     /** Polls until the composer exists, since it mounts after the page loads. */
     private suspend fun awaitComposer(webView: WebView): Boolean {
@@ -262,15 +401,32 @@ class ProfileImporter(private val context: Context) {
                   setter.set.call(box, text);
                   box.dispatchEvent(new Event('input', {bubbles:true}));
                 }
-                // Confirm the text really landed before claiming success.
-                var now = box.isContentEditable ? box.textContent : box.value;
-                if (!now || now.length < 10) return 'notyped';
                 return 'typed';
               } catch(e){ return 'err:'+e; }
             })()
             """.trimIndent()
         )
         if (!result.contains("typed") || result.contains("notyped")) return false
+
+        // Verify AFTER a pause, not inside the same script.
+        //
+        // ProseMirror applies an insertText through its own update cycle, so
+        // reading textContent on the very next statement finds the editor still
+        // empty — the previous build called that a typing failure on a page
+        // where the text had in fact landed and Send was already enabled.
+        delay(TYPE_SETTLE_MS)
+        val landed = js(
+            webView,
+            "(function(){ $composerFinder try { var b = findComposer(); " +
+                "if (!b) return '0'; " +
+                "var t = b.isContentEditable ? b.textContent : b.value; " +
+                "return String((t || '').trim().length); } catch(e){ return '0'; } })()"
+        )
+        val chars = landed.filter { it.isDigit() }.toIntOrNull() ?: 0
+        if (chars < MIN_TYPED_CHARS) {
+            Log.w(TAG, "Text did not land: only $chars chars in composer")
+            return false
+        }
 
         // Submit as a separate step: the editor needs a moment to register the
         // text before Enter, and a send button that is still disabled will
@@ -296,9 +452,19 @@ class ProfileImporter(private val context: Context) {
                 // explicit send control too if one is present and enabled;
                 // sending twice is not a risk because the box is cleared by
                 // the first send, so a second click has nothing to submit.
+                // Match on the visible label as well as the test id: the live
+                // button is labelled "Send prompt", and relying on a single
+                // data-testid meant a rename silently broke sending.
                 var btn = document.querySelector(
                   'button[data-testid="send-button"], button[aria-label*="Send" i]');
-                if (btn && !btn.disabled) btn.click();
+                if (!btn) {
+                  var all = document.querySelectorAll('button');
+                  for (var i = 0; i < all.length; i++) {
+                    var lbl = (all[i].getAttribute('aria-label') || '').toLowerCase();
+                    if (lbl.indexOf('send') !== -1) { btn = all[i]; break; }
+                  }
+                }
+                if (btn && !btn.disabled) { btn.click(); return 'sent-click'; }
                 return 'sent';
               } catch(e){ return 'err:'+e; }
             })()
@@ -354,23 +520,54 @@ class ProfileImporter(private val context: Context) {
      * so a NO_MEMORY reply is never lost by this.
      */
     private fun extractAnswer(pageText: String): String {
-        val marker = "NO_MEMORY_AVAILABLE"
-        if (pageText.contains(marker)) return marker
+        // Anchor on the assistant's own reply label first: both sites emit
+        // "ChatGPT said:" / "Claude said:" between the echoed prompt and the
+        // answer, which is a far more reliable boundary than any phrase from
+        // the prompt — and it survives the prompt being reworded.
+        // Boundaries in order of reliability. "ChatGPT said:" is only present
+        // for screen readers on some renders — the live page often lacks it —
+        // so the prompt's own last line is the dependable cut point: the page
+        // shows the prompt above the answer, so whatever follows is the reply.
+        val boundaries = listOf(
+            "ChatGPT said:",
+            "Claude said:",
+            "No headings, no bullet points."
+        )
+        var reply = boundaries
+            .firstNotNullOfOrNull { marker ->
+                val idx = pageText.lastIndexOf(marker)
+                if (idx >= 0) pageText.substring(idx + marker.length) else null
+            }
+            ?: pageText
 
-        // The prompt's last distinctive line, as the boundary.
-        val promptTail = "Reply with exactly this instead:"
-        val idx = pageText.lastIndexOf(promptTail)
-        val after = if (idx >= 0) {
-            pageText.substring(idx + promptTail.length)
-                .substringAfter(marker, "")
-                .ifBlank { pageText.substring(idx + promptTail.length) }
-        } else {
-            pageText
-        }
-        return after.trim().lines()
+        // Strip the site's own furniture, which the text extractor picks up
+        // along with the conversation and which would otherwise be saved as
+        // part of the user's profile.
+        // Only trailing furniture. "Skip to content" used to be in this list,
+        // but it sits at the TOP of the page — above the answer — so cutting
+        // everything before it discarded the entire reply and the import
+        // reported a 0-character result on a page holding a full profile.
+        val trailingChrome = listOf(
+            "ChatGPT can make mistakes",
+            "Claude can make mistakes",
+            "Cookie preferences",
+            "Sources"
+        )
+        trailingChrome.forEach { line -> reply = reply.substringBefore(line) }
+
+        val cleaned = reply.trim().lines()
             .filter { it.isNotBlank() }
             .joinToString("\n")
             .take(MAX_PROFILE_CHARS)
+
+        // The prompt no longer offers this marker, so a model only produces it
+        // unprompted when it truly has nothing. Kept as a safety net; the
+        // too-short check in import() is what normally catches an empty result.
+        return if (cleaned.contains(ProfileSource.NO_MEMORY_MARKER)) {
+            ProfileSource.NO_MEMORY_MARKER
+        } else {
+            cleaned
+        }
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -383,13 +580,43 @@ class ProfileImporter(private val context: Context) {
             }
         }
 
-    private companion object {
+    companion object {
         const val TAG = "ProfileImporter"
+
+        /**
+         * Debug-only: keep the session instead of signing out after an import.
+         *
+         * Set true while iterating, so repeated test runs do not look like
+         * credential stuffing to the sites' bot detection. Must be false in
+         * anything the user actually uses — see [signOut].
+         */
+        const val SKIP_SIGN_OUT = true
 
         const val PAGE_TIMEOUT_MS = 20_000L
 
         /** How long to wait for the composer to mount after the page loads. */
         const val COMPOSER_TIMEOUT_MS = 15_000L
+
+        /**
+         * Minimum characters that must be in the composer to count as typed.
+         *
+         * The prompt is hundreds of characters, so anything this small means
+         * the insert did not take — but it stays low enough that a partially
+         * rendered editor is not mistaken for a failure.
+         */
+        const val MIN_TYPED_CHARS = 20
+
+        /** Pause after dismissing a dialog, for the next one to settle. */
+        const val DIALOG_SETTLE_MS = 800L
+
+        /**
+         * Shortest reply that could be a real profile.
+         *
+         * The prompt asks for 150-250 words, so anything under this is page
+         * furniture rather than an answer — and presenting furniture to the
+         * user as their imported profile is worse than reporting a failure.
+         */
+        const val MIN_PROFILE_CHARS = 120
         const val LOGOUT_TIMEOUT_MS = 8_000L
         const val LOGOUT_GRACE_MS = 1_500L
         const val POLL_MS = 250L
