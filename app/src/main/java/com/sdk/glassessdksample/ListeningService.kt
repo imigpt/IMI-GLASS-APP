@@ -4,6 +4,7 @@ import com.sdk.glassessdksample.ui.BluetoothEvent
 import com.sdk.glassessdksample.ui.DeviceType
 import com.sdk.glassessdksample.ui.DevicePreferenceManager
 import com.sdk.glassessdksample.ui.GeminiLiveService
+import com.sdk.glassessdksample.ui.GlassConnectionState
 import com.sdk.glassessdksample.ui.ActiveMeetingActivity
 import com.sdk.glassessdksample.ui.HotHelper
 import com.sdk.glassessdksample.ui.LocalToolHandlers
@@ -18,8 +19,13 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.Manifest
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothHeadset
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.media.AudioAttributes
 import android.media.MediaPlayer
@@ -39,6 +45,18 @@ import com.sdk.glassessdksample.utils.WakeChimePlayer
 class ListeningService : Service() {
     companion object {
         const val ACTION_STOP = "com.sdk.ACTION_STOP_LISTENING"
+
+        /**
+         * Extra on [ACTION_STOP]: true when the stop is only because the glasses
+         * went away, so the service should PARK (idle, mic + wake lock released)
+         * instead of stopping — it is the only thing that can see them come back.
+         *
+         * Absent/false means a deliberate stop (the user muted the AI, tapped Stop,
+         * a meeting took the mic), which must genuinely stop the service. Inferring
+         * this from connection state instead would mis-handle "mute while the
+         * glasses happen to be off" as a disconnect.
+         */
+        const val EXTRA_STOP_FOR_DISCONNECT = "stop_for_disconnect"
         const val ACTION_WAKE_WORD_DETECTED = "com.sdk.glassessdksample.ACTION_WAKE_WORD_DETECTED"
         /** Ends an in-progress background conversation but keeps wake-word listening. */
         const val ACTION_STOP_BG_CONVERSATION = "com.sdk.ACTION_STOP_BG_CONVERSATION"
@@ -89,6 +107,14 @@ class ListeningService : Service() {
         private const val FOREGROUND_WAKE_WATCHDOG_MS = 12_000L
 
         /**
+         * Settle window for Bluetooth transitions. ACL_DISCONNECTED, the headset
+         * profile change and the adapter state change all arrive within a few
+         * hundred ms of each other; acting on each one separately would stop and
+         * restart the detector several times per connect.
+         */
+        private const val BT_SETTLE_DELAY_MS = 500L
+
+        /**
          * Whether wake-word listening *should* be active. Kept in the companion so it
          * survives the OS re-creating this START_STICKY service: on a sticky restart
          * we must not re-arm the detector while a conversation owns the mic.
@@ -107,11 +133,50 @@ class ListeningService : Service() {
         /** Public: is a background (phone-locked) conversation currently running? */
         @JvmStatic
         fun isBackgroundConversationActive(): Boolean = bgConversationActive
+
+        /**
+         * True while the service is alive but deliberately idle because no glasses
+         * are connected: detector stopped, microphone released, wake lock released.
+         *
+         * The service is NOT stopped in this state. It is the only component that
+         * can observe the glasses reconnecting while the Activity is dead, and a
+         * START_STICKY restart would race the very disconnect that caused it.
+         */
+        @Volatile
+        private var parkedForDisconnect = false
+
+        @JvmStatic
+        fun isParkedForDisconnect(): Boolean = parkedForDisconnect
     }
 
     private var wakeLock: PowerManager.WakeLock? = null
 
     private val mainHandler = Handler(Looper.getMainLooper())
+
+    /**
+     * Watches Bluetooth while the Activity is gone.
+     *
+     * Mark1MainActivity registers an equivalent receiver but unregisters it in
+     * onPause, so once the app was minimised NOTHING in the process observed a
+     * disconnect — the service simply kept re-arming the detector forever on the
+     * phone mic. This receiver is service-scoped, so it lives exactly as long as
+     * the thing that owns the microphone.
+     */
+    private val glassBluetoothReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            Log.d(TAG, "📶 Bluetooth event: ${intent?.action}")
+            // ACL_DISCONNECTED and the headset state change arrive back to back;
+            // without debouncing we would thrash park/unpark on every transition.
+            mainHandler.removeCallbacks(bluetoothSettleTask)
+            mainHandler.postDelayed(bluetoothSettleTask, BT_SETTLE_DELAY_MS)
+        }
+    }
+
+    private val bluetoothSettleTask = Runnable {
+        GlassConnectionState.invalidate()
+        val connected = GlassConnectionState.isConnected(applicationContext)
+        if (connected) unparkForConnect() else parkForDisconnect()
+    }
     private var bgGeminiService: GeminiLiveService? = null
 
     // Single-reply mode (Continuous Chat OFF): set once the AI has answered a real
@@ -168,6 +233,22 @@ class ListeningService : Service() {
             // Subscribe to wake word events so we can forward them to MainActivity even
             // when the Activity is stopped (minimised / screen off).
             EventBus.getDefault().register(this)
+
+            // Watch Bluetooth ourselves. The Activity's equivalent receiver is
+            // unregistered in onPause, so this is the only one alive once the app
+            // is minimised — which is exactly when the detector used to keep
+            // re-arming on the phone mic after the glasses had gone.
+            ContextCompat.registerReceiver(
+                this,
+                glassBluetoothReceiver,
+                IntentFilter().apply {
+                    addAction(BluetoothDevice.ACTION_ACL_CONNECTED)
+                    addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED)
+                    addAction(BluetoothHeadset.ACTION_CONNECTION_STATE_CHANGED)
+                    addAction(BluetoothAdapter.ACTION_STATE_CHANGED)
+                },
+                ContextCompat.RECEIVER_NOT_EXPORTED
+            )
         } catch (e: Exception) {
             Log.e(TAG, "❌ startForeground failed — stopping self: ${e.message}", e)
             stopSelf()
@@ -176,6 +257,21 @@ class ListeningService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
+            // A stop caused by the glasses going away is NOT the same as the user
+            // tapping Stop or muting the AI: park instead of dying, so this service
+            // is still here to notice them coming back. Without this the BLE gate's
+            // stopWakeWordListening() killed the service on every disconnect and
+            // nothing could re-arm until the app was reopened by hand.
+            //
+            // The caller says which it is. Deciding from connection state alone
+            // would read "mute while the glasses are off" as a disconnect and leave
+            // a misleading "Glasses disconnected" notification up.
+            if (intent.getBooleanExtra(EXTRA_STOP_FOR_DISCONNECT, false) &&
+                !GlassConnectionState.isConnected(applicationContext)
+            ) {
+                parkForDisconnect()
+                return START_STICKY
+            }
             wakeWordEnabled = false
             endBackgroundConversation()
             try { HotHelper.getInstance(applicationContext).stop() } catch (_: Exception) {}
@@ -232,6 +328,15 @@ class ListeningService : Service() {
             return START_STICKY
         }
 
+        // 🕶️ No glasses: go idle rather than arming. HotHelper.start() refuses too,
+        // but that alone would leave this service holding a wake lock and an
+        // "IMI is listening" notification while nothing is actually listening.
+        if (!GlassConnectionState.isConnected(applicationContext)) {
+            parkForDisconnect()
+            return START_STICKY
+        }
+        parkedForDisconnect = false
+
         try { HotHelper.getInstance(applicationContext).armOnGlassMic() } catch (_: Exception) {}
 
         return START_STICKY
@@ -268,6 +373,8 @@ class ListeningService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         EventBus.getDefault().unregister(this)
+        try { unregisterReceiver(glassBluetoothReceiver) } catch (_: Exception) {}
+        parkedForDisconnect = false
         wakeLock?.let { if (it.isHeld) it.release() }
         mainHandler.removeCallbacksAndMessages(null)
         try { bgGeminiService?.stopLiveConversation() } catch (_: Exception) {}
@@ -449,6 +556,58 @@ class ListeningService : Service() {
     }
 
     /**
+     * Goes idle because no glasses are connected: ends any conversation, stops the
+     * detector, releases the microphone and the wake lock, and relabels the
+     * notification. The service itself stays alive — see [parkedForDisconnect].
+     */
+    private fun parkForDisconnect() {
+        if (parkedForDisconnect) return
+        parkedForDisconnect = true
+        Log.w(TAG, "🕶️ Glasses disconnected — parking wake word (mic + wake lock released)")
+
+        // endBackgroundConversation() ends by calling rearmWakeWord(), which would
+        // schedule a re-arm right after we park. Clear the queue AFTER it runs, and
+        // set wakeWordEnabled = false so the posted task is a no-op if one slips
+        // through.
+        endBackgroundConversation()
+        wakeWordEnabled = false
+        // Drop pending re-arms so none of them fires after we park. This also
+        // clears any queued settle task, which is harmless: the receiver posts a
+        // fresh one on every Bluetooth broadcast, so reconnect detection does not
+        // depend on a task queued before the park.
+        mainHandler.removeCallbacksAndMessages(null)
+        try { HotHelper.getInstance(applicationContext).stop() } catch (_: Exception) {}
+        try { wakeLock?.let { if (it.isHeld) it.release() } } catch (_: Exception) {}
+        updateNotification(listening = false)
+    }
+
+    /** The glasses came back: re-acquire the wake lock and re-arm the detector. */
+    private fun unparkForConnect() {
+        if (!parkedForDisconnect) return
+        parkedForDisconnect = false
+        Log.i(TAG, "🕶️ Glasses connected — resuming wake word")
+
+        try {
+            if (wakeLock?.isHeld != true) wakeLock?.acquire()
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not re-acquire wake lock: ${e.message}")
+        }
+        updateNotification(listening = true)
+        wakeWordEnabled = true
+        rearmWakeWord("glasses reconnected")
+    }
+
+    /** Swaps the foreground notification text between listening and parked. */
+    private fun updateNotification(listening: Boolean) {
+        try {
+            val nm = getSystemService(NotificationManager::class.java)
+            nm?.notify(NOTIF_ID, buildNotification(listening))
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not update notification: ${e.message}")
+        }
+    }
+
+    /**
      * Re-arms wake-word detection after a settle delay, so the tail of the AI's
      * audio (or the chime) can't immediately re-trigger "Hey IMI".
      *
@@ -462,6 +621,12 @@ class ListeningService : Service() {
         mainHandler.postDelayed({
             if (ActiveMeetingActivity.meetingActive) {
                 Log.i(TAG, "🎤 Meeting recording in progress — skipping wake-word re-arm ($reason)")
+                return@postDelayed
+            }
+            // 🕶️ Parked because the glasses are gone — re-arming here is what kept
+            // the detector alive on the phone mic after a disconnect.
+            if (parkedForDisconnect || !GlassConnectionState.isConnected(applicationContext)) {
+                Log.i(TAG, "🕶️ Glasses not connected — skipping wake-word re-arm ($reason)")
                 return@postDelayed
             }
             if (!bgConversationActive) {
@@ -922,15 +1087,19 @@ class ListeningService : Service() {
         }
     }
 
-    private fun buildNotification(): Notification {
+    private fun buildNotification(listening: Boolean = true): Notification {
         val stopIntent = PendingIntent.getService(
             this, 0,
             Intent(this, ListeningService::class.java).apply { action = ACTION_STOP },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
+        // Saying "IMI is listening" while parked would be a lie — nothing holds
+        // the mic in that state.
+        val title = if (listening) "IMI is listening" else "Glasses disconnected"
+        val text = if (listening) "Say \"Hey IMI\" to start" else "Waiting for your glasses to connect"
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("IMI is listening")
-            .setContentText("Say \"Hey IMI\" to start")
+            .setContentTitle(title)
+            .setContentText(text)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setSilent(true)

@@ -253,6 +253,18 @@ class HotHelper private constructor(private val context: Context) {
         return isStarted || isStartPending || activeDetectorIsListening()
     }
 
+    // While disconnected, rearmWakeWord() retries on a timer — logging every
+    // refusal would flood logcat, so collapse them to one line a minute.
+    private var lastGlassesMissingLogMs = 0L
+
+    private fun logGlassesMissing() {
+        val now = System.currentTimeMillis()
+        if (now - lastGlassesMissingLogMs > 60_000L) {
+            lastGlassesMissingLogMs = now
+            Log.w(TAG, "🕶️ Glasses not connected — wake word detection not started")
+        }
+    }
+
     fun start() {
         if (isMuted) {
             Log.d(TAG, "🔇 Wake word detection is muted - not starting")
@@ -264,6 +276,19 @@ class HotHelper private constructor(private val context: Context) {
         // they all terminate here.
         if (isSuppressed) {
             Log.d(TAG, "👁️ Wake word detection suppressed (vision in progress) - not starting")
+            return
+        }
+
+        // 🕶️ No glasses, no listening. This is the single funnel every arm path
+        // reaches (armOnGlassMic, ListeningService.onStartCommand, rearmWakeWord,
+        // the Activity re-arms), so gating here covers all ~8 callers at once —
+        // a check in any one caller would be bypassed by the others.
+        //
+        // Previously the detector armed regardless and attemptScoThenStartDetector()
+        // fell back to the PHONE mic when HFP was absent, so "Hey IMI" listened on
+        // the handset with nothing to talk through.
+        if (!GlassConnectionState.isConnected(context)) {
+            logGlassesMissing()
             return
         }
 
@@ -627,6 +652,18 @@ class HotHelper private constructor(private val context: Context) {
             startPendingSinceMs = 0L
             unregisterScoReceiverForStart()
             Log.d(TAG, "👁️ Canceled pending wake start because vision is in progress")
+            return
+        }
+
+        // 🕶️ Same reasoning as the two checks above: attemptScoThenStartDetector()
+        // can wait up to SCO_WAIT_TIMEOUT_MS for the link, and the glasses can
+        // disconnect inside that window. Without this the pending start lands a
+        // detector on the phone mic — exactly what the gate in start() prevents.
+        if (!GlassConnectionState.isConnected(context)) {
+            isStartPending = false
+            startPendingSinceMs = 0L
+            unregisterScoReceiverForStart()
+            Log.w(TAG, "🕶️ Canceled pending wake start — glasses disconnected during SCO wait")
             return
         }
 

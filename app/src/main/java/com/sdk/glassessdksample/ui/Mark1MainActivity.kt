@@ -370,7 +370,10 @@ class Mark1MainActivity : AppCompatActivity(), GeminiLiveService.GeminiLiveCallb
         // stopConversation() restarts wake-word listening, so stop it last to leave
         // the assistant fully off; hideBleGate() restarts it once connected.
         if (isGeminiLiveActive) stopConversation()
-        stopWakeWordListening()
+        // The gate is shown because the glasses are absent, so the service parks
+        // rather than stopping — it is what notices them reconnecting while the
+        // Activity is gone.
+        stopWakeWordListening(forDisconnect = true)
 
         // Poll briefly instead of sampling once: the glasses' profiles can take a
         // moment to register after the app opens, and a single 800ms check would
@@ -452,68 +455,13 @@ class Mark1MainActivity : AppCompatActivity(), GeminiLiveService.GeminiLiveCallb
      * gate right after opening the app. We now accept HEADSET, A2DP or GATT, and
      * fall back to asking the BluetoothManager which devices are really connected.
      */
-    private fun isGlassConnected(): Boolean {
-        try {
-            val adapter = BluetoothAdapter.getDefaultAdapter() ?: return false
-            if (!adapter.isEnabled) return false
-
-            // 1. Classic profiles (HFP for voice, A2DP for media).
-            val profiles = intArrayOf(
-                BluetoothProfile.HEADSET,
-                BluetoothProfile.A2DP,
-                BluetoothProfile.GATT
-            )
-            for (p in profiles) {
-                val state = try {
-                    adapter.getProfileConnectionState(p)
-                } catch (_: Exception) {
-                    BluetoothProfile.STATE_DISCONNECTED
-                }
-                if (state == BluetoothProfile.STATE_CONNECTED) {
-                    Log.d(TAG, "Glasses connected (profile=$p)")
-                    return true
-                }
-            }
-
-            // 2. BLE/GATT devices the system reports as actively connected.
-            try {
-                val bm = getSystemService(Context.BLUETOOTH_SERVICE) as? android.bluetooth.BluetoothManager
-                val gattConnected = bm?.getConnectedDevices(BluetoothProfile.GATT).orEmpty() +
-                    bm?.getConnectedDevices(BluetoothProfile.GATT_SERVER).orEmpty()
-                if (gattConnected.isNotEmpty()) {
-                    Log.d(TAG, "Glasses connected (GATT devices=${gattConnected.size})")
-                    return true
-                }
-            } catch (e: SecurityException) {
-                Log.w(TAG, "No BLUETOOTH_CONNECT permission for GATT check: ${e.message}")
-            }
-
-            // 3. Last resort: ask each bonded device whether it is actually connected.
-            //    BluetoothDevice.isConnected() is hidden API, hence reflection. This
-            //    catches classic audio headsets (e.g. "F-16") that the profile proxy
-            //    can momentarily report as disconnected.
-            try {
-                val bonded = adapter.bondedDevices.orEmpty()
-                for (device in bonded) {
-                    val connected = try {
-                        val m = device.javaClass.getMethod("isConnected")
-                        m.invoke(device) as? Boolean ?: false
-                    } catch (_: Exception) {
-                        false
-                    }
-                    if (connected) {
-                        Log.d(TAG, "Glasses connected (bonded device reports connected)")
-                        return true
-                    }
-                }
-            } catch (e: SecurityException) {
-                Log.w(TAG, "No permission to read bonded devices: ${e.message}")
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "BLE check error: ${e.message}")
-        }
-        return false
-    }
+    /**
+     * Delegates to [GlassConnectionState] so the BLE gate and the wake-word gate
+     * can never disagree about whether the glasses are connected. The cascade that
+     * used to live here (profiles -> GATT -> bonded-device reflection) moved there
+     * verbatim, so the gate's behaviour is unchanged.
+     */
+    private fun isGlassConnected(): Boolean = GlassConnectionState.isConnected(this)
 
     private fun hideBleGate() {
         // Stop any pending connection poll so a late callback can't re-show the gate.
@@ -658,7 +606,13 @@ class Mark1MainActivity : AppCompatActivity(), GeminiLiveService.GeminiLiveCallb
         }
     }
 
-    private fun stopWakeWordListening() {
+    /**
+     * @param forDisconnect true when the glasses going away is the reason. The
+     *   service then parks (idle, mic + wake lock released) instead of stopping,
+     *   so it can still see them reconnect. A deliberate stop — mute, Stop, a
+     *   meeting taking the mic — leaves this false and genuinely stops it.
+     */
+    private fun stopWakeWordListening(forDisconnect: Boolean = false) {
         wakeWordHandler.removeCallbacksAndMessages(null)
         wakeWordStarted = false
         HotHelper.getInstance(applicationContext).stop()
@@ -668,6 +622,7 @@ class Mark1MainActivity : AppCompatActivity(), GeminiLiveService.GeminiLiveCallb
         try {
             val stopIntent = Intent(this, ListeningService::class.java).apply {
                 action = ListeningService.ACTION_STOP
+                putExtra(ListeningService.EXTRA_STOP_FOR_DISCONNECT, forDisconnect)
             }
             startService(stopIntent)
         } catch (e: Exception) {
@@ -729,6 +684,20 @@ class Mark1MainActivity : AppCompatActivity(), GeminiLiveService.GeminiLiveCallb
             ).show()
             return
         }
+
+        // 🕶️ Quick Start used to open a full live session with no glasses present:
+        // the chime played, the session connected, and the reply went nowhere the
+        // user could hear it. Say what is wrong instead, and surface the gate.
+        if (!GlassConnectionState.isConnected(this)) {
+            val message = "No device is connected. Please connect your glasses."
+            Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+            // Spoken too — the user may be wearing the glasses and not looking
+            // at the phone at all.
+            tts?.speak(message, TextToSpeech.QUEUE_FLUSH, null, "no_glasses")
+            checkBleAndShowGate()
+            return
+        }
+
         playChimeThenStartConversation()
     }
 
@@ -742,6 +711,15 @@ class Mark1MainActivity : AppCompatActivity(), GeminiLiveService.GeminiLiveCallb
         // believed IMI was silenced. Checking here means no route can bypass it.
         if (isAiMuted) {
             Log.i(TAG, "🔇 Silent Mode is on — not starting a live conversation")
+            return
+        }
+
+        // 🕶️ Same "no route can bypass it" reasoning as the mute check above: this
+        // is reached from Quick Start, the wake word, the EventBus voice event and
+        // the post-gate resume. Silent here rather than toasting — this can fire
+        // with the screen off, where a toast helps nobody.
+        if (!GlassConnectionState.isConnected(this)) {
+            Log.w(TAG, "🕶️ Glasses not connected — not starting a live conversation")
             return
         }
 
@@ -992,10 +970,14 @@ class Mark1MainActivity : AppCompatActivity(), GeminiLiveService.GeminiLiveCallb
             Toast.makeText(this, "AI muted — not listening", Toast.LENGTH_SHORT).show()
         } else {
             binding.tvMuteLabel.text = "Silent Mode"
-            if (isGlassConnected()) {
-                checkBleAndShowGate()
-            } else {
+            // These branches were inverted: the else arm started the detector
+            // precisely when NO glasses were connected, bypassing the gate
+            // entirely. Connected -> listen; not connected -> show the gate and
+            // arm nothing (hideBleGate() re-arms once they reconnect).
+            if (GlassConnectionState.isConnected(this)) {
                 startWakeWordListening()
+            } else {
+                checkBleAndShowGate()
             }
         }
     }

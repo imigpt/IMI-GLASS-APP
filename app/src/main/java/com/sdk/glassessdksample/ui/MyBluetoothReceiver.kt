@@ -33,9 +33,14 @@ class MyBluetoothReceiver : QCBluetoothCallbackCloneReceiver() {
         Log.i(TAG, "Connection Status: Device=${device?.name}, Connected=$connected")
         if (device != null && connected) {
             device.name?.let { DeviceManager.getInstance().deviceName = it }
+            // Refresh the shared connection state and backfill the pairing record.
+            // This receiver is registered in MyApplication.onCreate, so it is the
+            // one Bluetooth observer that outlives every Activity.
+            GlassConnectionState.onConnected(MyApplication.instance, device)
             requestMicPermissionIfNeeded()
             EventBus.getDefault().post(BluetoothEvent(BluetoothEvent.EventType.CONNECTED))
         } else {
+            GlassConnectionState.onDisconnected(MyApplication.instance, device)
             stopCustomWakeWord()
             EventBus.getDefault().post(BluetoothEvent(BluetoothEvent.EventType.DISCONNECTED))
         }
