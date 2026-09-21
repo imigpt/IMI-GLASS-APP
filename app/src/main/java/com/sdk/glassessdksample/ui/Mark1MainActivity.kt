@@ -579,6 +579,26 @@ class Mark1MainActivity : AppCompatActivity(), GeminiLiveService.GeminiLiveCallb
             return
         }
         if (isAiMuted || wakeWordStarted) return
+
+        // 🕶️ No glasses, no listening — checked HERE, not just by callers.
+        //
+        // The two existing callers (hideBleGate, toggleAiMute) already guard
+        // this themselves, but that safety was scattered across call sites
+        // instead of owned by the function that actually arms the mic — the
+        // exact shape of bug that let the detector start on the PHONE mic
+        // after a disconnect (Mark 2's 0.95 threshold showing up on a Mark 1
+        // session was one symptom of a caller skipping its own check).
+        // A third caller (startWakeWordListeningDelayed, the fallback when the
+        // service re-arm request fails) had NO check at all before this.
+        //
+        // checkBleAndShowGate() is the right response to "no glasses": it shows
+        // the gate UI and its own hideBleGate() will call back into this
+        // function once they reconnect, so nothing is lost by bailing here.
+        if (!GlassConnectionState.isConnected(this)) {
+            Log.w(TAG, "🕶️ Glasses not connected — not starting wake word")
+            checkBleAndShowGate()
+            return
+        }
         wakeWordStarted = true
 
         try {

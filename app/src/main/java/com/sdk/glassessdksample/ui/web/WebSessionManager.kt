@@ -65,7 +65,19 @@ object WebSessionManager {
             mediaPlaybackRequiresUserGesture = true
             cacheMode = WebSettings.LOAD_DEFAULT
 
-            userAgentString = if (desktopMode) DESKTOP_UA else userAgentString
+            // Drop the "; wv" marker from the stock WebView user agent.
+            //
+            // Android puts that token in to identify an embedded WebView, and
+            // sites that screen for automation treat it as a strong signal:
+            // ChatGPT served a challenge that never completed, so no page-load
+            // callback ever fired and the screen stayed blank with no error to
+            // show. The rest of the UA is left exactly as the system built it,
+            // so this claims nothing about the device that isn't true.
+            userAgentString = if (desktopMode) {
+                DESKTOP_UA
+            } else {
+                userAgentString?.replace("; wv)", ")")
+            }
         }
 
         // Force the WebView to composite opaquely.

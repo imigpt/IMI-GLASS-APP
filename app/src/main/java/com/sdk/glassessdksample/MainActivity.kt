@@ -598,7 +598,17 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             return
         }
 
-        if (!checkBLEConnection()) {
+        // checkBLEConnection() alone was not reliable enough for this gate: it only
+        // reads the vendor SDK's own GATT flag (BleOperateManager.isConnected),
+        // which can lag behind the actual audio-profile disconnect by a couple of
+        // hundred ms. A delayed caller (e.g. the 10s single-reply session-timeout
+        // fallback in endSessionAfterCurrentReply, which does not know or care
+        // whether the glasses are still there) landed in that gap and re-armed the
+        // wake word on the PHONE mic seconds after "Glass Disconnected" had already
+        // shown. com.sdk.glassessdksample.ui.GlassConnectionState unions several
+        // signals (BLE, SCO/A2DP audio route, profile state) specifically so no
+        // single laggy source can let this through.
+        if (!checkBLEConnection() || !com.sdk.glassessdksample.ui.GlassConnectionState.isConnected(this)) {
             Log.d(TAG, "📡 Wake model waiting for glass connection ($trigger)")
             return
         }

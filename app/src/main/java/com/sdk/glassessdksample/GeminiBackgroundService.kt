@@ -44,6 +44,19 @@ class GeminiBackgroundService : Service() {
         private const val NOTIF_ID = 1002
 
          const val ACTION_STOP = "com.aselea.imiglass.ACTION_STOP_GEMINI_BG"
+
+        /**
+         * Set while a Stop is propagating between this service and ListeningService.
+         *
+         * Each one stops the other so a single "Stop" tap shuts everything down, but
+         * without this they would bounce the request back and forth forever
+         * (stopSelf() does not stop a fresh startService from reviving them).
+         * The first to handle a Stop claims the flag; the other sees it already set,
+         * shuts itself down, and does not send the request onward.
+         */
+        @Volatile
+        @JvmStatic
+        var stopPropagating = false
     }
 
     // Binder given to clients (MainActivity)
@@ -68,6 +81,7 @@ class GeminiBackgroundService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        stopPropagating = false
         createNotificationChannel()
 
         // This is a foregroundServiceType="microphone" service. On Android 14+
@@ -103,6 +117,40 @@ class GeminiBackgroundService : Service() {
             Log.d(TAG, "🛑 Stop action received — shutting down")
             geminiLiveService?.destroy()
             geminiLiveService = null
+
+            // "Stop" on this notification has to mean STOP — all of it.
+            //
+            // This service is only a keep-alive shell; the thing that actually owns
+            // the microphone and the wake-word detector is ListeningService. Killing
+            // ourselves alone left the detector running, so the mic stayed held, no
+            // other app could record, and the button looked broken because from the
+            // user's point of view nothing changed.
+            //
+            // Stop the detector directly as well as asking the service to stop: the
+            // detector is a process-wide singleton, so this releases the AudioRecord
+            // immediately instead of waiting for the service teardown to get there.
+            try {
+                com.sdk.glassessdksample.ui.HotHelper.getInstance(applicationContext).stop()
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not stop wake-word detector: ${e.message}")
+            }
+            if (!stopPropagating) {
+                stopPropagating = true
+                try {
+                    startService(
+                        Intent(this, ListeningService::class.java)
+                            .apply { action = ListeningService.ACTION_STOP }
+                    )
+                } catch (e: Exception) {
+                    Log.w(TAG, "Could not stop ListeningService: ${e.message}")
+                }
+                // Deliberately NOT reset here: startService() returns before
+                // ListeningService.onStartCommand runs, so resetting immediately
+                // let the two services bounce ACTION_STOP back and forth forever
+                // (each saw the flag as false by the time the other checked it).
+                // The flag is cleared in onCreate() for the next real session.
+            }
+
             releaseWakeLock()
             stopSelf()
             return START_NOT_STICKY

@@ -75,9 +75,41 @@ class ProfileImportActivity : AppCompatActivity() {
         // every failure looks identical from the screen and has to be
         // diagnosed by attaching devtools.
         binding.webView.webViewClient = object : WebViewClient() {
+            override fun onPageStarted(
+                view: WebView?,
+                url: String?,
+                favicon: android.graphics.Bitmap?
+            ) {
+                super.onPageStarted(view, url, favicon)
+                Log.d(TAG, "Page started: $url")
+            }
+
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
                 Log.d(TAG, "Page finished: $url")
+            }
+
+            override fun onReceivedHttpError(
+                view: WebView?,
+                request: android.webkit.WebResourceRequest?,
+                errorResponse: android.webkit.WebResourceResponse?
+            ) {
+                super.onReceivedHttpError(view, request, errorResponse)
+                // A 403 from Cloudflare arrives here, NOT in onReceivedError,
+                // and produces a blank page with no other signal — which is
+                // exactly how an anti-bot block presents as "white screen".
+                if (request?.isForMainFrame == true) {
+                    val code = errorResponse?.statusCode ?: 0
+                    Log.w(TAG, "HTTP $code for ${request.url}")
+                    if (code == 403 || code == 429) {
+                        runOnUiThread {
+                            binding.tvStatus.text =
+                                "${source.displayName} is blocking automated sign-in " +
+                                    "right now (HTTP $code). Try again in a little while, " +
+                                    "or use mobile data instead of Wi-Fi."
+                        }
+                    }
+                }
             }
 
             override fun onReceivedError(

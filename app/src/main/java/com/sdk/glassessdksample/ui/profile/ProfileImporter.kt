@@ -11,6 +11,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
 
 /**
@@ -54,9 +55,13 @@ class ProfileImporter(private val context: Context) {
         return try {
             onProgress("Opening a new chat…")
             if (!load(webView, source.newChatUrl)) {
-                return Result.Failed("Couldn't open ${source.displayName}.")
+                Log.w(TAG, "Page never became ready: ${describePage(webView)}")
+                return Result.Failed(
+                    "${source.displayName} didn't finish loading. Please try again."
+                )
             }
 
+            onProgress("Checking you're signed in…")
             if (isSignedOut(webView)) return Result.NotSignedIn
 
             // Both sites interrupt a fresh session with announcements and
@@ -98,6 +103,16 @@ class ProfileImporter(private val context: Context) {
             // check here would misread a profile that merely mentions it.
             if (reply.trim() == ProfileSource.NO_MEMORY_MARKER) {
                 Result.NoMemory
+            } else if (hitUsageLimit(webView)) {
+                // A quota wall looks exactly like a failed import from here:
+                // the prompt sends, the button click succeeds, and no answer
+                // ever arrives. Naming it saves the user debugging an app that
+                // is working correctly.
+                Result.Failed(
+                    "Your ${source.displayName} account has hit its usage limit, " +
+                        "so it couldn't answer. Try again later, or switch model " +
+                        "in ${source.displayName} and retry."
+                )
             } else if (reply.trim().length < MIN_PROFILE_CHARS) {
                 // A handful of characters is not a profile. This caught a run
                 // that returned just "ChatGPT said:" — the page chrome — after
@@ -359,6 +374,23 @@ class ProfileImporter(private val context: Context) {
         }
     }
 
+    /**
+     * Whether the page is showing a quota or billing wall.
+     *
+     * Matched on the phrases both sites use when they refuse to generate.
+     * Deliberately specific: a profile that merely mentions the word "limit"
+     * must not be mistaken for one.
+     */
+    private suspend fun hitUsageLimit(webView: WebView): Boolean {
+        val text = js(
+            webView,
+            "(function(){try{return (document.body?document.body.innerText:'')" +
+                ".toLowerCase();}catch(e){return '';}})()"
+        ).lowercase()
+
+        return LIMIT_PHRASES.any { text.contains(it) }
+    }
+
     /** Polls until the composer exists, since it mounts after the page loads. */
     private suspend fun awaitComposer(webView: WebView): Boolean {
         var waited = 0L
@@ -452,25 +484,47 @@ class ProfileImporter(private val context: Context) {
                 // explicit send control too if one is present and enabled;
                 // sending twice is not a risk because the box is cleared by
                 // the first send, so a second click has nothing to submit.
-                // Match on the visible label as well as the test id: the live
-                // button is labelled "Send prompt", and relying on a single
-                // data-testid meant a rename silently broke sending.
+                // Known send controls first, by the test ids both sites ship:
+                // ChatGPT uses send-button, Claude uses chat-input-send. These
+                // are exact, so they cannot collide with the other buttons on
+                // the page — a loose aria-label search was matching the wrong
+                // control on Claude, whose sidebar is full of buttons.
                 var btn = document.querySelector(
-                  'button[data-testid="send-button"], button[aria-label*="Send" i]');
+                  'button[data-testid="send-button"], ' +
+                  'button[data-testid="chat-input-send"], ' +
+                  'button[aria-label="Send message"], ' +
+                  'button[aria-label="Send prompt"]');
+
+                // Last resort: any enabled button whose label starts with
+                // "send". Checked for enabled-ness so a greyed-out control is
+                // never reported as a successful send.
                 if (!btn) {
                   var all = document.querySelectorAll('button');
                   for (var i = 0; i < all.length; i++) {
-                    var lbl = (all[i].getAttribute('aria-label') || '').toLowerCase();
-                    if (lbl.indexOf('send') !== -1) { btn = all[i]; break; }
+                    var lbl = (all[i].getAttribute('aria-label') || '')
+                      .trim().toLowerCase();
+                    if (lbl.indexOf('send') === 0 && !all[i].disabled) {
+                      btn = all[i]; break;
+                    }
                   }
                 }
-                if (btn && !btn.disabled) { btn.click(); return 'sent-click'; }
-                return 'sent';
+
+                if (btn && !btn.disabled) {
+                  btn.click();
+                  return 'sent-click';
+                }
+                return btn ? 'send-disabled' : 'no-send-button';
               } catch(e){ return 'err:'+e; }
             })()
             """.trimIndent()
         )
-        return sent.contains("sent")
+        // "sent-click" means the button was actually pressed; "sent" means
+        // Enter alone. Anything else — send-disabled, no-send-button — is a
+        // failure, and a bare contains("sent") would have matched
+        // "send-disabled" and called a greyed-out button a successful send.
+        Log.d(TAG, "Send result: $sent")
+        return sent.contains("sent-click") || sent.contains("'sent'") ||
+            sent.trim('"') == "sent"
     }
 
     /**
@@ -570,14 +624,33 @@ class ProfileImporter(private val context: Context) {
         }
     }
 
+    /**
+     * Runs JavaScript and returns its result, or "" if it does not answer.
+     *
+     * The timeout is the important part. evaluateJavascript's callback is only
+     * guaranteed to fire while the WebView's renderer is alive and willing —
+     * a backgrounded or detached view, or a renderer busy behind a challenge
+     * page, can simply never call back. Without a timeout the whole import
+     * coroutine parks forever on that one call, which is what left the screen
+     * frozen on "Opening a new chat…" with no error and no way forward.
+     *
+     * Returning "" on timeout is safe: every caller treats a non-"true" result
+     * as "not ready yet" and polls again, so a missed answer costs one cycle
+     * rather than the run.
+     */
     @SuppressLint("SetJavaScriptEnabled")
     private suspend fun js(webView: WebView, script: String): String =
-        withContext(Dispatchers.Main) {
-            suspendCancellableCoroutine { cont ->
-                webView.evaluateJavascript(script) { value ->
-                    if (cont.isActive) cont.resume(value ?: "")
+        withTimeoutOrNull(JS_TIMEOUT_MS) {
+            withContext(Dispatchers.Main) {
+                suspendCancellableCoroutine { cont ->
+                    webView.evaluateJavascript(script) { value ->
+                        if (cont.isActive) cont.resume(value ?: "")
+                    }
                 }
             }
+        } ?: run {
+            Log.w(TAG, "JS evaluation timed out")
+            ""
         }
 
     companion object {
@@ -591,6 +664,15 @@ class ProfileImporter(private val context: Context) {
          * anything the user actually uses — see [signOut].
          */
         const val SKIP_SIGN_OUT = true
+
+        /**
+         * Cap on a single evaluateJavascript call — see [js].
+         *
+         * Generous because reading a large page's innerText on a busy renderer
+         * genuinely takes a while, and a premature timeout here reads as a
+         * failed step rather than a slow one.
+         */
+        const val JS_TIMEOUT_MS = 10_000L
 
         const val PAGE_TIMEOUT_MS = 20_000L
 
@@ -621,7 +703,15 @@ class ProfileImporter(private val context: Context) {
         const val LOGOUT_GRACE_MS = 1_500L
         const val POLL_MS = 250L
         const val RENDER_GRACE_MS = 1_200L
-        const val TYPE_SETTLE_MS = 600L
+        /**
+         * Pause between typing and submitting.
+         *
+         * The send button starts disabled and only enables once the editor has
+         * processed the inserted text. Clicking too early hits a disabled
+         * control, which does nothing and reports no error — the prompt then
+         * sits in the composer unsent, which is exactly what it looked like.
+         */
+        const val TYPE_SETTLE_MS = 1_200L
 
         /** Long, because a thoughtful profile answer streams for a while. */
         const val REPLY_TIMEOUT_MS = 90_000L
@@ -634,6 +724,16 @@ class ProfileImporter(private val context: Context) {
         const val MIN_REPLY_CHARS = 400
 
         const val MAX_PROFILE_CHARS = 4_000
+
+        /** Phrases that mean the account cannot generate a reply right now. */
+        val LIMIT_PHRASES = listOf(
+            "buy usage credits",
+            "switch models to continue",
+            "usage limit",
+            "message limit",
+            "out of free messages",
+            "upgrade to continue"
+        )
 
         val SESSION_HINTS = listOf(
             "session", "sessionKey", "__Secure", "auth", "token"

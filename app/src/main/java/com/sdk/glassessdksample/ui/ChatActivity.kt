@@ -320,6 +320,8 @@ class ChatActivity : AppCompatActivity() {
         val host = (findViewById<android.view.ViewGroup>(android.R.id.content))?.getChildAt(0)
             ?: content
         val basePaddingTop = content.paddingTop
+        val basePaddingLeft = content.paddingLeft
+        val basePaddingRight = content.paddingRight
 
         androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(host) { _, insets ->
             val imeHeight = insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.ime()).bottom
@@ -331,10 +333,14 @@ class ChatActivity : AppCompatActivity() {
             // bar inset must not be added on top of the IME height or the composer
             // floats above the keyboard with a gap under it.
             val bottom = if (imeHeight > 0) imeHeight else bars.bottom
+            // Left/right matter in landscape and on devices that put the navigation
+            // bar on the side; without them the nav pill and composer run under it.
+            // Read from the captured base each pass — reading the LIVE padding would
+            // compound the inset on every dispatch (rotation, keyboard, multi-window).
             content.setPadding(
-                content.paddingLeft,
+                basePaddingLeft + bars.left,
                 basePaddingTop + bars.top,
-                content.paddingRight,
+                basePaddingRight + bars.right,
                 basePaddingBottom + bottom
             )
             // Hide the bottom nav while typing: it is 68dp of fixed height below the

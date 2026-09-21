@@ -259,11 +259,24 @@
             android:visibility="gone" />
 
         <!-- ============ BOTTOM NAVIGATION BAR ============ -->
+        <!--
+            bg_home_nav is a 40dp-radius PILL. Every other screen that uses it
+            (home, profile, settings, more, camera) gives it a 14dp margin all
+            round so the rounded shape reads as a floating pill. This screen had
+            no bottom margin at all, so the pill sat flush against the bottom of
+            the window with its curve cut off, jammed against the gesture bar —
+            and how bad that looked depended on each phone's navigation-bar
+            height, which is why it varied by device.
+
+            Side margins are not needed here: the parent column already supplies
+            18dp of horizontal padding.
+        -->
         <com.google.android.material.bottomnavigation.BottomNavigationView
             android:id="@+id/bottomNavigation"
             android:layout_width="match_parent"
             android:layout_height="68dp"
             android:layout_marginTop="8dp"
+            android:layout_marginBottom="14dp"
             android:background="@drawable/bg_home_nav"
             app:menu="@menu/menu_bottom_nav_mark1"
             app:itemIconTint="@color/home_nav_item_color"

@@ -138,6 +138,15 @@ class GeminiLiveService(
         // Upper bound on waiting for AudioTrack to play out its buffer, so a stalled
         // track cannot wedge the playback loop.
         private const val MAX_DRAIN_WAIT_MS = 3000L
+        // Budget used when HIGH_QUALITY_PLAYBACK is off — i.e. when there is no
+        // SCO/A2DP handover to protect and the only remaining job is to keep Imi's
+        // own tail out of the mic. The mic is shut for this whole wait, so the cap
+        // is deliberately small: a stalled track must not cost the user their next
+        // sentence. See waitForTrackToDrain().
+        private const val SHORT_DRAIN_WAIT_MS = 400L
+        // How many consecutive AudioRecord.read() errors to tolerate (at ~20ms
+        // apiece) before declaring the microphone dead instead of spinning on it.
+        private const val MAX_CONSECUTIVE_READ_ERRORS = 100
         // Extra settle time for A2DP's downstream buffering (headsets typically hold
         // 100-200 ms) before we suspend the profile by taking SCO back.
         private const val A2DP_TAIL_DRAIN_MS = 250L
@@ -435,11 +444,17 @@ class GeminiLiveService(
     /**
      * Whether the user's voice may cut IMI off mid-reply (barge-in).
      *
-     * Default OFF: while IMI is speaking it should only speak, not listen. The
-     * server-side VAD still fires speech_started on IMI's own voice bleeding back
-     * through the glasses mic, which truncated replies mid-sentence and looked
-     * like IMI randomly giving up on an answer. MainActivity had a flag for this
-     * but the service ignored it, so nothing actually honoured the setting.
+     * ⚠️ **OpenAI Realtime ONLY — this has NO effect on Gemini Live.**
+     *
+     * It is read in exactly one place: the `input_audio_buffer.speech_started`
+     * handler, which lives inside the GPT event dispatch. handleWebSocketMessage()
+     * returns early for GEMINI_LIVE before that block is ever reached, and
+     * getSavedModelProvider() always returns GEMINI_LIVE — so on every real user
+     * session this flag is dead.
+     *
+     * Interruption on Gemini is decided SERVER side and is controlled by
+     * `realtime_input_config.activity_handling` in the setup message (set to
+     * NO_INTERRUPTION), not by this flag. Do not "fix" barge-in by changing this.
      */
     @Volatile
     var allowBargeIn: Boolean = false
@@ -799,6 +814,9 @@ class GeminiLiveService(
                 // A previous session may have left frames buffered (e.g. it ended
                 // before setup landed). Start clean so we never replay old audio.
                 clearPreSetupAudio()
+                // Likewise: a session that ended mid-retry must not carry the latch
+                // into the next one and suppress its first rescue.
+                silentTurnRetried = false
 
                 // Initialize audio components
                 initializeAudioComponents()
@@ -1165,7 +1183,20 @@ class GeminiLiveService(
     private suspend fun waitForTrackToDrain() {
         val track = audioTrack ?: return
         try {
-            val deadline = System.currentTimeMillis() + MAX_DRAIN_WAIT_MS
+            // The 3s budget exists to protect the A2DP handover: don't suspend A2DP
+            // before the hardware has emitted the tail. With HIGH_QUALITY_PLAYBACK
+            // off, releaseScoForPlayback()/reacquireScoForListening() both return
+            // immediately — there IS no handover to protect, and the only thing this
+            // wait still does is hold the microphone shut (every frame is dropped
+            // while isAIPlaying). A stalled track then became a 3-second mic blackout
+            // and the user's next sentence vanished.
+            //
+            // Keep a short budget: it still stops the tail of Imi's own voice being
+            // captured as user speech. The loop exits early the moment the playback
+            // head catches up, so in the healthy case this costs nothing either way.
+            val budget = if (HIGH_QUALITY_PLAYBACK) MAX_DRAIN_WAIT_MS else SHORT_DRAIN_WAIT_MS
+            val startedAt = System.currentTimeMillis()
+            val deadline = startedAt + budget
             while (System.currentTimeMillis() < deadline) {
                 if (track.playState != AudioTrack.PLAYSTATE_PLAYING) break
                 // playbackHeadPosition is an unsigned frame counter that wraps; the
@@ -1173,6 +1204,12 @@ class GeminiLiveService(
                 val played = track.playbackHeadPosition.toLong() and 0xFFFFFFFFL
                 if (played >= totalFramesWritten) break
                 delay(10)
+            }
+            val waited = System.currentTimeMillis() - startedAt
+            if (waited >= budget) {
+                Log.w(TAG, "⏳ Drain wait hit its ${budget}ms cap — mic was shut that long")
+            } else {
+                Log.d(TAG, "⏳ Drain wait ${waited}ms (cap ${budget}ms)")
             }
             // A2DP adds its own buffering downstream of the track, so give the
             // headset a moment to emit the final frames before we suspend it.
@@ -1568,7 +1605,16 @@ class GeminiLiveService(
             )
             .setBufferSizeInBytes(inputBufferSize)
             .build()
-        
+
+        // AudioRecord.Builder.build() can hand back an UNINITIALISED object without
+        // throwing — after which every read() returns an error code forever and the
+        // user is simply never heard, with nothing in the log to say why.
+        if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
+            Log.e(TAG, "🎙️❌ AudioRecord failed to initialise (state=${audioRecord?.state}) — " +
+                "the microphone will not produce any audio this session")
+            callbacks.onError("Microphone could not be opened")
+        }
+
         // 6. Try to set preferred device to Bluetooth SCO (API 23+)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             try {
@@ -1595,8 +1641,16 @@ class GeminiLiveService(
                     val success = audioRecord?.setPreferredDevice(bluetoothDevice)
                     Log.d(TAG, "🎯 Set preferred device to: ${bluetoothDevice.productName}, success=$success")
                 } else {
-                    Log.d(TAG, "ℹ️ No Bluetooth SCO device found - will use default routing")
-                    Log.d(TAG, "   (Android will auto-route to Bluetooth when available)")
+                    // This is a FAILURE, not a note. startBluetoothSco() is async and
+                    // the Mark 1 path only waits a fixed 80ms, so this enumeration can
+                    // run before the link is up. When it does, the mic silently stays
+                    // on the PHONE: the session is healthy, the UI says "Listening",
+                    // and the user's voice is simply never in the audio — which is
+                    // exactly the "it shows listening but doesn't capture me" report.
+                    // Logged at WARN with the candidates so it is greppable.
+                    val seen = devices.joinToString { "${it.productName}(type=${it.type})" }
+                    Log.w(TAG, "🎙️❌ MIC NOT ON GLASSES — no Bluetooth SCO device found, " +
+                        "falling back to the phone mic. Candidates seen: [$seen]")
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to set preferred device: ${e.message}")
@@ -1907,7 +1961,13 @@ class GeminiLiveService(
                 ) {
                     triedGeminiFallback = true
                     activeGeminiModel = GEMINI_MODEL_FALLBACK
-                    Log.w(TAG, "⚠️ Setup rejected ($code: $reason) - retrying with $activeGeminiModel")
+                    // Loud, because this path silently changes which model is live.
+                    // A malformed setup key lands here and the session then WORKS on
+                    // a different model — so a broken config looks like a pass unless
+                    // this is obvious in the log.
+                    Log.e(TAG, "⚠️🔻 SETUP REJECTED ($code: $reason) — falling back to " +
+                        "$activeGeminiModel. If a setup key was just changed, THAT is " +
+                        "the cause and this session is NOT running the intended model.")
                     this@GeminiLiveService.webSocket = null
                     isSetupComplete.set(false)
                     scope.launch {
@@ -2484,6 +2544,23 @@ $visionInstruction${userProfileBlock()}"""
                     // text is empty and nothing can be saved to history.
                     "input_audio_transcription" to mapOf<String, Any>(),
                     "output_audio_transcription" to mapOf<String, Any>(),
+                    // 🔇 NEVER let the server interrupt Imi mid-reply.
+                    //
+                    // activity_handling defaults to START_OF_ACTIVITY_INTERRUPTS, so
+                    // Gemini's own VAD cut the model off the instant it heard anything
+                    // — including Imi's OWN voice bleeding back through the glasses
+                    // mic. That is what made replies stop dead mid-sentence, and no
+                    // client-side flag could prevent it: the decision is made server
+                    // side and arrives as serverContent.interrupted, which the client
+                    // honours unconditionally.
+                    //
+                    // automatic_activity_detection is deliberately NOT disabled —
+                    // leaving VAD on is what still produces end-of-turn detection.
+                    // Disabling it would require us to send explicit activityStart /
+                    // activityEnd signals, which the capture loop does not do.
+                    "realtime_input_config" to mapOf(
+                        "activity_handling" to "NO_INTERRUPTION"
+                    ),
                     // google_search is Google's OWN server-side grounding: Gemini runs
                     // the search on its infrastructure and folds the results straight
                     // into the spoken answer. That is the right way to answer "what's
@@ -2505,6 +2582,12 @@ $visionInstruction${userProfileBlock()}"""
                 )
             )
             val json = gson.toJson(setupMessage)
+            // Log the config WITHOUT the tool declarations, which are long enough to
+            // push everything else past any sane truncation limit. The session config
+            // is the part worth seeing when diagnosing a rejected setup.
+            Log.d(TAG, "📤 Sending Gemini setup (config): realtime_input_config=" +
+                "${gson.toJson(setupMessage["setup"].let { (it as? Map<*, *>)?.get("realtime_input_config") })}" +
+                " model=$activeGeminiModel")
             Log.d(TAG, "📤 Sending Gemini setup: ${json.take(500)}...")
             webSocket.send(json)
         }
@@ -2519,6 +2602,14 @@ $visionInstruction${userProfileBlock()}"""
         scope.launch(audioCaptureDispatcher) {
             try {
                 audioRecord?.startRecording()
+                // startRecording() is void — it fails silently. Confirm the state
+                // actually changed, or we spend the session reading from a mic that
+                // was never started.
+                if (audioRecord?.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
+                    Log.e(TAG, "🎙️❌ startRecording() did not take effect " +
+                        "(state=${audioRecord?.recordingState}) — no audio will be captured")
+                    callbacks.onError("Microphone did not start")
+                }
                 isRecording.set(true)
                 // Fresh VAD state per session, so a previous conversation cannot
                 // leave us "mid-turn" and chime on the first frame of this one.
@@ -2534,6 +2625,7 @@ $visionInstruction${userProfileBlock()}"""
                 var chunkCount = 0
                 var totalBytes = 0
                 var halfDuplexSkips = 0
+                var consecutiveReadErrors = 0
 
                 while (isRecording.get()) {
                     val readSize = audioRecord?.read(buffer, 0, bufferSize) ?: 0
@@ -2659,10 +2751,43 @@ $visionInstruction${userProfileBlock()}"""
                         if (chunkCount % 100 == 0) {
                             Log.d(TAG, "📤 Sent $chunkCount audio chunks (${totalBytes/1024} KB total) | Half-duplex skips: $halfDuplexSkips")
                         }
+                        consecutiveReadErrors = 0
+                    } else if (readSize < 0) {
+                        // A NEGATIVE read is an AudioRecord error code, not silence.
+                        // There was no branch for this: the loop simply spun on it
+                        // forever, burning CPU, capturing nothing, and logging nothing
+                        // — the session looks perfectly healthy while the user is
+                        // never heard. Exactly the "it says listening but doesn't
+                        // capture me" report.
+                        consecutiveReadErrors++
+                        val why = when (readSize) {
+                            AudioRecord.ERROR_INVALID_OPERATION -> "ERROR_INVALID_OPERATION (not recording)"
+                            AudioRecord.ERROR_BAD_VALUE -> "ERROR_BAD_VALUE"
+                            AudioRecord.ERROR_DEAD_OBJECT -> "ERROR_DEAD_OBJECT (mic lost)"
+                            else -> "ERROR ($readSize)"
+                        }
+                        if (consecutiveReadErrors == 1 || consecutiveReadErrors % 50 == 0) {
+                            Log.e(TAG, "🎙️❌ AudioRecord.read failed: $why " +
+                                "(x$consecutiveReadErrors) — microphone is not producing audio")
+                        }
+                        // ERROR_DEAD_OBJECT never recovers on its own; anything else
+                        // gets a bounded number of retries before we stop pretending.
+                        if (readSize == AudioRecord.ERROR_DEAD_OBJECT ||
+                            consecutiveReadErrors >= MAX_CONSECUTIVE_READ_ERRORS
+                        ) {
+                            Log.e(TAG, "🎙️❌ Giving up on the microphone after $consecutiveReadErrors errors")
+                            callbacks.onError("Microphone stopped working ($why)")
+                            break
+                        }
+                        // Never spin flat out on a failing read.
+                        delay(20)
                     }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Error in audio capture: ${e.message}", e)
+                // Log the exception TYPE — this path kills capture permanently and
+                // ends the whole conversation, so knowing which exception does it
+                // matters more than the message alone.
+                Log.e(TAG, "Error in audio capture: ${e.javaClass.simpleName}: ${e.message}", e)
                 callbacks.onError("Audio capture error: ${e.message}")
             }
         }
@@ -2800,8 +2925,15 @@ $visionInstruction${userProfileBlock()}"""
                         // and re-pinning below while SCO was still up chose the wrong
                         // device. Let the route settle, then pin to the A2DP endpoint
                         // that is only now enumerable.
-                        delay(ROUTE_SETTLE_MS)
-                        repinPlaybackToA2dp()
+                        //
+                        // …but ONLY when there is actually a route change to settle.
+                        // With HIGH_QUALITY_PLAYBACK off, releaseScoForPlayback() above
+                        // returned without touching anything, so this delay settles
+                        // nothing and just adds latency to the front of every reply.
+                        if (HIGH_QUALITY_PLAYBACK) {
+                            delay(ROUTE_SETTLE_MS)
+                            repinPlaybackToA2dp()
+                        }
                         callbacks.onAudioPlaybackStart()
                         lastAudioTime = System.currentTimeMillis()
                         val why = if (flushNow) "short-reply flush after ${waitedMs}ms"
@@ -3170,6 +3302,12 @@ $visionInstruction${userProfileBlock()}"""
             if (serverContent != null) {
                 val turnComplete = serverContent["turnComplete"] as? Boolean ?: false
                 val interrupted = serverContent["interrupted"] as? Boolean ?: false
+                // 🔎 The single decisive signal for the NO_INTERRUPTION fix. If this
+                // ever fires, the server is still cutting Imi off — meaning the
+                // realtime_input_config key was rejected or silently ignored.
+                if (interrupted) {
+                    Log.w(TAG, "✂️ SERVER INTERRUPTED the reply — NO_INTERRUPTION not in effect")
+                }
                 // Gemini sends generationComplete when it has finished producing
                 // this turn's audio, usually a moment before turnComplete.
                 val generationComplete = serverContent["generationComplete"] as? Boolean ?: false
@@ -3186,6 +3324,18 @@ $visionInstruction${userProfileBlock()}"""
                 val inputTranscription = serverContent["inputTranscription"] as? Map<*, *>
                 val inputText = inputTranscription?.get("text") as? String
                 if (!inputText.isNullOrEmpty()) {
+                    // A new user utterance is arriving, so this is a fresh turn and
+                    // it deserves its own rescue attempt.
+                    //
+                    // silentTurnRetried was only ever cleared on the normal
+                    // turn-complete path, which the retry itself skips via an early
+                    // return. So if a retried turn never completed, the flag stayed
+                    // true and EVERY later silent turn in the session was denied a
+                    // rescue — "many times it does not reply at all".
+                    if (currentInputTranscription.isEmpty() && silentTurnRetried) {
+                        Log.d(TAG, "🔄 New user turn — clearing the silent-turn retry latch")
+                        silentTurnRetried = false
+                    }
                     currentInputTranscription.append(inputText)
                     // NOTE: the processing chime is deliberately NOT triggered here.
                     // inputTranscription arrives only after Gemini has received and

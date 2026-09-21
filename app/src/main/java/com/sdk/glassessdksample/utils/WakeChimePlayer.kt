@@ -57,8 +57,40 @@ object WakeChimePlayer {
 
     private var soundPool: SoundPool? = null
     private var soundId: Int = 0
+    // Written on the SoundPool load-complete thread, read on the caller thread —
+    // without @Volatile the caller can keep seeing a stale false and never play.
+    @Volatile
     private var loaded = false
     private val handler = Handler(Looper.getMainLooper())
+
+    /**
+     * Set when a wake arrives while the sample is still decoding, so the chime can
+     * be played the instant loading finishes instead of being dropped. Holds the
+     * request time: a wake from several seconds ago is stale and must not chime
+     * late, on top of whatever the user is now saying.
+     */
+    @Volatile
+    private var pendingPlayRequestedAtMs = 0L
+
+    /** How late a deferred chime may still play after the wake that asked for it. */
+    private const val PENDING_PLAY_MAX_AGE_MS = 1_000L
+
+    /**
+     * When the chime last actually started sounding.
+     *
+     * TWO independent callers fire on a single wake — the detector itself
+     * (HeyImiWakeWordDetector -> WakeChime.play) and the Activity
+     * (playChimeThenStartConversation) — roughly 13 ms apart. The pool is built
+     * with setMaxStreams(1), so the second play EVICTED the first 13 ms in and the
+     * user heard a click instead of a 2.35 s chime, i.e. "no wake sound at all".
+     * A play that lands while the chime is already sounding is a duplicate of the
+     * same wake and must be ignored, not restarted.
+     */
+    @Volatile
+    private var lastPlayStartedAtMs = 0L
+
+    /** Plays closer together than this belong to the same wake. */
+    private const val DUPLICATE_PLAY_WINDOW_MS = 1_500L
 
     /**
      * Decode the chime into memory. Safe to call repeatedly; only the first call
@@ -78,13 +110,42 @@ object WakeChimePlayer {
                 .build()
 
             val pool = SoundPool.Builder()
-                .setMaxStreams(1)
+                // 2, not 1: with a single stream any second play() EVICTS the one
+                // already sounding. The duplicate guard in play() is the real fix,
+                // but this means a play that slips past it overlaps harmlessly
+                // instead of truncating the chime to a click.
+                .setMaxStreams(2)
                 .setAudioAttributes(attrs)
                 .build()
 
             pool.setOnLoadCompleteListener { _, _, status ->
                 loaded = status == 0
-                if (!loaded) Log.w(TAG, "Wake chime failed to load (status=$status)")
+                if (!loaded) {
+                    Log.w(TAG, "Wake chime failed to load (status=$status)")
+                    return@setOnLoadCompleteListener
+                }
+                // A wake arrived mid-decode. Previously that chime was simply lost:
+                // play() called pool.play() on an unloaded sample (a guaranteed
+                // no-op) and gave up, which is why the first "Hey IMI" after a cold
+                // start so often had no sound. Play it now, if it is still recent
+                // enough to belong to that wake.
+                val requestedAt = pendingPlayRequestedAtMs
+                pendingPlayRequestedAtMs = 0L
+                if (requestedAt == 0L) return@setOnLoadCompleteListener
+                val age = System.currentTimeMillis() - requestedAt
+                if (age > PENDING_PLAY_MAX_AGE_MS) {
+                    Log.w(TAG, "Deferred wake chime dropped — ${age}ms stale")
+                    return@setOnLoadCompleteListener
+                }
+                Log.d(TAG, "Wake chime finished loading after ${age}ms — playing now")
+                soundPool?.let { p ->
+                    val sid = p.play(soundId, 1f, 1f, 1, 0, 1f)
+                    if (sid == 0) {
+                        Log.w(TAG, "SoundPool refused the deferred wake chime")
+                    } else {
+                        lastPlayStartedAtMs = System.currentTimeMillis()
+                    }
+                }
             }
 
             soundId = pool.load(context.applicationContext, R.raw.wake_chime, 1)
@@ -116,22 +177,36 @@ object WakeChimePlayer {
         handler.postDelayed({ once() }, watchdog)
 
         try {
-            preload(context)
-            val pool = soundPool
-            if (pool == null || !loaded) {
-                // Preload may still be decoding on a cold first wake. Rather than
-                // dropping the chime, let the watchdog start the conversation and
-                // play whatever is ready.
-                Log.w(TAG, "Wake chime not ready yet (loaded=$loaded)")
-                if (pool != null && soundId != 0) pool.play(soundId, 1f, 1f, 1, 0, 1f)
+            // Same wake, second caller: let the chime that is already sounding
+            // finish rather than restarting (and on a 1-stream pool, truncating)
+            // it. The callback still fires, so the conversation start is unaffected.
+            val sinceLastPlay = System.currentTimeMillis() - lastPlayStartedAtMs
+            if (lastPlayStartedAtMs != 0L && sinceLastPlay < DUPLICATE_PLAY_WINDOW_MS) {
+                Log.d(TAG, "Wake chime already sounding (${sinceLastPlay}ms ago) — not restarting it")
                 if (!waitForChime) once()
                 return
             }
 
+            preload(context)
+
             // Raise the voice-call stream if it is muted or near-silent, otherwise
             // the chime plays correctly but inaudibly - indistinguishable from the
-            // routing failure this class exists to fix.
+            // routing failure this class exists to fix. Done BEFORE the readiness
+            // check: it used to sit below it, so the cold-start path — the one that
+            // most needs help — skipped it entirely.
             ensureAudibleVolume(context)
+
+            val pool = soundPool
+            if (pool == null || !loaded) {
+                // Still decoding on a cold first wake. Calling pool.play() here is
+                // pointless (an unloaded sample returns streamId 0 and makes no
+                // sound), so instead ask the load-complete listener to play it the
+                // moment it is ready, and let the conversation start meanwhile.
+                Log.w(TAG, "Wake chime not ready yet (loaded=$loaded) — will play on load")
+                pendingPlayRequestedAtMs = System.currentTimeMillis()
+                if (!waitForChime) once()
+                return
+            }
 
             val streamId = pool.play(soundId, 1f, 1f, 1, 0, 1f)
             if (streamId == 0) {
@@ -139,6 +214,8 @@ object WakeChimePlayer {
                 once()
                 return
             }
+            lastPlayStartedAtMs = System.currentTimeMillis()
+            Log.d(TAG, "🔔 Wake chime playing (streamId=$streamId)")
 
             if (!waitForChime) once()
         } catch (e: Exception) {

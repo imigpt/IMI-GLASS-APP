@@ -693,14 +693,30 @@ class HotHelper private constructor(private val context: Context) {
         startPendingSinceMs = 0L
         unregisterScoReceiverForStart()
 
+        // ALWAYS tear the detector down — never trust the "is it listening?" flag
+        // as permission to skip this.
+        //
+        // This used to early-return when activeDetectorIsListening() was false. That
+        // flag and the real AudioRecord can desync (a failed/partial start, a killed
+        // listening thread, a stop racing a start), and whenever they did the
+        // AudioRecord was left OPEN with no remaining path to close it: the mic
+        // stayed held for the life of the process, the phone showed the mic-active
+        // indicator, and no other app could record until IMI was force-stopped.
+        //
+        // The underlying detector stop() is idempotent (it null-checks and swallows),
+        // so calling it when genuinely already stopped is harmless. Releasing the
+        // microphone is far more important than saving a redundant call.
         val detectorListening = activeDetectorIsListening()
-        if (!detectorListening) return
         try {
             stopActiveDetector()
             synchronized(bufferLock) {
                 audioBuffer.clear()
             }
-            Log.i(TAG, "🛑 ${activeEngine.displayName} detector stopped")
+            if (detectorListening) {
+                Log.i(TAG, "🛑 ${activeEngine.displayName} detector stopped")
+            } else {
+                Log.i(TAG, "🛑 ${activeEngine.displayName} detector stop forced (flag said idle) — mic released")
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Error stopping wake detector (${activeEngine.displayName})", e)
         }
@@ -713,10 +729,21 @@ class HotHelper private constructor(private val context: Context) {
         }
     }
 
+    /**
+     * Stops BOTH detectors, not just the currently-selected one.
+     *
+     * Each detector owns its own AudioRecord. Stopping only [activeEngine] meant
+     * that if the engine was ever switched while a detector was running, the
+     * now-inactive one kept its microphone open with nothing left that would ever
+     * close it. Both stop() implementations are null-safe and idempotent, so
+     * stopping the one that was already idle costs nothing.
+     */
     private fun stopActiveDetector() {
-        when (activeEngine) {
-            WakeWordEngine.CUSTOM_ONNX -> heyImiDetector?.stop()
-            WakeWordEngine.SNOWBOY -> snowboyDetector?.stop()
+        try { heyImiDetector?.stop() } catch (e: Exception) {
+            Log.w(TAG, "Error stopping ONNX detector: ${e.message}")
+        }
+        try { snowboyDetector?.stop() } catch (e: Exception) {
+            Log.w(TAG, "Error stopping Snowboy detector: ${e.message}")
         }
     }
 

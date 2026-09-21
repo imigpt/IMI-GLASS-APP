@@ -273,8 +273,33 @@ class ListeningService : Service() {
                 return START_STICKY
             }
             wakeWordEnabled = false
+            parkedForDisconnect = false
             endBackgroundConversation()
             try { HotHelper.getInstance(applicationContext).stop() } catch (_: Exception) {}
+            // The user asked for this to stop, so make sure the microphone is
+            // genuinely released rather than trusting one call — a stuck detector
+            // here is what makes "Stop" look like it did nothing.
+            try {
+                if (HotHelper.getInstance(applicationContext).isWakeDetectorActive()) {
+                    Log.e(TAG, "🎙️❌ Detector still active after Stop — forcing again")
+                    HotHelper.getInstance(applicationContext).stop()
+                }
+            } catch (_: Exception) {}
+            // Also stop the Gemini keep-alive shell, or its "IMI AI is active"
+            // notification stays up claiming we are still listening. The shared
+            // flag stops the two services bouncing the Stop back and forth.
+            if (!GeminiBackgroundService.stopPropagating) {
+                GeminiBackgroundService.stopPropagating = true
+                try {
+                    startService(
+                        Intent(this, GeminiBackgroundService::class.java)
+                            .apply { action = GeminiBackgroundService.ACTION_STOP }
+                    )
+                } catch (e: Exception) {
+                    Log.w(TAG, "Could not stop GeminiBackgroundService: ${e.message}")
+                }
+                // Not reset here — see GeminiBackgroundService.onStartCommand for why.
+            }
             wakeLock?.let { if (it.isHeld) it.release() }
             stopSelf()
             return START_NOT_STICKY
@@ -577,6 +602,16 @@ class ListeningService : Service() {
         // depend on a task queued before the park.
         mainHandler.removeCallbacksAndMessages(null)
         try { HotHelper.getInstance(applicationContext).stop() } catch (_: Exception) {}
+        // Verify the microphone actually went away. Parking is the whole point of
+        // this path — if the detector is somehow still holding the mic the phone
+        // keeps showing the mic-active indicator and no OTHER app can record, which
+        // is a far more visible failure than the wake word simply not working.
+        try {
+            if (HotHelper.getInstance(applicationContext).isWakeDetectorActive()) {
+                Log.e(TAG, "🎙️❌ Detector STILL active after stop() — forcing a second stop")
+                HotHelper.getInstance(applicationContext).stop()
+            }
+        } catch (_: Exception) {}
         try { wakeLock?.let { if (it.isHeld) it.release() } } catch (_: Exception) {}
         updateNotification(listening = false)
     }
