@@ -1,6 +1,8 @@
 package com.sdk.glassessdksample.ui.profile
 
 import android.content.Context
+import android.content.SharedPreferences
+import android.util.Log
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.sdk.glassessdksample.ui.sync.ImportedProfileSync
@@ -30,17 +32,48 @@ class UserProfileStore(context: Context) {
 
     private val appContext = context.applicationContext
 
-    private val prefs by lazy {
-        val key = MasterKey.Builder(context)
-            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-            .build()
-        EncryptedSharedPreferences.create(
-            context,
-            PREFS_NAME,
-            key,
-            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-        )
+    /**
+     * Null when the encrypted store could not be opened on this device.
+     *
+     * androidx.security:security-crypto (still alpha) is known to throw on
+     * some OEM keystores — a corrupted key entry, a Keystore wiped by a
+     * system update, or ciphertext left behind by a previous install signed
+     * with a different key. Any of those turns "open the profile screen"
+     * into an app crash unless it's caught here. [openStore] retries once
+     * after clearing the broken file, since a stale key/ciphertext mismatch
+     * is the common case and self-heals; anything else degrades to "IMI
+     * doesn't know anything about you yet" instead of a crash.
+     */
+    private val prefs: SharedPreferences? by lazy { openStore() }
+
+    private fun openStore(retrying: Boolean = false): SharedPreferences? {
+        return try {
+            val key = MasterKey.Builder(appContext)
+                .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                .build()
+            EncryptedSharedPreferences.create(
+                appContext,
+                PREFS_NAME,
+                key,
+                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not open encrypted profile store: ${e.message}")
+            if (!retrying) {
+                // Most failures here are a key/ciphertext mismatch left over
+                // from a previous install or a keystore reset. Deleting the
+                // file and trying once more clears that state; if it still
+                // fails, the caller gets null instead of a crash.
+                try {
+                    appContext.deleteSharedPreferences(PREFS_NAME)
+                } catch (_: Exception) {
+                }
+                openStore(retrying = true)
+            } else {
+                null
+            }
+        }
     }
 
     /** One imported profile, as the user approved it. */
@@ -62,9 +95,10 @@ class UserProfileStore(context: Context) {
      * assistant is better for having both.
      */
     fun load(source: ProfileSource): Profile? {
-        val body = prefs.getString(keyBody(source), null)
+        val store = prefs ?: return null
+        val body = store.getString(keyBody(source), null)
             ?.takeIf { it.isNotBlank() } ?: return null
-        return Profile(body, source, prefs.getLong(keyImportedAt(source), 0L))
+        return Profile(body, source, store.getLong(keyImportedAt(source), 0L))
     }
 
     /** Every imported profile, newest first. */
@@ -82,25 +116,25 @@ class UserProfileStore(context: Context) {
     fun save(body: String, source: ProfileSource) {
         val trimmed = body.trim()
         val importedAt = System.currentTimeMillis()
-        prefs.edit()
-            .putString(keyBody(source), trimmed)
-            .putLong(keyImportedAt(source), importedAt)
-            .apply()
+        prefs?.edit()
+            ?.putString(keyBody(source), trimmed)
+            ?.putLong(keyImportedAt(source), importedAt)
+            ?.apply()
         ImportedProfileSync.pushProfile(appContext, trimmed, source, importedAt)
     }
 
     /** Forgets one source's profile, leaving any others intact. */
     fun clear(source: ProfileSource) {
-        prefs.edit()
-            .remove(keyBody(source))
-            .remove(keyImportedAt(source))
-            .apply()
+        prefs?.edit()
+            ?.remove(keyBody(source))
+            ?.remove(keyImportedAt(source))
+            ?.apply()
         ImportedProfileSync.pushDelete(appContext, source)
     }
 
     /** Forgets everything. The user's "delete what you know about me". */
     fun clearAll() {
-        prefs.edit().clear().apply()
+        prefs?.edit()?.clear()?.apply()
         ProfileSource.entries.forEach { ImportedProfileSync.pushDelete(appContext, it) }
     }
 
@@ -148,6 +182,7 @@ END OF USER BACKGROUND.
     }
 
     private companion object {
+        const val TAG = "UserProfileStore"
         const val PREFS_NAME = "user_profile_secure_prefs"
         const val KEY_BODY = "profile_body"
         const val KEY_SOURCE = "profile_source"

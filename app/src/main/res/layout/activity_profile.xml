@@ -362,6 +362,41 @@
                         android:tint="#66FFFFFF" />
                 </LinearLayout>
 
+                <!-- Help & Support -->
+                <LinearLayout
+                    android:id="@+id/helpSupportButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="58dp"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:background="?attr/selectableItemBackground">
+
+                    <ImageView
+                        android:layout_width="38dp"
+                        android:layout_height="38dp"
+                        android:src="@drawable/ic_help"
+                        android:background="@drawable/bg_icon_circle"
+                        android:padding="9dp"
+                        android:tint="#FFFFFF" />
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="Help &amp; Support"
+                        android:textColor="#FFFFFF"
+                        android:textSize="15sp"
+                        android:layout_marginStart="14dp" />
+
+                    <ImageView
+                        android:layout_width="16dp"
+                        android:layout_height="16dp"
+                        android:src="@drawable/ic_forward"
+                        android:tint="#66FFFFFF" />
+                </LinearLayout>
+
                 <!-- Rate Us -->
                 <LinearLayout
                     android:id="@+id/rateUsButton"

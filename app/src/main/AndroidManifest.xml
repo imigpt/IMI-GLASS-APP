@@ -235,6 +235,12 @@
             android:launchMode="singleTop"
             android:label="Profile" />
 
+        <!-- HELP & SUPPORT SCREEN -->
+        <activity
+            android:name=".HelpSupportActivity"
+            android:exported="false"
+            android:label="Help &amp; Support" />
+
         <!-- GEMINI LIVE CONVERSATION -->
         <activity 
             android:name=".ui.GeminiLiveActivity"

@@ -141,6 +141,11 @@ class ProfileActivity : AppCompatActivity() {
             // In a real app, you'd apply the theme change here
         }
 
+        // Help & Support button
+        binding.helpSupportButton.setOnClickListener {
+            startActivity(Intent(this, HelpSupportActivity::class.java))
+        }
+
         // Rate Us button
         binding.rateUsButton.setOnClickListener {
             showRateUsDialog()
@@ -159,13 +164,13 @@ class ProfileActivity : AppCompatActivity() {
 
         // Privacy Policy link
         binding.privacyLink.setOnClickListener {
-            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.imi.glass/privacy"))
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.imiglasses.com/privacy-policy"))
             startActivity(intent)
         }
 
         // About Us link
         binding.aboutLink.setOnClickListener {
-            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.imi.glass/about"))
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.imiglasses.com/about-us"))
             startActivity(intent)
         }
 
