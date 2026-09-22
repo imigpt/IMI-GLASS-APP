@@ -38,6 +38,19 @@ enum class ProfileSource(
     );
 
     /**
+     * What the backend's `source` enum expects: exactly "CHATGPT" or "CLAUDE".
+     *
+     * This happens to equal [name] today, but it is spelled out so renaming a
+     * case is a compile error here rather than a silent 400 at runtime — the
+     * server's schema is a strict enum and rejects any other casing.
+     */
+    val wireValue: String
+        get() = when (this) {
+            CHATGPT -> "CHATGPT"
+            CLAUDE -> "CLAUDE"
+        }
+
+    /**
      * The prompt asked in the fresh chat.
      *
      * Written to pull from the assistant's MEMORY rather than the current

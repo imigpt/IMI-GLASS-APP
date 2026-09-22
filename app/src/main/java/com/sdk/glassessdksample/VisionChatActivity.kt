@@ -331,6 +331,11 @@ class VisionChatActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         setContentView(R.layout.activity_vision_chat)
         SystemBarsInsets.apply(this)
 
+        // Vision Chat is reached from More, so it keeps the More tab lit.
+        findViewById<com.google.android.material.bottomnavigation.BottomNavigationView>(
+            R.id.bottomNavigation
+        )?.let { com.sdk.glassessdksample.ui.BottomNavManager.setup(it, R.id.nav_more, this) }
+
         // ⚡ PRE-WARM: Start server & network immediately on open
         // so by the time user captures a photo, connection is ready (no cold-start delay)
         mainScope.launch(Dispatchers.IO) {

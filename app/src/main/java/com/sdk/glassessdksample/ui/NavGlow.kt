@@ -15,7 +15,7 @@ import com.sdk.glassessdksample.R
  * so it only ever lined up with the first tab. Instead we add a thin gradient
  * strip as an overlay child of the nav bar ([BottomNavigationView] is a
  * [FrameLayout]) and move it to sit above whichever item is selected. Shared by
- * both [BottomNavManager] and [Mark1BottomNavManager].
+ * [BottomNavManager].
  */
 internal object NavGlow {
 
@@ -26,6 +26,23 @@ internal object NavGlow {
     fun positionFor(bottomNav: BottomNavigationView, selectedItemId: Int) {
         bottomNav.post {
             val itemView = bottomNav.findViewById<View>(selectedItemId) ?: return@post
+
+            // Before the pill has laid out, every item measures 0 wide and the
+            // strip would be parked at the far left. Retry once laid out.
+            if (itemView.width == 0) {
+                itemView.addOnLayoutChangeListener(
+                    object : View.OnLayoutChangeListener {
+                        override fun onLayoutChange(
+                            v: View, l: Int, t: Int, r: Int, b: Int,
+                            ol: Int, ot: Int, or_: Int, ob: Int
+                        ) {
+                            v.removeOnLayoutChangeListener(this)
+                            positionFor(bottomNav, selectedItemId)
+                        }
+                    }
+                )
+                return@post
+            }
 
             val glow = bottomNav.findViewWithTag<View>(GLOW_TAG)
                 ?: View(bottomNav.context).apply {

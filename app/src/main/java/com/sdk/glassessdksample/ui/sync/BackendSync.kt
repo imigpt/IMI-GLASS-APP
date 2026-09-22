@@ -55,6 +55,10 @@ object BackendSync {
             } catch (e: Exception) {
                 Log.w(TAG, "syncOnLaunch failed: ${e.message}")
             }
+            // ChatGPT/Claude profiles imported while signed out, or whose upload
+            // failed at save time. Runs on its own executor and no-ops when the
+            // backend already has them.
+            ImportedProfileSync.syncPending(ctx)
         }
     }
 

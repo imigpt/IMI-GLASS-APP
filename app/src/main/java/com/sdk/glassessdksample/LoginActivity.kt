@@ -56,6 +56,10 @@ class LoginActivity : AppCompatActivity() {
     }
 
     private fun goToNextScreen() {
+        // A ChatGPT/Claude profile imported before signing in has nowhere to go
+        // until now. No-op when there is nothing pending or it is already up.
+        com.sdk.glassessdksample.ui.sync.ImportedProfileSync.syncPending(applicationContext)
+
         // Onboarding screen hidden. A returning user already has a device saved,
         // so send them to it rather than making them pick again; only a first-time
         // login (nothing saved) sees the selector.

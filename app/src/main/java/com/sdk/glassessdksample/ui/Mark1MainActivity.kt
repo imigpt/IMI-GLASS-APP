@@ -1,5 +1,6 @@
 package com.sdk.glassessdksample.ui
 
+import androidx.core.view.updateLayoutParams
 import android.Manifest
 import android.animation.AnimatorSet
 import android.animation.ObjectAnimator
@@ -226,7 +227,7 @@ class Mark1MainActivity : AppCompatActivity(), GeminiLiveService.GeminiLiveCallb
             },
             ContextCompat.RECEIVER_NOT_EXPORTED
         )
-        binding.bottomNavigation.selectedItemId = R.id.nav_home
+        BottomNavManager.restoreSelection(binding.bottomNavigation, R.id.nav_home)
         if (skipNextBleGateCheck) {
             skipNextBleGateCheck = false
             // Warm wake path: the Activity was alive in the background, so the BLE
@@ -340,7 +341,7 @@ class Mark1MainActivity : AppCompatActivity(), GeminiLiveService.GeminiLiveCallb
     }
 
     private fun setupBottomNav() {
-        Mark1BottomNavManager.setup(this, binding.bottomNavigation, R.id.nav_home)
+        BottomNavManager.setup(binding.bottomNavigation, R.id.nav_home, this)
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -429,6 +430,31 @@ class Mark1MainActivity : AppCompatActivity(), GeminiLiveService.GeminiLiveCallb
                 "Connect your IMI glasses via your phone's Bluetooth settings, then tap Retry."
             binding.btnBleGateRetry.text = "Retry"
         }
+    }
+
+    /**
+     * Pushes [view] below the status bar / display cutout.
+     *
+     * [SystemBarsInsets] installs its own listener on `android.R.id.content`'s
+     * first child and returns CONSUMED from it, which stops that dispatch from
+     * reaching any descendant — including a listener set directly on [view]
+     * here, since [layoutBleGate][R.id.layoutBleGate] sits inside that same
+     * child. Listening on the window's decor view instead — an ancestor of
+     * that child, not a descendant — sees the original dispatch first.
+     */
+    private fun pushBelowStatusBar(view: android.view.View) {
+        val extraMargin = resources.getDimensionPixelSize(R.dimen.dp_14)
+        androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(window.decorView) { _, insets ->
+            val bars = insets.getInsets(
+                androidx.core.view.WindowInsetsCompat.Type.statusBars() or
+                    androidx.core.view.WindowInsetsCompat.Type.displayCutout()
+            )
+            view.updateLayoutParams<android.view.ViewGroup.MarginLayoutParams> {
+                topMargin = bars.top + extraMargin
+            }
+            insets
+        }
+        androidx.core.view.ViewCompat.requestApplyInsets(window.decorView)
     }
 
     /**
@@ -1006,14 +1032,10 @@ class Mark1MainActivity : AppCompatActivity(), GeminiLiveService.GeminiLiveCallb
     // BATTERY UI
     // ─────────────────────────────────────────────────────────────────────────
 
+    /** Battery text is hidden on the home screen; this intentionally no-ops. */
     private fun updateBatteryChip(level: Int) {
-        binding.tvHomeBatteryLevel.text = "$level%"
-        binding.layoutBatteryChip.visibility = View.VISIBLE
-
-        val minutes = (level * 150) / 100
-        val h = minutes / 60
-        val m = minutes % 60
-        binding.tvDeviceBatteryTime.text = if (h > 0) "${h}h ${m}m" else "${m}m"
+        binding.layoutBatteryChip.visibility = View.GONE
+        binding.tvDeviceBatteryTime.visibility = View.GONE
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -1072,6 +1094,22 @@ class Mark1MainActivity : AppCompatActivity(), GeminiLiveService.GeminiLiveCallb
         binding.btnBleGateInfo.setOnClickListener {
             showConnectionGuideDialog()
         }
+
+        binding.btnBleGateBack.setOnClickListener {
+            // Mark1MainActivity is reached from several places (splash, login,
+            // profile's device switch, the wake service), but it's always the
+            // Mark 1 side of choosing a device. Whichever way the user got
+            // here, back on this gate means "let me pick a different device" —
+            // and DeviceSelectionActivity launches this screen with
+            // NEW_TASK | CLEAR_TASK, which wipes the back stack, so a plain
+            // onBackPressed() would just exit the app instead of going there.
+            startActivity(
+                Intent(this, DeviceSelectionActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+                }
+            )
+        }
+        pushBelowStatusBar(binding.btnBleGateBack)
 
         binding.btnGlassControls.setOnClickListener {
             animateTilePress(it) {

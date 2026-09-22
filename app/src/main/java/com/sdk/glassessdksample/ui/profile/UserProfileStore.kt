@@ -3,6 +3,7 @@ package com.sdk.glassessdksample.ui.profile
 import android.content.Context
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import com.sdk.glassessdksample.ui.sync.ImportedProfileSync
 
 /**
  * What the assistant knows about the user, imported from their own AI accounts.
@@ -19,9 +20,15 @@ import androidx.security.crypto.MasterKey
  * extraction, and "it's only on their phone" is not an argument that survives a
  * lost device. The extra cost is one dependency and a few milliseconds.
  *
- * Nothing here ever leaves the phone. There is no sync, by design.
+ * The encrypted local copy is the source of truth and is written first. Each
+ * save and delete is then mirrored to the user's own IMI account via
+ * [ImportedProfileSync] (PUT/DELETE /v1/profile/imported-summary), so support
+ * can see the profile on the admin panel alongside the rest of the account.
+ * The sync is best-effort: it never blocks a save and never fails one.
  */
 class UserProfileStore(context: Context) {
+
+    private val appContext = context.applicationContext
 
     private val prefs by lazy {
         val key = MasterKey.Builder(context)
@@ -64,11 +71,22 @@ class UserProfileStore(context: Context) {
     fun loadAll(): List<Profile> =
         ProfileSource.entries.mapNotNull { load(it) }.sortedByDescending { it.importedAt }
 
+    /**
+     * Saves locally, then mirrors to the backend.
+     *
+     * The sync lives here rather than at the Save button because the import
+     * screen is not the only writer, and a sync bolted onto one call site is a
+     * sync the next call site forgets. The local write happens first and is the
+     * source of truth; [ImportedProfileSync] is best-effort and never blocks.
+     */
     fun save(body: String, source: ProfileSource) {
+        val trimmed = body.trim()
+        val importedAt = System.currentTimeMillis()
         prefs.edit()
-            .putString(keyBody(source), body.trim())
-            .putLong(keyImportedAt(source), System.currentTimeMillis())
+            .putString(keyBody(source), trimmed)
+            .putLong(keyImportedAt(source), importedAt)
             .apply()
+        ImportedProfileSync.pushProfile(appContext, trimmed, source, importedAt)
     }
 
     /** Forgets one source's profile, leaving any others intact. */
@@ -77,11 +95,13 @@ class UserProfileStore(context: Context) {
             .remove(keyBody(source))
             .remove(keyImportedAt(source))
             .apply()
+        ImportedProfileSync.pushDelete(appContext, source)
     }
 
     /** Forgets everything. The user's "delete what you know about me". */
     fun clearAll() {
         prefs.edit().clear().apply()
+        ProfileSource.entries.forEach { ImportedProfileSync.pushDelete(appContext, it) }
     }
 
     private fun keyBody(source: ProfileSource) = "${KEY_BODY}_${source.name}"

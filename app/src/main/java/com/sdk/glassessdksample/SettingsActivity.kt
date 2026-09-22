@@ -16,7 +16,7 @@ import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.common.api.ApiException
 import com.sdk.glassessdksample.databinding.ActivitySettingsBinding
 import com.sdk.glassessdksample.ui.AiResponsePrefs
-import com.sdk.glassessdksample.ui.Mark1BottomNavManager
+import com.sdk.glassessdksample.ui.BottomNavManager
 import com.sdk.glassessdksample.ui.GeminiLiveService
 import com.sdk.glassessdksample.ui.HotHelper
 import com.sdk.glassessdksample.ui.ModelProvider
@@ -52,7 +52,8 @@ class SettingsActivity : AppCompatActivity() {
         setupSettings()
         setupAiPreferences()
         setupGmailConnect()
-        Mark1BottomNavManager.setup(this, binding.bottomNavigation, R.id.nav_profile)
+        // Settings is reached from Profile, so it keeps the Profile tab lit.
+        BottomNavManager.setup(binding.bottomNavigation, R.id.nav_profile, this)
     }
 
     private fun setupGmailConnect() {
@@ -147,6 +148,7 @@ class SettingsActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        BottomNavManager.restoreSelection(binding.bottomNavigation, R.id.nav_profile)
         if (::gmailService.isInitialized) refreshGmailStatus()
         refreshUsageUi()
         updateWakeEngineUi(WakeWordEngineSettings.getSelectedEngine(this))

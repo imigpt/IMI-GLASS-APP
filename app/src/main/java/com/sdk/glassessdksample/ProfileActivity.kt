@@ -16,7 +16,7 @@ import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.sdk.glassessdksample.databinding.ActivityProfileBinding
 import com.sdk.glassessdksample.ui.DevicePreferenceManager
 import com.sdk.glassessdksample.ui.DeviceType
-import com.sdk.glassessdksample.ui.Mark1BottomNavManager
+import com.sdk.glassessdksample.ui.BottomNavManager
 import com.sdk.glassessdksample.ui.UsageLimitManager
 import com.sdk.glassessdksample.ui.UserMemoryActivity
 import com.sdk.glassessdksample.utils.SystemBarsInsets
@@ -42,6 +42,7 @@ class ProfileActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        BottomNavManager.restoreSelection(binding.bottomNavigation, R.id.nav_profile)
         refreshUpgradeCard()
         updateCurrentDeviceLabel()
     }
@@ -104,7 +105,7 @@ class ProfileActivity : AppCompatActivity() {
     }
 
     private fun setupUI() {
-        Mark1BottomNavManager.setup(this, binding.bottomNavigation, R.id.nav_profile)
+        BottomNavManager.setup(binding.bottomNavigation, R.id.nav_profile, this)
 
         // Back button
         binding.backButton.setOnClickListener {

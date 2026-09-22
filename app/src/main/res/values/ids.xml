@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- View tag key: caches the bottom nav pill's layout-authored margins so
+         repeated inset dispatches don't compound on top of each other. -->
+    <item name="nav_base_margins" type="id" />
+</resources>

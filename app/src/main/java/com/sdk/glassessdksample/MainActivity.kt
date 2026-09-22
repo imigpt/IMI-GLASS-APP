@@ -954,6 +954,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
     override fun onResume() {
         super.onResume()
+        BottomNavManager.restoreSelection(binding.bottomNavigation, R.id.nav_home)
 
         // The user may have paired or unpaired in DeviceBindActivity while we were
         // stopped, and a link can also drop with no event delivered to a paused
@@ -5464,10 +5465,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             false
         }
 
-        // Prefer the level from this session's BATTERY_LEVEL events; fall back to the
-        // last persisted reading so the card is populated immediately on a cold start.
-        val battery = glassBatteryLevel ?: BatteryStatusStore.getBatteryLevel(this)
-
         if (connected) {
             binding.tvGlassStatus.text = "Connected"
             binding.tvGlassStatus.setTextColor(android.graphics.Color.parseColor("#ADADAD"))
@@ -5476,17 +5473,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             binding.tvGlassConnectHint.visibility = View.GONE
             binding.ivGlassImage.alpha = 1.0f
 
-            if (battery != null) {
-                binding.rowGlassBattery.visibility = View.VISIBLE
-                binding.tvTimeRemaining.text = formatGlassRuntime(battery)
-                binding.tvTimeRemainingLabel.text = " remaining"
-            } else {
-                // Connected, but the glasses have not reported a level yet. Showing a
-                // stale duration here is what made the card untrustworthy, so say so.
-                binding.rowGlassBattery.visibility = View.VISIBLE
-                binding.tvTimeRemaining.text = "Battery"
-                binding.tvTimeRemainingLabel.text = " unavailable"
-            }
+            // Battery text is hidden on the home screen.
+            binding.rowGlassBattery.visibility = View.GONE
         } else {
             binding.tvGlassStatus.text = "Not connected"
             binding.tvGlassStatus.setTextColor(android.graphics.Color.parseColor("#9A9A9A"))
@@ -5520,8 +5508,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
      */
     private fun refreshLetUsKnowYouSubtitle() {
         try {
-            binding.tvLetUsKnowYouSubtitle.text =
-                "Answer ${LetUsKnowYouActivity.QUESTION_COUNT} questions to personalize AI"
+            binding.tvLetUsKnowYouSubtitle.text = "Import your profile from ChatGPT or Claude"
         } catch (e: Exception) {
             Log.w(TAG, "Could not update Let Us Know You subtitle: ${e.message}")
         }
@@ -5678,9 +5665,10 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         // User Memory button - Configure AI personalization
         binding.btnUserMemory.setOnClickListener { openUserMemory() }
 
-        // Let Us Know You button - 15-question profile builder for AI personalization
-        binding.btnLetUsKnowYou.setOnClickListener { openLetUsKnowYou() }
-        binding.cardLetUsKnowYou.setOnClickListener { openLetUsKnowYou() }
+        // "Let Us Know You" card opens the ChatGPT/Claude profile import screen
+        // (same destination as More's "Signed-in sites" card).
+        binding.btnLetUsKnowYou.setOnClickListener { openSignedInSites() }
+        binding.cardLetUsKnowYou.setOnClickListener { openSignedInSites() }
 
         // Live Gallery button - view all captured photos
         binding.btnLiveGallery.setOnClickListener { openLiveGallery() }
@@ -8661,6 +8649,17 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         } catch (e: Exception) {
             Log.e(TAG, "Error launching User Memory Activity", e)
             Toast.makeText(this, "Failed to open user memory settings", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun openSignedInSites() {
+        try {
+            val intent = Intent(this, com.sdk.glassessdksample.ui.profile.UserProfileActivity::class.java)
+            startActivity(intent)
+            Log.d(TAG, "🔗 Signed-in sites (profile import) Activity launched")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error launching Signed-in sites Activity", e)
+            Toast.makeText(this, "Failed to open signed-in sites", Toast.LENGTH_SHORT).show()
         }
     }
 

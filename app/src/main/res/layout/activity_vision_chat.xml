@@ -168,10 +168,12 @@
 
     <!-- ============ BOTTOM NAVIGATION BAR ============ -->
     <com.google.android.material.bottomnavigation.BottomNavigationView
-        android:id="@+id/visionBottomNavigation"
+        android:id="@+id/bottomNavigation"
         android:layout_width="match_parent"
         android:layout_height="68dp"
-        android:layout_marginTop="8dp"
+        android:layout_marginStart="14dp"
+        android:layout_marginEnd="14dp"
+        android:layout_marginBottom="14dp"
         android:background="@drawable/bg_home_nav"
         app:menu="@menu/menu_bottom_nav_mark1"
         app:itemIconTint="@color/home_nav_item_color"

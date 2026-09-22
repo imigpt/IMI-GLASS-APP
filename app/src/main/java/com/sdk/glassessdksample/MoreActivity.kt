@@ -60,6 +60,7 @@ class MoreActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        BottomNavManager.restoreSelection(binding.bottomNavigation, R.id.nav_more)
         loadRecentPhotos()
     }
 

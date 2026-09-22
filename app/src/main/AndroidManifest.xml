@@ -210,6 +210,7 @@
         <activity
             android:name=".MoreActivity"
             android:exported="false"
+            android:launchMode="singleTop"
             android:label="More" />
 
         <!-- BIND DEVICE -->
@@ -228,9 +229,10 @@
             android:label="Let Us Know You" />
 
         <!-- PROFILE SCREEN -->
-        <activity 
+        <activity
             android:name=".ProfileActivity"
             android:exported="false"
+            android:launchMode="singleTop"
             android:label="Profile" />
 
         <!-- GEMINI LIVE CONVERSATION -->
@@ -247,9 +249,10 @@
             android:label="Vision Chat" />
 
         <!-- CHAT - AI CONVERSATION WITH DRAWER -->
-        <activity 
+        <activity
             android:name=".ui.ChatActivity"
             android:exported="false"
+            android:launchMode="singleTop"
             android:windowSoftInputMode="adjustResize"
             android:label="Chat" />
 

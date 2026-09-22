@@ -292,7 +292,8 @@
                                 android:text="--"
                                 android:textColor="#D8D8D8"
                                 android:textSize="18sp"
-                                android:textStyle="bold" />
+                                android:textStyle="bold"
+                                android:visibility="gone" />
 
                             <TextView
                                 android:layout_width="wrap_content"
@@ -776,6 +777,21 @@
         android:layout_height="match_parent"
         android:background="@drawable/bg_comper_mark1_screen"
         android:visibility="visible">
+
+        <!-- Back button: this gate can block the whole Home screen while
+             Bluetooth/glasses aren't connected, with no other way off it. -->
+        <ImageView
+            android:id="@+id/btnBleGateBack"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:layout_gravity="top|start"
+            android:layout_marginStart="14dp"
+            android:layout_marginTop="14dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="Back"
+            android:padding="8dp"
+            android:src="@drawable/ic_back"
+            app:tint="#FFFFFF" />
 
         <!-- Dots constellation + IMI center — fills top portion of screen -->
         <com.sdk.glassessdksample.ui.DotsOrbitView

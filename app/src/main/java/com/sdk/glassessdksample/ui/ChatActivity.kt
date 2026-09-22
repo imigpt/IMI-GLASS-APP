@@ -21,6 +21,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.GravityCompat
+import androidx.core.view.updateLayoutParams
 import androidx.drawerlayout.widget.DrawerLayout
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -267,61 +268,28 @@ class ChatActivity : AppCompatActivity() {
     }
 
     /**
-     * Keeps the "Ask AI" composer bar and the bottom nav above the on-screen
-     * keyboard.
+     * Applies the system bar and keyboard insets for this screen.
      *
-     * Same underlying bug as the Web browser's command bar (see that fix for
-     * the on-screen-keyboard overlap): [SystemBarsInsets.apply] turns on
-     * edge-to-edge drawing for the whole window, which makes the app
-     * responsible for consuming the IME inset itself — nothing here was
-     * doing that, so the keyboard simply painted over the composer bar and
-     * bottom nav instead of pushing them up.
-     *
-     * Adjusting an individual child's MARGIN does not work here, and two
-     * earlier attempts at that both looked broken on screen: margin only
-     * reserves blank space around the one view it is set on, it does not
-     * move that view's later siblings. Growing the composer's margin left a
-     * dead gap under the composer while `bottomNavigation` — the next
-     * sibling — stayed put under the keyboard; and `bottomNavigation`'s own
-     * margin is already owned by [SystemBarsInsets], which rewrites it on
-     * every insets dispatch.
-     *
-     * Padding the CONTENT COLUMN is the actual fix. The screen is one
-     * vertical LinearLayout (top bar, then a weighted message list, then the
-     * composer, then the nav bar) filling the window. Bottom padding on that
-     * column shrinks the space its children share; the message list is the
-     * only weighted child, so it alone gives up the height, and the composer
-     * and nav bar below it both ride up together — flush above the keyboard,
-     * no gap, nothing hidden.
-     *
-     * Safe to own this view's padding: [SystemBarsInsets] operates on
-     * `android.R.id.content`'s first child, which on this screen is the
-     * DrawerLayout wrapping this column, and it only touches
-     * `bottomNavigation`'s margin from there — never this column's padding.
+     * The listener must go on `android.R.id.content`'s first child — the
+     * DrawerLayout — because [SystemBarsInsets] returns CONSUMED from its own
+     * listener there, so a listener on any descendant never runs. That includes
+     * [BottomNavManager]'s own inset listener on the pill, so this one applies
+     * the pill's margins via [BottomNavManager.applyInsets] rather than letting
+     * it go unhandled.
      */
     private fun setupComposerImeInset() {
         val content = findViewById<View>(R.id.layoutChatContent)
-        val basePaddingBottom = content.paddingBottom
-
-        // The listener MUST be attached to the same view SystemBarsInsets uses -
-        // android.R.id.content's first child, the DrawerLayout - not to
-        // layoutChatContent.
-        //
-        // SystemBarsInsets returns WindowInsetsCompat.CONSUMED from its listener on
-        // that DrawerLayout, which ends the dispatch there: a listener registered on
-        // any descendant, including layoutChatContent, is never called. So this ran
-        // exactly zero times and the keyboard went on covering the composer, which is
-        // why the careful padding fix documented above never actually took effect.
-        //
-        // This replaces SystemBarsInsets' own listener on that view (it is installed
-        // first, in onCreate), so this one listener must now do BOTH jobs: the status
-        // bar / cutout padding at the top that SystemBarsInsets was providing, and
-        // the IME inset at the bottom.
+        val bottomNav = findViewById<com.google.android.material.bottomnavigation
+            .BottomNavigationView>(R.id.bottomNavigation)
         val host = (findViewById<android.view.ViewGroup>(android.R.id.content))?.getChildAt(0)
             ?: content
+
+        // Snapshot the layout-authored values — reading the live ones would
+        // compound the insets on every dispatch (rotation, keyboard, multi-window).
         val basePaddingTop = content.paddingTop
         val basePaddingLeft = content.paddingLeft
         val basePaddingRight = content.paddingRight
+        val basePaddingBottom = content.paddingBottom
 
         androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(host) { _, insets ->
             val imeHeight = insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.ime()).bottom
@@ -329,24 +297,19 @@ class ChatActivity : AppCompatActivity() {
                 androidx.core.view.WindowInsetsCompat.Type.systemBars() or
                     androidx.core.view.WindowInsetsCompat.Type.displayCutout()
             )
-            // While the keyboard is up it already covers the navigation bar, so the
-            // bar inset must not be added on top of the IME height or the composer
-            // floats above the keyboard with a gap under it.
-            val bottom = if (imeHeight > 0) imeHeight else bars.bottom
-            // Left/right matter in landscape and on devices that put the navigation
-            // bar on the side; without them the nav pill and composer run under it.
-            // Read from the captured base each pass — reading the LIVE padding would
-            // compound the inset on every dispatch (rotation, keyboard, multi-window).
+            // The keyboard covers the navigation bar, so its inset replaces the
+            // bar inset rather than stacking on top of it.
+            val bottom = if (imeHeight > 0) imeHeight else 0
             content.setPadding(
                 basePaddingLeft + bars.left,
                 basePaddingTop + bars.top,
                 basePaddingRight + bars.right,
                 basePaddingBottom + bottom
             )
-            // Hide the bottom nav while typing: it is 68dp of fixed height below the
-            // composer that would otherwise push the input box up off the keyboard.
-            findViewById<View>(R.id.bottomNavigation)?.visibility =
-                if (imeHeight > 0) View.GONE else View.VISIBLE
+            // Hide the pill while typing: 68dp of fixed height below the composer
+            // that would otherwise push the input box up off the keyboard.
+            bottomNav?.visibility = if (imeHeight > 0) View.GONE else View.VISIBLE
+            bottomNav?.let { BottomNavManager.applyInsets(it, bars) }
             insets
         }
         androidx.core.view.ViewCompat.requestApplyInsets(host)
@@ -1764,6 +1727,9 @@ class ChatActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        findViewById<com.google.android.material.bottomnavigation.BottomNavigationView>(
+            R.id.bottomNavigation
+        )?.let { BottomNavManager.restoreSelection(it, R.id.nav_chat) }
         silenceVoiceForChat()
     }
 

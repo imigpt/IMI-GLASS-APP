@@ -24,7 +24,13 @@ class CameraActivity : AppCompatActivity() {
         SystemBarsInsets.apply(this)
 
         setupUi()
+        // Camera is reached from More, so it keeps the More tab lit.
         BottomNavManager.setup(binding.bottomNavigation, R.id.nav_more, this)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        BottomNavManager.restoreSelection(binding.bottomNavigation, R.id.nav_more)
     }
 
     private fun setupUi() {
