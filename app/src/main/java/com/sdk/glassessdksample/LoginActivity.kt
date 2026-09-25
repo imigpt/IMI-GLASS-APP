@@ -2,15 +2,16 @@ package com.sdk.glassessdksample
 
 import android.content.Intent
 import android.os.Bundle
-import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import com.sdk.glassessdksample.auth.AuthApi
+import com.sdk.glassessdksample.auth.AuthFormErrors
 import com.sdk.glassessdksample.databinding.ActivityLoginBinding
 import com.sdk.glassessdksample.utils.SystemBarsInsets
 
 class LoginActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityLoginBinding
+    private lateinit var errors: AuthFormErrors
     private val authApi by lazy { AuthApi(this) }
     private var isSubmitting = false
 
@@ -19,6 +20,14 @@ class LoginActivity : AppCompatActivity() {
         binding = ActivityLoginBinding.inflate(layoutInflater)
         setContentView(binding.root)
         SystemBarsInsets.apply(this)
+
+        errors = AuthFormErrors(
+            fields = mapOf(
+                binding.etUserId to binding.tvEmailError,
+                binding.etPassword to binding.tvPasswordError
+            ),
+            formError = binding.tvFormError
+        )
 
         binding.btnLogin.setOnClickListener {
             performLogin()
@@ -31,17 +40,28 @@ class LoginActivity : AppCompatActivity() {
 
     private fun performLogin() {
         if (isSubmitting) return
+        errors.clearAll()
 
         val email = binding.etUserId.text.toString().trim()
         val password = binding.etPassword.text.toString().trim()
 
-        if (email.isEmpty() || !android.util.Patterns.EMAIL_ADDRESS.matcher(email).matches()) {
-            Toast.makeText(this, "Please enter a valid email address", Toast.LENGTH_SHORT).show()
-            return
+        var firstInvalid: android.widget.EditText? = null
+        when {
+            email.isEmpty() -> {
+                errors.showField(binding.etUserId, "Please enter your email address")
+                firstInvalid = binding.etUserId
+            }
+            !android.util.Patterns.EMAIL_ADDRESS.matcher(email).matches() -> {
+                errors.showField(binding.etUserId, "Please enter a valid email address (e.g. name@example.com)")
+                firstInvalid = binding.etUserId
+            }
         }
-
         if (password.isEmpty()) {
-            Toast.makeText(this, "Please enter your password", Toast.LENGTH_SHORT).show()
+            errors.showField(binding.etPassword, "Please enter your password")
+            if (firstInvalid == null) firstInvalid = binding.etPassword
+        }
+        if (firstInvalid != null) {
+            firstInvalid.requestFocus()
             return
         }
 
@@ -50,8 +70,24 @@ class LoginActivity : AppCompatActivity() {
             setSubmitting(false)
             when (result) {
                 is AuthApi.Result.Success -> goToNextScreen()
-                is AuthApi.Result.Error -> Toast.makeText(this, result.message, Toast.LENGTH_SHORT).show()
+                is AuthApi.Result.Error -> showLoginError(result)
             }
+        }
+    }
+
+    private fun showLoginError(error: AuthApi.Result.Error) {
+        if (error.code == AuthApi.CODE_INVALID_CREDENTIALS) {
+            // The backend deliberately returns the same error for "wrong password"
+            // and "no such account", so cover both in the message. Clear the
+            // password first: its text watcher would otherwise hide the banner.
+            binding.etPassword.text?.clear()
+            binding.etPassword.requestFocus()
+            errors.showForm(
+                "Incorrect email or password.\n" +
+                    "Check your password and try again. If you don't have an account yet, tap Sign Up below."
+            )
+        } else {
+            errors.showForm(error.message)
         }
     }
 

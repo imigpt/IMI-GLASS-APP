@@ -1354,7 +1354,7 @@ class ChatActivity : AppCompatActivity() {
             )
 
             response.usageMetadata?.let {
-                TokenUsageTracker.track(this@ChatActivity, TokenUsageTracker.Mode.SEEING, it)
+                TokenUsageTracker.track(this@ChatActivity, TokenUsageTracker.Mode.SEEING, it, model.modelName)
             }
             
             response.text ?: "I couldn't analyze this image."
@@ -1502,7 +1502,7 @@ class ChatActivity : AppCompatActivity() {
                             )
 
                             result.usageMetadata?.let {
-                                TokenUsageTracker.track(this@ChatActivity, TokenUsageTracker.Mode.SEEING, it)
+                                TokenUsageTracker.track(this@ChatActivity, TokenUsageTracker.Mode.SEEING, it, model.modelName)
                             }
                             result.text ?: "I couldn't re-analyze that image."
                         } else {

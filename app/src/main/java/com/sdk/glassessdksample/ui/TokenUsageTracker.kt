@@ -2,6 +2,7 @@ package com.sdk.glassessdksample.ui
 
 import android.content.Context
 import com.google.ai.client.generativeai.type.UsageMetadata
+import com.sdk.glassessdksample.ui.sync.AIUsageReporter
 
 /**
  * Persists token usage totals for AI features and exposes snapshots for Settings UI.
@@ -30,9 +31,23 @@ object TokenUsageTracker {
         val voiceChat: UsageStats
     )
 
+    /**
+     * Records usage locally AND reports it to the backend for per-user cost
+     * tracking. [model] must be the exact Gemini model id that was called.
+     * [feature] defaults from [mode]; pass it when the mode is too coarse
+     * (e.g. a summarizer that counts against the chat quota).
+     */
     @Synchronized
-    fun track(context: Context?, mode: Mode, usageMetadata: UsageMetadata?) {
+    fun track(
+        context: Context?,
+        mode: Mode,
+        usageMetadata: UsageMetadata?,
+        model: String,
+        feature: AIUsageReporter.Feature = defaultFeature(mode)
+    ) {
         if (context == null || usageMetadata == null) return
+
+        AIUsageReporter.report(context, model, usageMetadata, feature)
 
         track(
             context = context,
@@ -64,6 +79,13 @@ object TokenUsageTracker {
             requestCount = current.requestCount + 1
         )
         writeStats(prefs, mode, updated)
+    }
+
+    // VOICE_CHAT here is the REST text fallback (GeminiLiveApiClient), not a
+    // Live S2S session — Live reports itself as LIVE from GeminiLiveService.
+    private fun defaultFeature(mode: Mode) = when (mode) {
+        Mode.AI_CHAT, Mode.VOICE_CHAT -> AIUsageReporter.Feature.CHAT
+        Mode.SEEING -> AIUsageReporter.Feature.VISION
     }
 
     fun getSnapshot(context: Context): Snapshot {

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Capture button: app orange, dimmed while a capture is running. -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_enabled="false">
+        <shape android:shape="rectangle">
+            <solid android:color="#40FF7F2E" />
+            <corners android:radius="30dp" />
+        </shape>
+    </item>
+    <item android:drawable="@drawable/bg_gm_button_primary" />
+</selector>

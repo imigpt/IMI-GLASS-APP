@@ -5,6 +5,10 @@ import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -24,6 +28,16 @@ data class MediaItem(
     val type: Int  // 1 = JPG image, 2 = MP4 video, 3 = Audio
 )
 
+/** Why [AlbumDownloader.downloadFile] returned null. */
+enum class DownloadFailure {
+    /** Couldn't reach the glasses, or the transfer broke off. */
+    NETWORK,
+    /** The glasses answered with an error for this file. */
+    SERVER,
+    /** The phone couldn't save the file (out of space, or the folder refused it). */
+    STORAGE,
+}
+
 data class MediaConfig(
     val files: List<MediaItem>
 )
@@ -32,6 +46,8 @@ class AlbumDownloader(private val ctx: Context) {
     
     companion object {
         private const val TAG = "AlbumDownloader"
+        /** Leave this much room on the phone after a download. */
+        private const val MIN_FREE_BYTES = 20L * 1024 * 1024
         
         // ✅ PRIORITY IPs first (most common Glass addresses), then fallbacks
         // Ordered by likelihood for faster discovery
@@ -235,11 +251,7 @@ class AlbumDownloader(private val ctx: Context) {
                 if (parts.size >= 2) {
                     try {
                         val fileName = parts[0].trim()
-                        val fileType = parts[1].trim().toIntOrNull() ?: when {
-                            fileName.endsWith(".mp4", true) -> 2
-                            fileName.endsWith(".jpg", true) -> 1
-                            else -> 1
-                        }
+                        val fileType = parts[1].trim().toIntOrNull() ?: typeFromName(fileName)
                         items.add(MediaItem(fileName, fileType))
                     } catch (e: Exception) {
                         Log.w(TAG, "Failed to parse line: $line")
@@ -247,11 +259,7 @@ class AlbumDownloader(private val ctx: Context) {
                 } else {
                     // Plain filename per line — infer type by extension
                     val fileName = trimmed
-                    val fileType = when {
-                        fileName.endsWith(".mp4", true) -> 2
-                        fileName.endsWith(".jpg", true) -> 1
-                        else -> 1
-                    }
+                    val fileType = typeFromName(fileName)
                     items.add(MediaItem(fileName, fileType))
                 }
             }
@@ -265,70 +273,136 @@ class AlbumDownloader(private val ctx: Context) {
         }
     }
     
+    /** Infer the media type (1 = image, 2 = video, 3 = audio) from the extension. */
+    private fun typeFromName(fileName: String): Int =
+        when (fileName.substringAfterLast('.', "").lowercase()) {
+            "mp4", "mov", "3gp", "mkv", "webm" -> 2
+            "opus", "wav", "m4a", "aac", "mp3", "amr", "ogg", "pcm" -> 3
+            else -> 1
+        }
+
     /**
-     * Download a single file from glasses
+     * Download a single file from glasses.
+     *
+     * Cancelling the calling coroutine aborts the transfer straight away (the HTTP
+     * call is cancelled, which unblocks the read).
+     *
+     * The file is written under a hidden temporary name and only renamed when
+     * complete, so an interrupted download never leaves a truncated file that looks
+     * already saved. The temporary name keeps the real extension: Android's shared
+     * folders refuse files whose type doesn't belong there (e.g. "x.jpg.part" in
+     * Pictures fails with EPERM).
+     *
+     * On failure returns null and, if given, reports why through [onFailure].
      */
     suspend fun downloadFile(
         baseIp: String,
         fileName: String,
         outputDir: File,
+        onFailure: ((DownloadFailure) -> Unit)? = null,
         progressCallback: ((Int) -> Unit)? = null
     ): File? = withContext(Dispatchers.IO) {
         val url = "http://$baseIp/files/$fileName"
         Log.i(TAG, "📥 Downloading: $url")
-        
+
+        if (!outputDir.exists()) {
+            outputDir.mkdirs()
+        }
+        val outputFile = File(outputDir, fileName)
+        val partFile = File(outputDir, tempNameFor(fileName))
+        var failure: DownloadFailure? = DownloadFailure.NETWORK
+
+        val call = okClient.newCall(Request.Builder().url(url).build())
+        // execute() blocks on the socket and ignores coroutine cancellation, so a
+        // watcher cancels the call itself as soon as this coroutine is cancelled.
+        val cancelWatcher = launch {
+            try {
+                awaitCancellation()
+            } finally {
+                call.cancel()
+            }
+        }
+
         try {
-            val request = Request.Builder().url(url).build()
-            val response = okClient.newCall(request).execute()
-            
-            if (!response.isSuccessful) {
-                Log.w(TAG, "Download failed: ${response.code}")
-                response.close()
-                return@withContext null
-            }
-            
-            val body = response.body ?: run {
-                response.close()
-                return@withContext null
-            }
-            
-            // Create output file
-            if (!outputDir.exists()) {
-                outputDir.mkdirs()
-            }
-            val outputFile = File(outputDir, fileName)
-            
-            // Stream download with progress
-            val totalBytes = body.contentLength()
-            var downloadedBytes = 0L
-            
-            outputFile.outputStream().use { output ->
-                body.byteStream().use { input ->
-                    val buffer = ByteArray(8192)
-                    var bytesRead: Int
-                    
-                    while (input.read(buffer).also { bytesRead = it } != -1) {
-                        output.write(buffer, 0, bytesRead)
-                        downloadedBytes += bytesRead
-                        
-                        if (totalBytes > 0) {
-                            val progress = ((downloadedBytes * 100) / totalBytes).toInt()
-                            progressCallback?.invoke(progress)
+            call.execute().use { response ->
+                if (!response.isSuccessful) {
+                    Log.w(TAG, "Download failed: ${response.code}")
+                    failure = DownloadFailure.SERVER
+                    return@withContext null
+                }
+                val body = response.body ?: return@withContext null
+
+                // Stream download with progress
+                val totalBytes = body.contentLength()
+                var downloadedBytes = 0L
+
+                if (totalBytes > 0 && outputDir.usableSpace < totalBytes + MIN_FREE_BYTES) {
+                    Log.e(TAG, "Not enough space for $fileName ($totalBytes bytes, ${outputDir.usableSpace} free)")
+                    failure = DownloadFailure.STORAGE
+                    return@withContext null
+                }
+
+                val out = try {
+                    partFile.outputStream()
+                } catch (e: IOException) {
+                    Log.e(TAG, "Cannot create ${partFile.name}: ${e.message}")
+                    failure = DownloadFailure.STORAGE
+                    return@withContext null
+                }
+                out.use { output ->
+                    body.byteStream().use { input ->
+                        val buffer = ByteArray(8192)
+                        var bytesRead: Int
+
+                        while (input.read(buffer).also { bytesRead = it } != -1) {
+                            ensureActive()
+                            try {
+                                output.write(buffer, 0, bytesRead)
+                            } catch (e: IOException) {
+                                failure = DownloadFailure.STORAGE
+                                throw e
+                            }
+                            downloadedBytes += bytesRead
+
+                            if (totalBytes > 0) {
+                                val progress = ((downloadedBytes * 100) / totalBytes).toInt()
+                                progressCallback?.invoke(progress)
+                            }
                         }
                     }
                 }
+
+                if (totalBytes > 0 && downloadedBytes < totalBytes) {
+                    Log.w(TAG, "Download incomplete: $fileName ($downloadedBytes/$totalBytes bytes)")
+                    return@withContext null
+                }
+                if (!partFile.renameTo(outputFile)) {
+                    Log.e(TAG, "Could not move $partFile to $outputFile")
+                    failure = DownloadFailure.STORAGE
+                    return@withContext null
+                }
+                failure = null
+                Log.i(TAG, "✅ Downloaded: $fileName (${downloadedBytes / 1024} KB)")
+                outputFile
             }
-            
-            response.close()
-            Log.i(TAG, "✅ Downloaded: $fileName (${downloadedBytes / 1024} KB)")
-            outputFile
-            
         } catch (e: IOException) {
+            // Also how a cancelled call surfaces; withContext then rethrows the cancellation.
             Log.e(TAG, "Download error: ${e.message}")
             null
+        } finally {
+            cancelWatcher.cancel()
+            if (partFile.exists()) partFile.delete()
+            failure?.let { f -> if (isActive) onFailure?.invoke(f) }
         }
     }
-    
+
+    /** "IMG_1.jpg" → ".IMG_1.part.jpg": hidden, and still a .jpg to the file system. */
+    private fun tempNameFor(fileName: String): String {
+        val ext = fileName.substringAfterLast('.', "")
+        val base = fileName.substringBeforeLast('.')
+        return if (ext.isEmpty()) ".$fileName.part" else ".$base.part.$ext"
+    }
+
     /**
      * Download all media files from glasses
      */

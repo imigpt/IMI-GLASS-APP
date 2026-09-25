@@ -19,6 +19,8 @@ import java.util.Locale
  */
 class AgentSpeaker(context: Context) : TextToSpeech.OnInitListener {
 
+    private val appContext = context.applicationContext
+
     private var tts: TextToSpeech? = TextToSpeech(context.applicationContext, this)
     private var ready = false
 
@@ -52,6 +54,12 @@ class AgentSpeaker(context: Context) : TextToSpeech.OnInitListener {
      */
     fun speak(text: String) {
         if (!enabled || !ready || text.isBlank()) return
+        // Glasses or nothing: without the glasses' media route this would play on
+        // the phone speaker.
+        if (!com.sdk.glassessdksample.ui.GlassesAudioOutput.hasMediaRoute(appContext)) {
+            Log.d(TAG, "Not speaking — glasses audio not available")
+            return
+        }
         try {
             tts?.speak(
                 text.take(MAX_CHARS),

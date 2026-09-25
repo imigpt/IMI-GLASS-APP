@@ -60,6 +60,7 @@ import com.sdk.glassessdksample.ui.wifi.WifiTransferManager
 import com.sdk.glassessdksample.ui.wifi.WifiP2PLiveCamera
 import com.sdk.glassessdksample.ui.wifi.GlassMediaTransfer
 import com.sdk.glassessdksample.ui.gallery.GlassMediaGalleryActivity
+import com.sdk.glassessdksample.ui.GlassesAudioOutput
 import com.sdk.glassessdksample.ui.gallery.LiveGalleryActivity
 import com.sdk.glassessdksample.ui.gallery.LiveGalleryManager
 import com.sdk.glassessdksample.utils.SafeBleCommandHelper
@@ -1183,7 +1184,17 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             tts?.setSpeechRate(0.95f)  // Slightly slower for clarity and warmth
             tts?.setPitch(1.08f)  // Slightly higher for pleasant, engaging female tone
             
-            tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+            tts?.setOnUtteranceProgressListener(ttsProgressListener)
+        }
+    }
+
+    /**
+     * Kept in a field so an utterance skipped by the glasses-only rule can still be
+     * reported as finished — the conversation flow (resume listening, re-arm the
+     * wake word) waits on onDone and would otherwise stall.
+     */
+    private val ttsProgressListener = object : UtteranceProgressListener() {
+            
                 override fun onStart(utteranceId: String?) {
                     Log.d(TAG, "TTS started: $utteranceId")
                 }
@@ -1229,8 +1240,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                     Log.e(TAG, "TTS error: $utteranceId")
                     isListening = false
                 }
-            })
-        }
     }
 
     /**
@@ -1330,6 +1339,12 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
      * Speak using local Android TTS
      */
     private fun speakWithLocalTTS(text: String, utteranceId: String) {
+        // Glasses or nothing: STREAM_MUSIC falls back to the phone speaker when the
+        // glasses' media route is missing.
+        if (!GlassesAudioOutput.hasMediaRoute(this)) {
+            skipUtteranceNotOnGlasses(text, utteranceId)
+            return
+        }
         val params = Bundle()
         params.putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, utteranceId)
         params.putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, AudioManager.STREAM_MUSIC)
@@ -1344,6 +1359,12 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         
         // Use high-quality synthesis with proper audio routing
         this@MainActivity.tts?.speak(text, TextToSpeech.QUEUE_FLUSH, params, utteranceId)
+    }
+
+    /** Not spoken (it would have played on the phone); finish it so the flow continues. */
+    private fun skipUtteranceNotOnGlasses(text: String, utteranceId: String) {
+        Log.w(TAG, "🔇 Not speaking \"${text.take(60)}\" — glasses audio not available (never the phone speaker)")
+        mainScope.launch { ttsProgressListener.onDone(utteranceId) }
     }
 
     private fun speakOnGlass(text: String, utteranceId: String = "DEFAULT_GLASS") {
@@ -2196,6 +2217,10 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     }
     
     private fun speakViaSco(text: String, utteranceId: String) {
+        if (!GlassesAudioOutput.hasCallRoute(this)) {
+            skipUtteranceNotOnGlasses(text, utteranceId)
+            return
+        }
         val params = Bundle()
         params.putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, utteranceId)
         params.putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, AudioManager.STREAM_VOICE_CALL)
@@ -3047,6 +3072,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 // AI is now muted
                 binding.tvMuteStatus.text = "AI Muted 🔇"
                 binding.ivMuteIcon.setImageResource(android.R.drawable.ic_lock_silent_mode)
+                binding.tvMuteLabel.text = "Unmute AI"
                 Toast.makeText(this, "🔇 AI Muted - Not listening", Toast.LENGTH_SHORT).show()
                 
                 // Stop any active listening
@@ -3075,6 +3101,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 // AI is now unmuted - automatically wake up AI
                 binding.tvMuteStatus.text = "AI Listening 🎤"
                 binding.ivMuteIcon.setImageResource(android.R.drawable.ic_lock_silent_mode_off)
+                binding.tvMuteLabel.text = "Silent Mode"
                 Toast.makeText(this, "🎤 AI Unmuted - Waking up...", Toast.LENGTH_SHORT).show()
                 
                 // Automatically trigger wake up event (start conversation)
@@ -7828,6 +7855,12 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 }
             }
             
+            override fun onReplyAudioBlocked() {
+                runOnUiThread {
+                    Toast.makeText(this@MainActivity, "IMI's reply is on screen — glasses audio isn't connected, so it wasn't played on the phone.", Toast.LENGTH_LONG).show()
+                }
+            }
+
             override fun onConnectionStatusChanged(isConnected: Boolean) {
                 runOnUiThread {
                     val status = if (isConnected) "🟢 Gemini Live Connected" else "🔴 Disconnected"

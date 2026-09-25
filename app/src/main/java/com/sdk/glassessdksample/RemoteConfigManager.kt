@@ -42,7 +42,7 @@ object RemoteConfigManager {
         remoteConfig.fetchAndActivate()
             .addOnSuccessListener {
                 Log.d(TAG, "✅ Remote config fetched and activated")
-                onComplete(true)
+                onComplete(true)  
             }
             .addOnFailureListener { e ->
                 Log.w(TAG, "⚠️ Remote config fetch failed, using cached/defaults: ${e.message}")

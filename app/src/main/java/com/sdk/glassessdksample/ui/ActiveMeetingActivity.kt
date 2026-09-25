@@ -1,6 +1,7 @@
 package com.sdk.glassessdksample.ui
 
 import com.sdk.glassessdksample.RemoteConfigManager
+import com.sdk.glassessdksample.ui.sync.AIUsageReporter
 import android.Manifest
 import android.content.Context
 import android.bluetooth.BluetoothAdapter
@@ -679,6 +680,8 @@ class ActiveMeetingActivity : AppCompatActivity() {
                     blob("audio/mp4", audioBytes)
                 }
             )
+            // Report before reading the text — the call cost tokens even if the result is unusable.
+            AIUsageReporter.report(this@ActiveMeetingActivity, model.modelName, response.usageMetadata, AIUsageReporter.Feature.SUMMARIZE)
 
             val text = response.text?.trim() ?: ""
             Log.d(TAG, "Transcription result: $text")
@@ -714,6 +717,7 @@ class ActiveMeetingActivity : AppCompatActivity() {
             val response = model.generateContent(
                 content { text(prompt) }
             )
+            AIUsageReporter.report(this@ActiveMeetingActivity, model.modelName, response.usageMetadata, AIUsageReporter.Feature.SUMMARIZE)
 
             val text = response.text?.trim() ?: ""
             Log.d(TAG, "Summary result: $text")

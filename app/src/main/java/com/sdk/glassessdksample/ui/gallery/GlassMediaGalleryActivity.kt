@@ -1,38 +1,38 @@
 package com.sdk.glassessdksample.ui.gallery
 
 import android.Manifest
+import android.app.Dialog
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.graphics.BitmapFactory
+import android.content.res.ColorStateList
 import android.graphics.Color
-import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.ColorDrawable
 import android.location.LocationManager
 import android.net.ConnectivityManager
-import android.net.Network
 import android.net.NetworkCapabilities
-import android.net.NetworkRequest
-import android.net.Uri
-import android.net.wifi.WifiInfo
 import android.net.wifi.WifiManager
 import android.net.wifi.p2p.WifiP2pDevice
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
 import android.provider.Settings
+import android.text.format.DateUtils
 import android.util.Log
-import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.*
+import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import androidx.core.content.FileProvider
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
-import com.google.android.material.card.MaterialCardView
+import com.google.android.material.snackbar.Snackbar
 import com.sdk.glassessdksample.R
+import com.sdk.glassessdksample.ui.wifi.DownloadFailure
 import com.sdk.glassessdksample.ui.wifi.GlassMediaTransfer
+import com.sdk.glassessdksample.ui.wifi.GlassMediaTransfer.MediaFileInfo
 import com.sdk.glassessdksample.ui.wifi.WifiP2pHelper
 import com.oudmon.ble.base.communication.LargeDataHandler
 import com.oudmon.ble.base.communication.bigData.resp.GlassesDeviceNotifyListener
@@ -47,14 +47,11 @@ import com.sdk.glassessdksample.utils.SystemBarsInsets
 
 
 /**
- * Glass Media Gallery - View Photos/Videos from Glass
- * 
- * Features:
- * - Trigger Glass Hotspot
- * - Connect to Glass WiFi
- * - Download photos/videos
- * - Display in grid view
- * - Play videos / View photos
+ * Glass Media Gallery — one screen with two modes:
+ *
+ *  - View:     media already saved on the phone, grouped by day, filterable by type.
+ *  - Download: connect to the glasses (BLE → Wi-Fi Direct → HTTP/socket), list what is
+ *              stored on them, pick files and download only those.
  */
 class GlassMediaGalleryActivity : AppCompatActivity(), 
     GlassMediaTransfer.TransferListener,
@@ -64,16 +61,26 @@ class GlassMediaGalleryActivity : AppCompatActivity(),
         private const val TAG = "GlassMediaGallery"
         private const val LOCATION_PERMISSION_REQUEST = 1001
         private const val NEARBY_PERMISSION_REQUEST = 1002
-        private const val MENU_SELECT = 2001
-        private const val MENU_DELETE = 2002
         /** The Glass acts as Wi-Fi Direct Group Owner at this fixed address. */
         private const val GLASS_IP = "192.168.6.1"
         /** Any interface holding an address in this range is the Glass link. */
         private const val GLASS_SUBNET_PREFIX = "192.168.6."
+        /** Give up looking for the glasses after this long and tell the user. */
+        private const val CONNECT_TIMEOUT_MS = 75_000L
+        private const val GRID_COLUMNS = 3
         
         fun launch(context: Context) {
             context.startActivity(Intent(context, GlassMediaGalleryActivity::class.java))
         }
+    }
+
+    private enum class Mode { VIEW, DOWNLOAD }
+
+    private enum class Filter(val kind: GalleryMediaKind?, val label: String) {
+        ALL(null, "media"),
+        IMAGE(GalleryMediaKind.IMAGE, "images"),
+        VIDEO(GalleryMediaKind.VIDEO, "videos"),
+        RECORDING(GalleryMediaKind.RECORDING, "recordings"),
     }
     
     private lateinit var glassMediaTransfer: GlassMediaTransfer
@@ -88,36 +95,55 @@ class GlassMediaGalleryActivity : AppCompatActivity(),
     // Holding this callback both keeps the P2P network alive and gives us the Network
     // object whose socketFactory pins traffic to the p2p interface.
     private var p2pNetworkCallback: ConnectivityManager.NetworkCallback? = null
-    private val mediaFiles = mutableListOf<GlassMediaTransfer.MediaFileInfo>()
-    private var adapter: MediaAdapter? = null
+
+    private var mode = Mode.VIEW
+    private var filter = Filter.ALL
+    /** Media saved on the phone (View mode). */
+    private val localMedia = mutableListOf<MediaFileInfo>()
+    /** Media stored on the glasses (Download mode); filled once connected. */
+    private val remoteMedia = mutableListOf<MediaFileInfo>()
+    /** Glass HTTP server address; null when the raw socket transfer is in use. */
+    private var glassHttpIp: String? = null
     private val selectedFileNames = mutableSetOf<String>()
-    private var isSelectionMode = false
-    
-    private var recyclerView: RecyclerView? = null
-    private var progressBar: ProgressBar? = null
-    private var tvStatus: TextView? = null
-    private var tvProgress: TextView? = null
-    private var btnConnect: Button? = null
-    private var btnRefresh: Button? = null
-    private var btnDiscover: Button? = null
-    private var layoutProgress: View? = null
+    /** View mode only: long-press (or the menu) selects files for deletion. */
+    private var isViewSelectionMode = false
+    private var isConnecting = false
+    private var connectionTimeoutJob: Job? = null
+    private var downloadJob: Job? = null
+    /** Per-file progress for socket downloads, which report through the listener. */
+    private var socketProgress: ((Int) -> Unit)? = null
+    /** Last error reported by a socket download, used to tell storage from network. */
+    private var lastSocketError: String? = null
+
+    private lateinit var adapter: GalleryMediaAdapter
+    private lateinit var recyclerView: RecyclerView
+    private lateinit var tabView: View
+    private lateinit var tabDownload: View
+    private lateinit var chips: Map<Filter, TextView>
+    private lateinit var layoutDownloadHeader: View
+    private lateinit var tvSelectAction: TextView
+    private lateinit var tvConnectionStatus: TextView
+    private lateinit var statusDot: View
+    private lateinit var layoutEmpty: View
+    private lateinit var ivEmptyIcon: ImageView
+    private lateinit var tvEmptyTitle: TextView
+    private lateinit var tvEmptyMessage: TextView
+    private lateinit var btnEmptyAction: TextView
+    private lateinit var layoutActionBar: View
+    private lateinit var btnCancelSelection: View
+    private lateinit var btnPrimaryAction: View
+    private lateinit var ivPrimaryAction: ImageView
+    private lateinit var tvPrimaryAction: TextView
     
     // Track if we went to WiFi settings
     private var wentToWifiSettings = false
     private var isConnectedToGlass = false
-    private var isDownloadComplete = false  // true once a download session finishes
+    /** True once this session has read the media list from the glasses. */
+    private var isMediaListLoaded = false
     private var discoveredDevices = mutableListOf<WifiP2pDevice>()
     private var discoveryRetryJob: Job? = null
-    private var connectionProgressDialog: android.app.AlertDialog? = null
-    private var connectionProgressTextView: TextView? = null
-    private var connectionProgressBar: ProgressBar? = null
-    private var connectionProgressPercentTextView: TextView? = null
+    private var progressDialog: Dialog? = null
     private var connectionProgressValue: Int = 0
-    private var lastProgressLine: String = ""
-    private val connectionStepCircles = mutableListOf<TextView>()
-    private val connectionStepTitles = mutableListOf<TextView>()
-    private val connectionStepConnectors = mutableListOf<View>()
-    private val stepTitles = listOf("Start", "Discover", "Connect", "Download")
     
     private val mainScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     
@@ -143,7 +169,7 @@ class GlassMediaGalleryActivity : AppCompatActivity(),
 
                         runOnUiThread {
                             // Guard: ignore duplicate BLE notifications during an active download
-                            if (isConnectedToGlass || isDownloadComplete) {
+                            if (isConnectedToGlass || isMediaListLoaded) {
                                 Log.d(TAG, "Ignoring duplicate BLE IP notification (already connected/done)")
                                 return@runOnUiThread
                             }
@@ -166,7 +192,7 @@ class GlassMediaGalleryActivity : AppCompatActivity(),
                             appendConnectionStep("Preparing download")
                             updateConnectionProgress(55)
                             bindToP2pNetworkThen {
-                                mainScope.launch { downloadViaHttp(ip) }
+                                mainScope.launch { loadRemoteListViaHttp(ip) }
                             }
                         }
                     }
@@ -204,44 +230,14 @@ class GlassMediaGalleryActivity : AppCompatActivity(),
         }
     }
     
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        
-        // Use XML layout instead of programmatic creation
         setContentView(R.layout.activity_glass_media_gallery)
         SystemBarsInsets.apply(this)
-        
-        // Initialize views from layout
-        recyclerView = findViewById(R.id.recyclerView)
-        progressBar = findViewById(R.id.progressBar)
-        tvStatus = findViewById(R.id.tvStatus)
-        tvProgress = findViewById(R.id.tvProgress)
-        btnConnect = findViewById(R.id.btnConnect)
-        btnRefresh = findViewById(R.id.btnRefresh)
-        btnDiscover = findViewById(R.id.btnDiscover)
-        layoutProgress = findViewById(R.id.layoutProgress)
-        
-        // Setup back button
-        findViewById<ImageView>(R.id.btnBack).setOnClickListener {
-            finish()
-        }
-        
-        // Setup menu button
-        findViewById<ImageView>(R.id.btnMenu).setOnClickListener {
-            showOverflowMenu(it)
-        }
-        
-        // Setup button click listeners
-        btnConnect?.setOnClickListener { startConnection() }
-        btnRefresh?.setOnClickListener { refreshMediaList() }
-        btnDiscover?.setOnClickListener { 
-            updateStatus("🔍 Searching for Glass devices...")
-            wifiP2pHelper.startDiscovery()
-        }
-        
-        // Check and request location permission for WiFi SSID
-        checkLocationPermission()
-        
+
+        bindViews()
+
         // Initialize WiFi P2P helper
         wifiP2pHelper = WifiP2pHelper(this)
         wifiP2pHelper.setCallback(this)
@@ -261,34 +257,74 @@ class GlassMediaGalleryActivity : AppCompatActivity(),
         // Using listener ID 2 like the original app
         LargeDataHandler.getInstance().addOutDeviceListener(2, bleDeviceNotifyListener)
         Log.d(TAG, "📡 BLE notification listener registered for Glass IP")
-        
-        // Setup adapter with new grid layout
-        adapter = MediaAdapter(
-            context = this,
-            items = mediaFiles,
-            onTap = { fileInfo ->
-                if (isSelectionMode) {
-                    toggleSelection(fileInfo)
-                } else {
-                    openMedia(fileInfo)
-                }
-            },
-            onLongPress = { fileInfo ->
-                if (!isSelectionMode) {
-                    enterSelectionMode()
-                }
-                toggleSelection(fileInfo)
-            },
-            isSelectionMode = { isSelectionMode },
-            isSelected = { fileInfo -> selectedFileNames.contains(fileInfo.fileName) }
-        )
-        recyclerView?.layoutManager = GridLayoutManager(this, 3)  // 3-column grid
-        recyclerView?.adapter = adapter
-        
-        // Load any existing downloaded files
+
         loadLocalFiles()
-        
-        updateStatus("Press 'Connect to Glass' to start")
+        render()
+    }
+
+    private fun bindViews() {
+        recyclerView = findViewById(R.id.recyclerView)
+        tabView = findViewById(R.id.tabView)
+        tabDownload = findViewById(R.id.tabDownload)
+        layoutDownloadHeader = findViewById(R.id.layoutDownloadHeader)
+        tvSelectAction = findViewById(R.id.tvSelectAction)
+        tvConnectionStatus = findViewById(R.id.tvConnectionStatus)
+        statusDot = findViewById(R.id.statusDot)
+        layoutEmpty = findViewById(R.id.layoutEmpty)
+        ivEmptyIcon = findViewById(R.id.ivEmptyIcon)
+        tvEmptyTitle = findViewById(R.id.tvEmptyTitle)
+        tvEmptyMessage = findViewById(R.id.tvEmptyMessage)
+        btnEmptyAction = findViewById(R.id.btnEmptyAction)
+        layoutActionBar = findViewById(R.id.layoutActionBar)
+        btnCancelSelection = findViewById(R.id.btnCancelSelection)
+        btnPrimaryAction = findViewById(R.id.btnPrimaryAction)
+        ivPrimaryAction = findViewById(R.id.ivPrimaryAction)
+        tvPrimaryAction = findViewById(R.id.tvPrimaryAction)
+        chips = mapOf(
+            Filter.ALL to findViewById(R.id.chipAll),
+            Filter.IMAGE to findViewById(R.id.chipImage),
+            Filter.VIDEO to findViewById(R.id.chipVideo),
+            Filter.RECORDING to findViewById(R.id.chipRecording),
+        )
+
+        findViewById<View>(R.id.btnBack).setOnClickListener { finish() }
+        findViewById<View>(R.id.btnMenu).setOnClickListener { showOverflowMenu(it) }
+        tabView.setOnClickListener { setMode(Mode.VIEW) }
+        tabDownload.setOnClickListener { setMode(Mode.DOWNLOAD) }
+        chips.forEach { (f, chip) ->
+            chip.setOnClickListener {
+                filter = f
+                render()
+                recyclerView.scrollToPosition(0)
+            }
+        }
+        tvSelectAction.setOnClickListener { toggleSelectAll() }
+        btnCancelSelection.setOnClickListener { clearSelection() }
+        btnPrimaryAction.setOnClickListener {
+            if (mode == Mode.DOWNLOAD) downloadSelected() else deleteSelectedImages()
+        }
+
+        adapter = GalleryMediaAdapter(
+            scope = mainScope,
+            onTap = ::onTileTapped,
+            onLongPress = ::onTileLongPressed,
+        )
+        recyclerView.layoutManager = GridLayoutManager(this, GRID_COLUMNS).apply {
+            spanSizeLookup = adapter.spanSizeLookup(GRID_COLUMNS)
+        }
+        recyclerView.adapter = adapter
+
+        // Back first leaves selection, then the screen.
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                if (isViewSelectionMode || selectedFileNames.isNotEmpty()) {
+                    clearSelection()
+                } else {
+                    isEnabled = false
+                    onBackPressedDispatcher.onBackPressed()
+                }
+            }
+        })
     }
     
     override fun onResume() {
@@ -351,9 +387,7 @@ class GlassMediaGalleryActivity : AppCompatActivity(),
             if (connected) {
                 isConnectedToGlass = true
                 updateStatus("✅ Connected! Getting media list...")
-                btnConnect?.text = "✅ Connected"
-                btnConnect?.isEnabled = false
-                glassMediaTransfer.getMediaList()
+                loadRemoteListViaSocket()
                 return@launch
             }
             
@@ -367,7 +401,7 @@ class GlassMediaGalleryActivity : AppCompatActivity(),
                 showRetryDialog()
             } else {
                 updateStatus("❌ Cannot connect - please check WiFi")
-                startAutoDiscovery()
+                startConnection()
             }
         }
     }
@@ -396,49 +430,27 @@ class GlassMediaGalleryActivity : AppCompatActivity(),
     }
     
     /**
-     * Show retry dialog when connection fails
+     * Shown when we joined the Glass Wi-Fi but its server doesn't answer.
      */
     private fun showRetryDialog() {
-        android.app.AlertDialog.Builder(this)
-            .setTitle("⚠️ Connection Failed")
-            .setMessage(
-                "Glass WiFi se connect hai lekin server respond nahi kar raha.\n\n" +
-                "Possible issues:\n" +
-                "• Glass ka hotspot abhi start ho raha hai\n" +
-                "• Glass restart karo aur phir try karo\n" +
-                "• WiFi Direct properly connect nahi hua\n\n" +
-                "Retry karna chahte ho?"
-            )
-            .setPositiveButton("🔄 Retry") { _, _ ->
+        showMessageDialog(
+            title = "Your glasses aren't responding",
+            message = "Your phone is on the glasses' Wi-Fi, but the glasses didn't answer. " +
+                "They may still be starting up — wait a few seconds and try again. " +
+                "If it keeps happening, restart your glasses.",
+            primaryText = "Try again",
+            onPrimary = {
                 mainScope.launch {
-                    updateStatus("🔄 Retrying connection...")
                     delay(2000)
                     checkAndConnectToGlass()
                 }
-            }
-            .setNegativeButton("WiFi Settings") { _, _ ->
+            },
+            secondaryText = "Wi-Fi settings",
+            onSecondary = {
                 wentToWifiSettings = true
                 openWifiDirectSettings()
             }
-            .setNeutralButton("Cancel", null)
-            .show()
-    }
-    
-    /**
-     * Show dialog when permission is required
-     */
-    private fun showPermissionRequiredDialog() {
-        android.app.AlertDialog.Builder(this)
-            .setTitle("📍 Permission Required")
-            .setMessage(
-                "WiFi SSID detect karne ke liye Location permission chahiye.\n\n" +
-                "Please permission allow karo."
-            )
-            .setPositiveButton("Grant Permission") { _, _ ->
-                checkLocationPermission()
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
+        )
     }
     
     /**
@@ -571,17 +583,14 @@ class GlassMediaGalleryActivity : AppCompatActivity(),
      * Show dialog to enable location services
      */
     private fun showLocationEnableDialog() {
-        android.app.AlertDialog.Builder(this)
-            .setTitle("📍 Location Required")
-            .setMessage(
-                "WiFi SSID padhne ke liye Location ON hona chahiye.\n\n" +
-                "Yeh Android ka requirement hai - Location ON karo to Glass WiFi detect ho payega."
-            )
-            .setPositiveButton("📍 Enable Location") { _, _ ->
-                startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
+        showMessageDialog(
+            title = "Turn on Location",
+            message = "Android needs Location turned on to find your glasses over Wi-Fi Direct. " +
+                "Your location isn't stored or shared.",
+            primaryText = "Turn on",
+            onPrimary = { startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)) },
+            secondaryText = "Not now"
+        )
     }
     
     override fun onRequestPermissionsResult(
@@ -596,8 +605,6 @@ class GlassMediaGalleryActivity : AppCompatActivity(),
             
             if (allGranted) {
                 Log.d(TAG, "All permissions granted: ${permissions.toList()}")
-                Toast.makeText(this, "✅ All permissions granted", Toast.LENGTH_SHORT).show()
-                
                 // Check if location is enabled
                 if (!isLocationEnabled()) {
                     showLocationEnableDialog()
@@ -610,9 +617,9 @@ class GlassMediaGalleryActivity : AppCompatActivity(),
                 Log.w(TAG, "Permissions denied: $deniedPermissions")
                 
                 if (deniedPermissions.any { it.contains("NEARBY") }) {
-                    Toast.makeText(this, "⚠️ Nearby Devices permission needed for WiFi P2P", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this, "Allow Nearby devices so the app can find your glasses", Toast.LENGTH_LONG).show()
                 } else {
-                    Toast.makeText(this, "⚠️ Location permission needed for WiFi detection", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this, "Allow Location so the app can find your glasses", Toast.LENGTH_LONG).show()
                 }
             }
         }
@@ -620,16 +627,63 @@ class GlassMediaGalleryActivity : AppCompatActivity(),
     
     
     /**
-     * Start connection process
+     * Start connection process: wake the glasses' transfer mode over BLE, then find
+     * them over Wi-Fi Direct. Ends in [showRemoteList] or [connectionFailed].
      */
     private fun startConnection() {
-        isDownloadComplete = false  // Reset for new session
-        isConnectedToGlass = false
+        if (isConnecting) return
+        // Wi-Fi Direct needs these; ask only when the user actually connects.
+        if (!hasLocationPermission() || !hasNearbyPermission()) {
+            checkLocationPermission()
+            return
+        }
+        if (!isLocationEnabled()) {
+            showLocationEnableDialog()
+            return
+        }
+        isConnecting = true
         showConnectionProgressDialog()
-        appendConnectionStep("Connect request started")
+
+        // Refresh / Reconnect while the glasses are still reachable: just re-read the
+        // list. Re-running Wi-Fi Direct here tore down the working link and failed.
+        val knownIp = glassHttpIp
+        if (knownIp != null) {
+            updateConnectionProgress(60)
+            mainScope.launch {
+                if (albumDownloader.isReachable(knownIp)) {
+                    isConnectedToGlass = true
+                    loadRemoteListViaHttp(knownIp)
+                } else {
+                    glassHttpIp = null
+                    startWifiDirectConnection()
+                }
+            }
+            return
+        }
+        startWifiDirectConnection()
+    }
+
+    /** Full connection: BLE wake-up, then Wi-Fi Direct discovery and connect. */
+    private fun startWifiDirectConnection() {
+        isMediaListLoaded = false
+        isConnectedToGlass = false
+        connectionProgressValue = 0  // may follow the quick path, which jumped ahead
         updateConnectionProgress(5)
         updateStatus("📡 Sending BLE command to Glass...")
-        btnConnect?.isEnabled = false
+        render()
+
+        connectionTimeoutJob?.cancel()
+        connectionTimeoutJob = mainScope.launch {
+            delay(CONNECT_TIMEOUT_MS)
+            if (isConnecting) {
+                wifiP2pHelper.stopDiscovery()
+                connectionFailed(
+                    "We couldn't find your glasses",
+                    "Make sure your glasses are turned on, charged and close to your phone, " +
+                        "and that they're connected in the app. Then try again."
+                )
+            }
+        }
 
         // Step 1: Trigger Glass hotspot/P2P mode
         glassMediaTransfer.triggerGlassHotspot()
@@ -637,7 +691,7 @@ class GlassMediaGalleryActivity : AppCompatActivity(),
         // Always use auto discovery (no method selection popup)
         mainScope.launch {
             delay(2000) // Wait for Glass P2P to start
-            startAutoDiscovery()
+            if (isConnecting) startAutoDiscovery()
         }
     }
     
@@ -645,11 +699,38 @@ class GlassMediaGalleryActivity : AppCompatActivity(),
      * Start Auto Discovery directly (default flow)
      */
     private fun startAutoDiscovery() {
-        btnConnect?.isEnabled = true
         appendConnectionStep("Searching for Glass device")
         updateConnectionProgress(25)
         updateStatus("🔍 Searching for Glass devices...")
         wifiP2pHelper.startDiscovery()
+    }
+
+    /** User pressed Cancel in the connecting popup. */
+    private fun cancelConnection() {
+        if (!isConnecting) return
+        isConnecting = false
+        connectionTimeoutJob?.cancel()
+        discoveryRetryJob?.cancel()
+        wifiP2pHelper.stopDiscovery()
+        dismissProgressDialog()
+        render()
+    }
+
+    /** Stop connecting and explain what went wrong, with a retry. */
+    private fun connectionFailed(title: String, message: String) {
+        Log.w(TAG, "Connection failed: $title — $message")
+        isConnecting = false
+        connectionTimeoutJob?.cancel()
+        discoveryRetryJob?.cancel()
+        dismissProgressDialog()
+        render()
+        showMessageDialog(
+            title = title,
+            message = message,
+            primaryText = "Try again",
+            onPrimary = { startConnection() },
+            secondaryText = "Close"
+        )
     }
     
     /**
@@ -670,39 +751,16 @@ class GlassMediaGalleryActivity : AppCompatActivity(),
                 // Fallback to GlassMediaTransfer scan
                 updateStatus("🔍 Scanning for Glass server...")
                 val connected = glassMediaTransfer.connectToGlass()
-                if (!connected) {
-                    startAutoDiscovery()
+                if (connected) {
+                    isConnectedToGlass = true
+                    loadRemoteListViaSocket()
+                } else {
+                    startConnection()
                 }
             }
         }
     }
     
-    /**
-     * Show dialog to guide user to connect WiFi
-     */
-    private fun showWifiConnectionDialog() {
-        android.app.AlertDialog.Builder(this)
-            .setTitle("📶 Connect to Glass WiFi")
-            .setMessage(
-                "Glass ka WiFi hotspot ON ho gaya hai!\n\n" +
-                "Ab yeh karo:\n" +
-                "1️⃣ Phone ki WiFi Settings kholo\n" +
-                "2️⃣ WiFi Direct / P2P section mein jao\n" +
-                "3️⃣ \"M01_F736...\" network dhundo\n" +
-                "4️⃣ Us network se connect karo\n" +
-                "5️⃣ Wapas yahan aao - AUTO CONNECT hoga!\n\n" +
-                "Note: Glass WiFi SSID usually starts with M01_"
-            )
-            .setPositiveButton("📶 WiFi Direct Settings") { _, _ ->
-                wentToWifiSettings = true
-                openWifiDirectSettings()
-            }
-            .setNeutralButton("🔄 Retry Connection") { _, _ ->
-                checkAndConnectToGlass()
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
-    }
     
     /**
      * Open WiFi Direct settings
@@ -737,568 +795,626 @@ class GlassMediaGalleryActivity : AppCompatActivity(),
         }
     }
     
-    /**
-     * Refresh media list from Glass
-     */
-    private fun refreshMediaList() {
-        if (!glassMediaTransfer.isConnectedToGlass()) {
-            Toast.makeText(this, "Not connected to Glass", Toast.LENGTH_SHORT).show()
+
+    // ===============================
+    // Screen state & rendering
+    // ===============================
+
+    private fun setMode(newMode: Mode) {
+        if (mode == newMode) return
+        mode = newMode
+        selectedFileNames.clear()
+        isViewSelectionMode = false
+        if (newMode == Mode.VIEW) loadLocalFiles()
+        render()
+        recyclerView.scrollToPosition(0)
+    }
+
+    /** Redraw everything from the current state. Cheap enough to call on any change. */
+    private fun render() {
+        styleTab(tabView, R.id.tabViewIcon, R.id.tabViewLabel, active = mode == Mode.VIEW)
+        styleTab(tabDownload, R.id.tabDownloadIcon, R.id.tabDownloadLabel, active = mode == Mode.DOWNLOAD)
+        chips.forEach { (f, chip) ->
+            val active = f == filter
+            chip.setBackgroundResource(if (active) R.drawable.bg_gm_chip_active else R.drawable.bg_gm_chip_inactive)
+            chip.setTextColor(color(if (active) R.color.gm_on_accent else R.color.gm_text_primary))
+            chip.setTypeface(chip.typeface, if (active) android.graphics.Typeface.BOLD else android.graphics.Typeface.NORMAL)
+        }
+
+        val source = if (mode == Mode.VIEW) localMedia else remoteMedia
+        val visible = source.filter { filter.kind == null || it.kind() == filter.kind }
+        val rows = if (mode == Mode.VIEW) groupByDay(visible) else visible.map { GalleryRow.Tile(it) }
+        adapter.submit(
+            rows = rows,
+            selected = selectedFileNames,
+            selectionEnabled = mode == Mode.DOWNLOAD || isViewSelectionMode,
+            showSavedBadge = mode == Mode.DOWNLOAD,
+        )
+
+        renderDownloadHeader(visible)
+        renderEmptyState(source, visible)
+        renderActionBar()
+    }
+
+    private fun styleTab(tab: View, iconId: Int, labelId: Int, active: Boolean) {
+        tab.setBackgroundResource(if (active) R.drawable.bg_gm_segment_active else 0)
+        val tint = color(if (active) R.color.gm_on_accent else R.color.gm_text_primary)
+        tab.findViewById<ImageView>(iconId).imageTintList = ColorStateList.valueOf(tint)
+        tab.findViewById<TextView>(labelId).apply {
+            setTextColor(tint)
+            setTypeface(typeface, if (active) android.graphics.Typeface.BOLD else android.graphics.Typeface.NORMAL)
+        }
+    }
+
+    private fun renderDownloadHeader(visible: List<MediaFileInfo>) {
+        val show = mode == Mode.DOWNLOAD && isMediaListLoaded && remoteMedia.isNotEmpty()
+        layoutDownloadHeader.visibility = if (show) View.VISIBLE else View.GONE
+        if (!show) return
+
+        val selectable = visible.filterNot { it.isDownloaded }
+        val count = selectedFileNames.size
+        tvSelectAction.visibility = if (selectable.isEmpty() && count == 0) View.GONE else View.VISIBLE
+        tvSelectAction.text = if (count == 0) "Select all" else "$count selected"
+
+        val saved = remoteMedia.count { it.isDownloaded }
+        val onGlasses = "${remoteMedia.size} on your glasses · $saved saved"
+        tvConnectionStatus.text = if (isConnectedToGlass) "Connected · $onGlasses" else "Disconnected · $onGlasses"
+        statusDot.backgroundTintList = ColorStateList.valueOf(
+            if (isConnectedToGlass) Color.parseColor("#34C759") else color(R.color.gm_text_secondary)
+        )
+    }
+
+    private fun renderEmptyState(source: List<MediaFileInfo>, visible: List<MediaFileInfo>) {
+        data class Empty(val icon: Int, val title: String, val message: String, val action: String?, val onAction: (() -> Unit)?)
+
+        val empty: Empty? = when {
+            visible.isNotEmpty() -> null
+            mode == Mode.VIEW && source.isEmpty() -> Empty(
+                R.drawable.ic_gm_image, "No media yet",
+                "Photos, videos and recordings you download from your glasses will show up here.",
+                "Download from glasses"
+            ) { setMode(Mode.DOWNLOAD) }
+            mode == Mode.VIEW -> Empty(
+                iconFor(filter), "No ${filter.label} yet", "Try a different filter.", null, null
+            )
+            !isMediaListLoaded -> Empty(
+                R.drawable.ic_gm_download, "Connect your glasses",
+                "Turn on your glasses and keep them close to your phone. We'll show what's on them " +
+                    "so you can choose what to download.",
+                if (isConnecting) "Connecting…" else "Connect to glasses"
+            ) { startConnection() }
+            source.isEmpty() -> Empty(
+                R.drawable.ic_gm_download, "Nothing on your glasses",
+                "Take some photos or videos with your glasses, then refresh.",
+                "Refresh"
+            ) { startConnection() }
+            else -> Empty(
+                iconFor(filter), "No ${filter.label} on your glasses", "Try a different filter.", null, null
+            )
+        }
+
+        layoutEmpty.visibility = if (empty == null) View.GONE else View.VISIBLE
+        recyclerView.visibility = if (empty == null) View.VISIBLE else View.INVISIBLE
+        if (empty == null) return
+
+        ivEmptyIcon.setImageResource(empty.icon)
+        tvEmptyTitle.text = empty.title
+        tvEmptyMessage.text = empty.message
+        btnEmptyAction.visibility = if (empty.action == null) View.GONE else View.VISIBLE
+        btnEmptyAction.text = empty.action
+        btnEmptyAction.isEnabled = !isConnecting
+        btnEmptyAction.alpha = if (isConnecting) 0.6f else 1f
+        btnEmptyAction.setOnClickListener { empty.onAction?.invoke() }
+    }
+
+    private fun renderActionBar() {
+        val count = selectedFileNames.size
+        val show = (mode == Mode.DOWNLOAD && isMediaListLoaded && remoteMedia.isNotEmpty()) ||
+            (mode == Mode.VIEW && isViewSelectionMode)
+        layoutActionBar.visibility = if (show) View.VISIBLE else View.GONE
+        if (!show) return
+
+        if (mode == Mode.DOWNLOAD) {
+            btnPrimaryAction.setBackgroundResource(R.drawable.bg_gm_button_primary)
+            ivPrimaryAction.setImageResource(R.drawable.ic_gm_download)
+            ivPrimaryAction.imageTintList = ColorStateList.valueOf(color(R.color.gm_on_accent))
+            tvPrimaryAction.setTextColor(color(R.color.gm_on_accent))
+            tvPrimaryAction.text = "Download ($count)"
+        } else {
+            btnPrimaryAction.setBackgroundResource(R.drawable.bg_gm_button_danger)
+            ivPrimaryAction.setImageResource(R.drawable.ic_gm_delete)
+            ivPrimaryAction.imageTintList = ColorStateList.valueOf(Color.WHITE)
+            tvPrimaryAction.setTextColor(Color.WHITE)
+            tvPrimaryAction.text = "Delete ($count)"
+        }
+        btnPrimaryAction.isEnabled = count > 0
+        btnPrimaryAction.alpha = if (count > 0) 1f else 0.45f
+        // In View mode Cancel also leaves selection mode, so it's always useful there.
+        val cancelEnabled = count > 0 || mode == Mode.VIEW
+        btnCancelSelection.isEnabled = cancelEnabled
+        btnCancelSelection.alpha = if (cancelEnabled) 1f else 0.45f
+    }
+
+    private fun iconFor(f: Filter) = when (f.kind) {
+        GalleryMediaKind.VIDEO -> R.drawable.ic_gm_video
+        GalleryMediaKind.RECORDING -> R.drawable.ic_gm_audio
+        else -> R.drawable.ic_gm_image
+    }
+
+    private fun color(res: Int) = ContextCompat.getColor(this, res)
+
+    /** "Today", "Yesterday", "Mon, 22 Sep" … headers, newest first. */
+    private fun groupByDay(items: List<MediaFileInfo>): List<GalleryRow> {
+        val rows = mutableListOf<GalleryRow>()
+        val thisYear = Calendar.getInstance().get(Calendar.YEAR)
+        val sameYearFormat = SimpleDateFormat("EEE, d MMM", Locale.getDefault())
+        val otherYearFormat = SimpleDateFormat("d MMM yyyy", Locale.getDefault())
+        items.sortedByDescending { it.timestamp }
+            .groupBy { dayKey(it.timestamp) }
+            .forEach { (_, dayItems) ->
+                val ts = dayItems.first().timestamp
+                val title = when {
+                    DateUtils.isToday(ts) -> "Today"
+                    DateUtils.isToday(ts + DateUtils.DAY_IN_MILLIS) -> "Yesterday"
+                    Calendar.getInstance().apply { timeInMillis = ts }.get(Calendar.YEAR) == thisYear ->
+                        sameYearFormat.format(Date(ts))
+                    else -> otherYearFormat.format(Date(ts))
+                }
+                rows += GalleryRow.Header(title, dayItems.size)
+                dayItems.forEach { rows += GalleryRow.Tile(it) }
+            }
+        return rows
+    }
+
+    private fun dayKey(ts: Long): Int {
+        val c = Calendar.getInstance().apply { timeInMillis = ts }
+        return c.get(Calendar.YEAR) * 1000 + c.get(Calendar.DAY_OF_YEAR)
+    }
+
+    // ===============================
+    // Taps, selection, menu
+    // ===============================
+
+    private fun onTileTapped(item: MediaFileInfo) {
+        when {
+            mode == Mode.DOWNLOAD && item.isDownloaded -> openMedia(item)
+            mode == Mode.DOWNLOAD -> toggleSelection(item)
+            isViewSelectionMode -> toggleSelection(item)
+            else -> openMedia(item)
+        }
+    }
+
+    private fun onTileLongPressed(item: MediaFileInfo) {
+        if (mode == Mode.DOWNLOAD) {
+            if (!item.isDownloaded) toggleSelection(item)
             return
         }
-        
-        mainScope.launch {
-            updateStatus("Refreshing media list...")
-            glassMediaTransfer.getMediaList()
+        if (!isViewSelectionMode) {
+            isViewSelectionMode = true
+            selectedFileNames.clear()
         }
+        toggleSelection(item)
     }
 
+    private fun toggleSelection(item: MediaFileInfo) {
+        if (!selectedFileNames.remove(item.fileName)) selectedFileNames.add(item.fileName)
+        render()
+    }
+
+    /** Download header: select every visible file not yet saved, or clear if all are. */
+    private fun toggleSelectAll() {
+        val selectable = remoteMedia
+            .filter { !it.isDownloaded && (filter.kind == null || it.kind() == filter.kind) }
+            .map { it.fileName }
+        if (selectable.isNotEmpty() && selectedFileNames.containsAll(selectable)) {
+            selectedFileNames.removeAll(selectable.toSet())
+        } else {
+            selectedFileNames.addAll(selectable)
+        }
+        render()
+    }
+
+    private fun clearSelection() {
+        selectedFileNames.clear()
+        isViewSelectionMode = false
+        render()
+    }
+
+    private data class MenuEntry(val icon: Int, val label: String, val onClick: () -> Unit)
+
+    /** Settings button: a dark dropdown card with an icon per option. */
     private fun showOverflowMenu(anchor: View) {
-        val popupMenu = PopupMenu(this, anchor)
-        popupMenu.menu.add(
-            0,
-            MENU_SELECT,
-            0,
-            if (isSelectionMode) "Cancel selection" else "Select"
-        )
-        popupMenu.menu.add(
-            0,
-            MENU_DELETE,
-            1,
-            if (selectedFileNames.isEmpty()) "Delete selected" else "Delete selected (${selectedFileNames.size})"
-        )
-        popupMenu.menu.findItem(MENU_DELETE)?.isEnabled = selectedFileNames.isNotEmpty()
-
-        popupMenu.setOnMenuItemClickListener { item ->
-            when (item.itemId) {
-                MENU_SELECT -> {
-                    if (isSelectionMode) {
-                        exitSelectionMode(showMessage = true)
-                    } else {
-                        enterSelectionMode()
-                    }
-                    true
+        val entries = mutableListOf<MenuEntry>()
+        if (mode == Mode.VIEW) {
+            if (isViewSelectionMode) {
+                entries += MenuEntry(R.drawable.ic_close, "Cancel selection") { clearSelection() }
+            } else {
+                entries += MenuEntry(R.drawable.ic_gm_select, "Select items") {
+                    isViewSelectionMode = true
+                    render()
                 }
-
-                MENU_DELETE -> {
-                    deleteSelectedImages()
-                    true
-                }
-
-                else -> false
             }
-        }
-
-        popupMenu.show()
-    }
-
-    private fun enterSelectionMode() {
-        if (isSelectionMode) return
-        isSelectionMode = true
-        selectedFileNames.clear()
-        adapter?.notifyDataSetChanged()
-        updateStatus("Selection mode enabled")
-        Toast.makeText(this, "Tap images to select", Toast.LENGTH_SHORT).show()
-    }
-
-    private fun exitSelectionMode(showMessage: Boolean) {
-        if (!isSelectionMode) return
-        isSelectionMode = false
-        selectedFileNames.clear()
-        adapter?.notifyDataSetChanged()
-        if (showMessage) {
-            Toast.makeText(this, "Selection canceled", Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    private fun toggleSelection(item: GlassMediaTransfer.MediaFileInfo) {
-        if (!isSelectionMode) return
-
-        if (selectedFileNames.contains(item.fileName)) {
-            selectedFileNames.remove(item.fileName)
+            entries += MenuEntry(R.drawable.ic_gm_download, "Download from glasses") { setMode(Mode.DOWNLOAD) }
         } else {
-            selectedFileNames.add(item.fileName)
+            if (!isConnecting) {
+                entries += MenuEntry(
+                    R.drawable.ic_refresh,
+                    if (isMediaListLoaded) "Refresh from glasses" else "Connect to glasses"
+                ) { startConnection() }
+            }
+            if (isMediaListLoaded && remoteMedia.any { !it.isDownloaded }) {
+                entries += MenuEntry(R.drawable.ic_gm_select, "Select all") {
+                    selectedFileNames.addAll(remoteMedia.filterNot { it.isDownloaded }.map { it.fileName })
+                    render()
+                }
+            }
+            if (selectedFileNames.isNotEmpty()) {
+                entries += MenuEntry(R.drawable.ic_close, "Clear selection") { clearSelection() }
+            }
+            entries += MenuEntry(R.drawable.ic_eye, "View saved media") { setMode(Mode.VIEW) }
+        }
+        entries += MenuEntry(R.drawable.ic_gm_wifi, "Wi-Fi Direct settings") {
+            wentToWifiSettings = true
+            openWifiDirectSettings()
         }
 
-        if (selectedFileNames.isEmpty()) {
-            updateStatus("Selection mode enabled")
-        } else {
-            updateStatus("${selectedFileNames.size} selected")
+        val inflater = layoutInflater
+        val content = inflater.inflate(R.layout.popup_gallery_menu, null) as LinearLayout
+        val popup = PopupWindow(
+            content,
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            true
+        ).apply {
+            elevation = 12 * resources.displayMetrics.density
+            setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            isOutsideTouchable = true
         }
-        adapter?.notifyDataSetChanged()
+        entries.forEach { entry ->
+            val row = inflater.inflate(R.layout.item_gallery_menu, content, false)
+            row.findViewById<ImageView>(R.id.menuIcon).setImageResource(entry.icon)
+            row.findViewById<TextView>(R.id.menuLabel).text = entry.label
+            row.setOnClickListener {
+                popup.dismiss()
+                entry.onClick()
+            }
+            content.addView(row)
+        }
+
+        // Right-align the card under the settings button.
+        content.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED)
+        val gap = (8 * resources.displayMetrics.density).toInt()
+        popup.showAsDropDown(anchor, anchor.width - content.measuredWidth, gap)
     }
     
     /**
-     * Delete selected images from gallery
+     * Delete the selected files from the phone (View mode).
      */
     private fun deleteSelectedImages() {
-        if (selectedFileNames.isEmpty()) {
-            Toast.makeText(this, "Select items first", Toast.LENGTH_SHORT).show()
-            return
-        }
-
         val selectedCount = selectedFileNames.size
-        android.app.AlertDialog.Builder(this)
-            .setTitle("Delete selected")
-            .setMessage("Delete $selectedCount selected item${if (selectedCount == 1) "" else "s"}?")
-            .setPositiveButton("Delete") { _, _ ->
-                var deletedCount = 0
-                val iterator = mediaFiles.iterator()
+        if (selectedCount == 0) return
+        val noun = if (selectedCount == 1) "item" else "items"
 
+        showMessageDialog(
+            title = "Delete $selectedCount $noun?",
+            message = "${if (selectedCount == 1) "It" else "They"} will be removed from this phone. " +
+                "Anything still on your glasses isn't affected.",
+            primaryText = "Delete",
+            primaryIsDestructive = true,
+            onPrimary = {
+                var deletedCount = 0
+                val iterator = localMedia.iterator()
                 while (iterator.hasNext()) {
                     val item = iterator.next()
-                    if (!selectedFileNames.contains(item.fileName)) continue
-
-                    val deleted = if (!item.localPath.isNullOrBlank()) {
-                        val file = File(item.localPath!!)
-                        !file.exists() || file.delete()
-                    } else {
-                        true
-                    }
-
-                    if (deleted) {
+                    if (item.fileName !in selectedFileNames) continue
+                    val file = item.localPath?.let(::File)
+                    if (file == null || !file.exists() || file.delete()) {
                         iterator.remove()
                         deletedCount++
+                        // It's no longer saved, so it can be downloaded again.
+                        remoteMedia.find { it.fileName == item.fileName }?.apply {
+                            localPath = null
+                            isDownloaded = false
+                        }
                     }
                 }
+                clearSelection()
+                val deletedNoun = if (deletedCount == 1) "item" else "items"
+                Snackbar.make(recyclerView, "Deleted $deletedCount $deletedNoun", Snackbar.LENGTH_SHORT).show()
+            },
+            secondaryText = "Cancel"
+        )
+    }
 
-                isSelectionMode = false
-                selectedFileNames.clear()
-                adapter?.notifyDataSetChanged()
-                updateStatus("Deleted $deletedCount item${if (deletedCount == 1) "" else "s"}")
-                Toast.makeText(
-                    this,
-                    "Deleted $deletedCount item${if (deletedCount == 1) "" else "s"}",
-                    Toast.LENGTH_SHORT
-                ).show()
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
+    // ===============================
+    // Local files (View mode)
+    // ===============================
+
+    private fun audioDirectory(): File {
+        val dir = File(
+            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC).path + "/GlassMedia/"
+        )
+        dir.mkdirs()
+        return dir
     }
-    
+
+    private fun localDirectories() = listOf(
+        glassMediaTransfer.getPhotosDirectory(),
+        glassMediaTransfer.getVideosDirectory(),
+        audioDirectory(),
+    )
+
+    /** The complete saved copy of [fileName] on the phone, if any. */
+    private fun localFileFor(fileName: String): File? =
+        localDirectories().map { File(it, fileName) }.firstOrNull { it.exists() && isCompleteFile(it) }
+
     /**
-     * Fetch file list from Glass and start download
-     * Called when BLE returns Glass IP (notification type 8)
+     * Earlier builds could leave a download cut short (the image shows its top part
+     * and then black). A complete JPEG ends with the FF D9 marker; anything else
+     * must not count as saved, so it can be downloaded again.
      */
-    private fun fetchAndDownloadFromGlass() {
-        appendConnectionStep("Fetching media list from device")
-        updateStatus("📋 Fetching file list from Glass...")
-        layoutProgress?.visibility = View.VISIBLE
-        
-        mainScope.launch {
-            try {
-                // Get file list from Glass via socket
-                val files = glassMediaTransfer.getMediaList()
-                
-                if (files.isNotEmpty()) {
-                    mediaFiles.clear()
-                    mediaFiles.addAll(files)
-                    adapter?.notifyDataSetChanged()
-                    
-                    updateStatus("📥 Found ${files.size} files. Starting download...")
-                    appendConnectionStep("Downloading data from Glass")
-                    
-                    // Start downloading all files
-                    val toDownload = files.filter { !it.isDownloaded }
-                    if (toDownload.isNotEmpty()) {
-                        glassMediaTransfer.downloadAllFiles(toDownload)
-                    } else {
-                        appendConnectionStep("Download completed")
-                        closeConnectionProgressDialog("Connected. All files already downloaded")
-                        updateStatus("✅ All ${files.size} files already downloaded")
-                        layoutProgress?.visibility = View.GONE
-                    }
-                } else {
-                    // No files from socket - Glass may need different protocol
-                    appendConnectionStep("Device connected")
-                    closeConnectionProgressDialog("Connected to Glass")
-                    updateStatus("📷 Connected! Press 'Download All' to fetch files")
-                    layoutProgress?.visibility = View.GONE
-                    Toast.makeText(this@GlassMediaGalleryActivity, 
-                        "Connected to Glass at ${glassMediaTransfer.isConnectedToGlass()}", 
-                        Toast.LENGTH_LONG).show()
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Error fetching files: ${e.message}")
-                appendConnectionStep("Failed: ${e.message}")
-                closeConnectionProgressDialog("Connection failed")
-                updateStatus("⚠️ Error: ${e.message}")
-                layoutProgress?.visibility = View.GONE
+    private fun isCompleteFile(file: File): Boolean {
+        if (file.length() <= 0) return false
+        val ext = file.extension.lowercase()
+        if (ext != "jpg" && ext != "jpeg") return true
+        return try {
+            java.io.RandomAccessFile(file, "r").use { raf ->
+                val tailSize = minOf(64L, raf.length()).toInt()
+                val tail = ByteArray(tailSize)
+                raf.seek(raf.length() - tailSize)
+                raf.readFully(tail)
+                // Allow trailing padding after the end-of-image marker.
+                (0 until tailSize - 1).any { tail[it] == 0xFF.toByte() && tail[it + 1] == 0xD9.toByte() }
             }
+        } catch (e: Exception) {
+            false
         }
     }
-    
-    /**
-     * Download all media from Glass
-     */
-    private fun downloadAllMedia() {
-        if (mediaFiles.isEmpty()) {
-            Toast.makeText(this, "No media to download", Toast.LENGTH_SHORT).show()
-            return
-        }
-        
-        val toDownload = mediaFiles.filter { !it.isDownloaded }
-        if (toDownload.isEmpty()) {
-            Toast.makeText(this, "All files already downloaded", Toast.LENGTH_SHORT).show()
-            return
-        }
-        
-        layoutProgress?.visibility = View.VISIBLE
-        updateStatus("Downloading ${toDownload.size} files...")
-        
-        glassMediaTransfer.downloadAllFiles(toDownload)
-    }
+
+    /** Where a downloaded file goes. Images and videos keep the original folder. */
+    private fun downloadDirFor(item: MediaFileInfo): File =
+        if (item.kind() == GalleryMediaKind.RECORDING) audioDirectory() else glassMediaTransfer.getPhotosDirectory()
     
     /**
      * Load already downloaded files
      */
     private fun loadLocalFiles() {
-        val photosDir = glassMediaTransfer.getPhotosDirectory()
-        val videosDir = glassMediaTransfer.getVideosDirectory()
-        
-        val existingFiles = mutableListOf<GlassMediaTransfer.MediaFileInfo>()
-        
-        // Load photos
-        photosDir.listFiles()?.forEach { file ->
-            existingFiles.add(GlassMediaTransfer.MediaFileInfo(
-                fileName = file.name,
-                fileType = "photo",
-                fileSize = file.length(),
-                timestamp = file.lastModified(),
-                localPath = file.absolutePath,
-                isDownloaded = true
-            ))
-        }
-        
-        // Load videos
-        videosDir.listFiles()?.forEach { file ->
-            existingFiles.add(GlassMediaTransfer.MediaFileInfo(
-                fileName = file.name,
-                fileType = "video",
-                fileSize = file.length(),
-                timestamp = file.lastModified(),
-                localPath = file.absolutePath,
-                isDownloaded = true
-            ))
-        }
-        
-        if (existingFiles.isNotEmpty()) {
-            mediaFiles.clear()
-            mediaFiles.addAll(existingFiles.sortedByDescending { it.timestamp })
-            adapter?.notifyDataSetChanged()
-            updateStatus("${existingFiles.size} local files found")
-        }
+        val seen = mutableSetOf<String>()
+        val existing = localDirectories()
+            .flatMap { it.listFiles()?.toList().orEmpty() }
+            // Hidden files are downloads still in progress.
+            .filter { it.isFile && !it.name.startsWith(".") && it.length() > 0 && seen.add(it.name) }
+            .map { file ->
+                val ext = file.extension.lowercase()
+                MediaFileInfo(
+                    fileName = file.name,
+                    fileType = when (ext) {
+                        in AUDIO_EXTENSIONS -> "audio"
+                        in VIDEO_EXTENSIONS -> "video"
+                        else -> "photo"
+                    },
+                    fileSize = file.length(),
+                    timestamp = file.lastModified(),
+                    localPath = file.absolutePath,
+                    isDownloaded = true
+                )
+            }
+        localMedia.clear()
+        localMedia.addAll(existing.sortedByDescending { it.timestamp })
+        updateStatus("${localMedia.size} local files found")
     }
     
     /**
      * Open media file
      */
-    private fun openMedia(fileInfo: GlassMediaTransfer.MediaFileInfo) {
+    private fun openMedia(fileInfo: MediaFileInfo) {
         val localPath = fileInfo.localPath
         if (localPath == null) {
-            // Need to download first
-            mainScope.launch {
-                updateStatus("Downloading ${fileInfo.fileName}...")
-                layoutProgress?.visibility = View.VISIBLE
-                
-                val path = glassMediaTransfer.downloadFile(fileInfo)
-                if (path != null) {
-                    fileInfo.localPath = path
-                    fileInfo.isDownloaded = true
-                    adapter?.notifyDataSetChanged()
-                    openLocalFile(path, fileInfo.fileType)
-                }
-                
-                layoutProgress?.visibility = View.GONE
-            }
+            Toast.makeText(this, "Download this file first to open it", Toast.LENGTH_SHORT).show()
             return
         }
-        
-        openLocalFile(localPath, fileInfo.fileType)
+        openLocalFile(localPath, fileInfo)
     }
     
-    private fun openLocalFile(path: String, fileType: String) {
+    private fun openLocalFile(path: String, fileInfo: MediaFileInfo) {
         try {
             val file = File(path)
-            
             if (!file.exists()) {
                 Log.e(TAG, "File does not exist: $path")
-                Toast.makeText(this, "File not found", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "This file is no longer on your phone", Toast.LENGTH_SHORT).show()
+                loadLocalFiles()
+                render()
                 return
             }
-            
-            // Determine file type from extension if fileType is not clear
-            val extension = file.extension.lowercase()
-            val isImage = fileType.equals("image", ignoreCase = true) || 
-                          extension in listOf("jpg", "jpeg", "png", "gif", "bmp", "webp")
-            val isVideo = fileType.equals("video", ignoreCase = true) || 
-                          extension in listOf("mp4", "mkv", "avi", "mov", "3gp", "webm")
-            
-            Log.d(TAG, "Opening file: $path (type: $fileType, ext: $extension, isImage: $isImage, isVideo: $isVideo)")
-            
-            when {
-                isImage -> {
-                    // Get all image paths for swipe navigation
-                    val allImagePaths = mediaFiles
-                        .filter { f -> 
-                            val fExt = f.fileName.substringAfterLast('.').lowercase()
-                            f.fileType.equals("image", ignoreCase = true) || 
-                            fExt in listOf("jpg", "jpeg", "png", "gif", "bmp", "webp")
-                        }
+
+            when (fileInfo.kind()) {
+                GalleryMediaKind.IMAGE -> {
+                    // All saved images, for swipe navigation in the viewer
+                    val allImagePaths = localMedia
+                        .filter { it.kind() == GalleryMediaKind.IMAGE }
                         .mapNotNull { it.localPath }
+                        .ifEmpty { listOf(path) }
                     val currentIndex = allImagePaths.indexOf(path).coerceAtLeast(0)
-                    
-                    // Open image in our in-app full-screen viewer with swipe navigation
                     ImageViewerActivity.open(this, path, file.name, ArrayList(allImagePaths), currentIndex)
                 }
-                isVideo -> {
-                    // Open video in our in-app video player
+                // The in-app player uses VideoView, which plays audio-only files too.
+                GalleryMediaKind.VIDEO, GalleryMediaKind.RECORDING ->
                     VideoPlayerActivity.open(this, path, file.name)
-                }
-                else -> {
-                    Toast.makeText(this, "Unsupported file type: $extension", Toast.LENGTH_SHORT).show()
-                }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error opening file: ${e.message}", e)
-            Toast.makeText(this, "Cannot open file: ${e.message}", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Couldn't open this file", Toast.LENGTH_SHORT).show()
         }
     }
     
+    /** Technical progress goes to logcat; the UI shows friendly text instead. */
     private fun updateStatus(status: String) {
-        tvStatus?.text = "Status: $status"
         Log.d(TAG, status)
     }
 
-    private fun showConnectionProgressDialog() {
-        if (connectionProgressDialog?.isShowing == true) return
+    // ===============================
+    // Popups
+    // ===============================
 
-        lastProgressLine = ""
-        connectionProgressValue = 0
-        connectionStepCircles.clear()
-        connectionStepTitles.clear()
-        connectionStepConnectors.clear()
-        tvStatus?.visibility = View.INVISIBLE
-        val content = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(48, 24, 48, 24)
-        }
-
-        val subtitle = TextView(this).apply {
-            textSize = 14f
-            text = "Please wait while we connect and download data"
-            alpha = 0.85f
-        }
-        content.addView(subtitle)
-
-        val stepperRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            val params = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            )
-            params.topMargin = 20
-            layoutParams = params
-        }
-
-        for (i in stepTitles.indices) {
-            val stepContainer = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                gravity = android.view.Gravity.CENTER_HORIZONTAL
-                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-            }
-
-            val circle = TextView(this).apply {
-                text = "${i + 1}"
-                gravity = android.view.Gravity.CENTER
-                setTextColor(Color.parseColor("#9CA3AF"))
-                textSize = 16f
-                background = createStepCircleDrawable("pending")
-                val size = (40 * resources.displayMetrics.density).toInt()
-                layoutParams = LinearLayout.LayoutParams(size, size)
-            }
-            stepContainer.addView(circle)
-
-            val stepLabel = TextView(this).apply {
-                text = "Step ${i + 1}"
-                textSize = 11f
-                setTextColor(Color.parseColor("#9CA3AF"))
-                val params = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.WRAP_CONTENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT
-                )
-                params.topMargin = 6
-                layoutParams = params
-            }
-            stepContainer.addView(stepLabel)
-
-            val stepTitle = TextView(this).apply {
-                text = stepTitles[i]
-                textSize = 12f
-                setTextColor(Color.parseColor("#D1D5DB"))
-            }
-            stepContainer.addView(stepTitle)
-
-            connectionStepCircles.add(circle)
-            connectionStepTitles.add(stepTitle)
-            stepperRow.addView(stepContainer)
-
-            if (i < stepTitles.lastIndex) {
-                val connector = View(this).apply {
-                    setBackgroundColor(Color.parseColor("#4B5563"))
-                    layoutParams = LinearLayout.LayoutParams(26, 4).apply {
-                        topMargin = (20 * resources.displayMetrics.density).toInt()
-                    }
-                }
-                connectionStepConnectors.add(connector)
-                stepperRow.addView(connector)
+    /** A card that sits near the bottom of the screen, like the app's other popups. */
+    private fun newGalleryDialog(layout: Int, cancelable: Boolean): Dialog =
+        Dialog(this).apply {
+            requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
+            setContentView(layout)
+            setCancelable(cancelable)
+            window?.let { w ->
+                val density = resources.displayMetrics.density
+                val margin = (14 * density).toInt()
+                w.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+                w.setLayout(resources.displayMetrics.widthPixels - 2 * margin, ViewGroup.LayoutParams.WRAP_CONTENT)
+                w.setGravity(android.view.Gravity.BOTTOM)
+                w.attributes = w.attributes.apply { y = (18 * density).toInt() }
+                w.setDimAmount(0.6f)
             }
         }
-        content.addView(stepperRow)
 
-        connectionProgressBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
-            isIndeterminate = false
-            max = 100
-            progress = 0
-            val params = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            )
-            params.topMargin = 20
-            layoutParams = params
+    /** One consistent popup for every message on this screen. */
+    private fun showMessageDialog(
+        title: String,
+        message: String,
+        primaryText: String,
+        onPrimary: (() -> Unit)? = null,
+        secondaryText: String? = null,
+        onSecondary: (() -> Unit)? = null,
+        primaryIsDestructive: Boolean = false,
+    ) {
+        if (isFinishing || isDestroyed) return
+        val dialog = newGalleryDialog(R.layout.dialog_gallery_message, cancelable = true)
+        dialog.findViewById<TextView>(R.id.tvDialogTitle).text = title
+        dialog.findViewById<TextView>(R.id.tvDialogMessage).text = message
+        dialog.findViewById<TextView>(R.id.btnDialogPrimary).apply {
+            text = primaryText
+            if (primaryIsDestructive) {
+                setBackgroundResource(R.drawable.bg_gm_button_danger)
+                setTextColor(Color.WHITE)
+            }
+            setOnClickListener { dialog.dismiss(); onPrimary?.invoke() }
         }
-        content.addView(connectionProgressBar)
-
-        connectionProgressPercentTextView = TextView(this).apply {
-            textSize = 13f
-            text = "0%"
-            gravity = android.view.Gravity.END
+        dialog.findViewById<TextView>(R.id.btnDialogSecondary).apply {
+            if (secondaryText == null) {
+                visibility = View.GONE
+            } else {
+                text = secondaryText
+                setOnClickListener { dialog.dismiss(); onSecondary?.invoke() }
+            }
         }
-        content.addView(connectionProgressPercentTextView)
-
-        connectionProgressTextView = TextView(this).apply {
-            textSize = 15f
-            text = ""
-            setLineSpacing(10f, 1.0f)
-            val params = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            )
-            params.topMargin = 18
-            layoutParams = params
-        }
-        content.addView(connectionProgressTextView)
-
-        connectionProgressDialog = android.app.AlertDialog.Builder(this)
-            .setTitle("Downloading from Glass")
-            .setView(content)
-            .setCancelable(false)
-            .create()
-
-        connectionProgressDialog?.show()
-        updateConnectionStepper(0)
+        dialog.show()
     }
 
-    private fun appendConnectionStep(step: String) {
-        if (connectionProgressDialog?.isShowing != true) return
-        if (lastProgressLine == step) return
+    /**
+     * Progress popup: header, Connect → Discover → Sync stepper, spinner, status
+     * line, detail line and a progress bar. Close (X) and Cancel both call [onCancel].
+     */
+    private fun showProgressDialog(title: String, subtitle: String, onCancel: () -> Unit) {
+        dismissProgressDialog()
+        if (isFinishing || isDestroyed) return
+        val dialog = newGalleryDialog(R.layout.dialog_gallery_progress, cancelable = false)
+        dialog.findViewById<TextView>(R.id.tvDialogTitle).text = title
+        dialog.findViewById<TextView>(R.id.tvDialogSubtitle).text = subtitle
+        dialog.findViewById<View>(R.id.btnDialogCancel).setOnClickListener { onCancel() }
+        dialog.findViewById<View>(R.id.btnDialogClose).setOnClickListener { onCancel() }
+        progressDialog = dialog
+        updateProgressDialog(step = 0, percent = 0)
+        dialog.show()
+    }
 
-        val current = connectionProgressTextView?.text?.toString().orEmpty()
-        val nextLine = "• $step"
-        connectionProgressTextView?.text = if (current.isBlank()) nextLine else "$current\n$nextLine"
-        lastProgressLine = step
+    /** Update any part of the progress popup; null leaves that part unchanged. */
+    private fun updateProgressDialog(
+        step: Int? = null,
+        status: String? = null,
+        detail: String? = null,
+        percent: Int? = null,
+    ) {
+        val dialog = progressDialog ?: return
+        step?.let { renderStepper(dialog, it) }
+        status?.let { dialog.findViewById<TextView>(R.id.tvDialogStatus).text = it }
+        detail?.let { dialog.findViewById<TextView>(R.id.tvDialogDetail).text = it }
+        percent?.let {
+            val p = it.coerceIn(0, 100)
+            dialog.findViewById<ProgressBar>(R.id.dialogProgress).progress = p
+            dialog.findViewById<TextView>(R.id.tvDialogPercent).text = "$p%"
+        }
+    }
+
+    /** Steps before [active] are done (check), [active] is highlighted, the rest pending. */
+    private fun renderStepper(dialog: Dialog, active: Int) {
+        val circles = listOf(R.id.stepCircle1, R.id.stepCircle2, R.id.stepCircle3)
+        val numbers = listOf(R.id.stepNumber1, R.id.stepNumber2, R.id.stepNumber3)
+        val checks = listOf(R.id.stepCheck1, R.id.stepCheck2, R.id.stepCheck3)
+        val labels = listOf(R.id.stepLabel1, R.id.stepLabel2, R.id.stepLabel3)
+        for (i in circles.indices) {
+            val done = i < active
+            val current = i == active
+            dialog.findViewById<View>(circles[i]).setBackgroundResource(
+                when {
+                    done -> R.drawable.bg_gm_step_done
+                    current -> R.drawable.bg_gm_step_active
+                    else -> R.drawable.bg_gm_step_pending
+                }
+            )
+            dialog.findViewById<View>(numbers[i]).visibility = if (done) View.INVISIBLE else View.VISIBLE
+            dialog.findViewById<View>(checks[i]).visibility = if (done) View.VISIBLE else View.GONE
+            dialog.findViewById<TextView>(labels[i]).setTextColor(
+                color(if (done || current) R.color.gm_text_primary else R.color.gm_text_secondary)
+            )
+        }
+        listOf(R.id.stepLine1, R.id.stepLine2).forEachIndexed { i, id ->
+            dialog.findViewById<View>(id).setBackgroundColor(
+                color(if (i < active) R.color.gm_accent else R.color.gm_border)
+            )
+        }
+    }
+
+    private fun dismissProgressDialog() {
+        progressDialog?.takeIf { it.isShowing }?.dismiss()
+        progressDialog = null
+    }
+
+    private fun showConnectionProgressDialog() {
+        connectionProgressValue = 0
+        showProgressDialog(
+            "Connect to Glass",
+            "Access your photos and videos from your smart glasses."
+        ) { cancelConnection() }
+        updateConnectionProgress(0)
+    }
+
+    /** Detailed connection steps are for logcat; the popup shows the stage. */
+    private fun appendConnectionStep(step: String) {
+        Log.d(TAG, "Connection step: $step")
     }
 
     private fun updateConnectionProgress(value: Int) {
-        if (connectionProgressDialog?.isShowing != true) return
-
+        if (!isConnecting) return
         val clamped = value.coerceIn(0, 100)
         if (clamped < connectionProgressValue) return
-
         connectionProgressValue = clamped
-        connectionProgressBar?.progress = connectionProgressValue
-        connectionProgressPercentTextView?.text = "$connectionProgressValue%"
-        updateConnectionStepper(connectionProgressValue)
+        val stage = connectionStage(clamped)
+        updateProgressDialog(stage.step, stage.status, stage.detail, clamped)
     }
 
-    private fun updateConnectionStepper(progress: Int) {
-        if (connectionStepCircles.isEmpty()) return
+    private data class Stage(val step: Int, val status: String, val detail: String)
 
-        val activeIndex = when {
-            progress < 25 -> 0
-            progress < 50 -> 1
-            progress < 75 -> 2
-            else -> 3
-        }
-
-        connectionStepCircles.forEachIndexed { index, circle ->
-            when {
-                progress >= 100 || index < activeIndex -> {
-                    circle.text = "✓"
-                    circle.setTextColor(Color.WHITE)
-                    circle.background = createStepCircleDrawable("done")
-                    connectionStepTitles[index].setTextColor(Color.WHITE)
-                }
-                index == activeIndex -> {
-                    circle.text = "${index + 1}"
-                    circle.setTextColor(Color.WHITE)
-                    circle.background = createStepCircleDrawable("active")
-                    connectionStepTitles[index].setTextColor(Color.parseColor("#93C5FD"))
-                }
-                else -> {
-                    circle.text = "${index + 1}"
-                    circle.setTextColor(Color.parseColor("#9CA3AF"))
-                    circle.background = createStepCircleDrawable("pending")
-                    connectionStepTitles[index].setTextColor(Color.parseColor("#D1D5DB"))
-                }
-            }
-        }
-
-        connectionStepConnectors.forEachIndexed { index, connector ->
-            val done = progress >= 100 || index < activeIndex
-            connector.setBackgroundColor(
-                if (done) Color.parseColor("#3B82F6") else Color.parseColor("#4B5563")
-            )
-        }
+    /** Maps connection progress to the stepper: 0 = Connect, 1 = Discover, 2 = Sync. */
+    private fun connectionStage(progress: Int) = when {
+        progress < 25 -> Stage(0, "Connecting to your glasses…", "Keep your glasses nearby.")
+        progress < 45 -> Stage(1, "Looking for your glasses…", "Make sure they're turned on.")
+        progress < 60 -> Stage(1, "Connecting over Wi-Fi…", "This can take up to a minute.")
+        else -> Stage(2, "Reading your media…", "Almost there.")
     }
 
-    private fun createStepCircleDrawable(state: String): GradientDrawable {
-        val drawable = GradientDrawable()
-        drawable.shape = GradientDrawable.OVAL
-
-        when (state) {
-            "done" -> {
-                drawable.setColor(Color.parseColor("#3B82F6"))
-                drawable.setStroke(3, Color.parseColor("#93C5FD"))
-            }
-            "active" -> {
-                drawable.setColor(Color.parseColor("#2563EB"))
-                drawable.setStroke(4, Color.parseColor("#60A5FA"))
-            }
-            else -> {
-                drawable.setColor(Color.parseColor("#1F2937"))
-                drawable.setStroke(3, Color.parseColor("#6B7280"))
-            }
-        }
-        return drawable
-    }
-
+    /** Connection attempt is over (success or not); [finalStatus] is logged. */
     private fun closeConnectionProgressDialog(finalStatus: String) {
-        updateConnectionProgress(100)
-        if (connectionProgressDialog?.isShowing == true) {
-            connectionProgressDialog?.dismiss()
-        }
-        connectionProgressDialog = null
-        connectionProgressTextView = null
-        connectionProgressBar = null
-        connectionProgressPercentTextView = null
-        connectionProgressValue = 0
-        connectionStepCircles.clear()
-        connectionStepTitles.clear()
-        connectionStepConnectors.clear()
-        lastProgressLine = ""
-        tvStatus?.visibility = View.VISIBLE
+        isConnecting = false
+        connectionTimeoutJob?.cancel()
+        dismissProgressDialog()
         updateStatus(finalStatus)
-        btnConnect?.isEnabled = true
+        render()
     }
 
     /**
@@ -1449,7 +1565,7 @@ class GlassMediaGalleryActivity : AppCompatActivity(),
                     }
 
                     mainScope.launch {
-                        downloadViaHttp(glassIp)
+                        loadRemoteListViaHttp(glassIp)
                     }
 
                 } else if (openPort != null) {
@@ -1471,151 +1587,249 @@ class GlassMediaGalleryActivity : AppCompatActivity(),
 
                     mainScope.launch {
                         delay(500)
-                        fetchAndDownloadFromGlass()
+                        loadRemoteListViaSocket()
                     }
 
                 } else {
                     isConnectedToGlass = false
                     appendConnectionStep("Failed to reach Glass server")
-                    closeConnectionProgressDialog("Glass server did not respond")
-                    updateStatus("❌ Glass server failed to respond")
+                    connectionFailed(
+                        "Your glasses aren't responding",
+                        "We found your glasses, but their file server didn't answer. " +
+                            "Restart your glasses and try again."
+                    )
                 }
             }
         }.start()
     }
 
-    // HTTP download flow using AlbumDownloader (for port 80)
-    private suspend fun downloadViaHttp(ip: String) {
-        layoutProgress?.visibility = View.VISIBLE
+
+    // ===============================
+    // Media on the glasses (Download mode)
+    // ===============================
+
+    /** HTTP server on port 80: read the file list. Nothing is downloaded yet. */
+    private suspend fun loadRemoteListViaHttp(ip: String) {
+        glassHttpIp = ip
         appendConnectionStep("Fetching media list")
         updateConnectionProgress(65)
         updateStatus("📋 Fetching HTTP file list...")
 
-        // 1. List Fetch karo
-        val files = try {
+        val items = try {
             withContext(Dispatchers.IO) { albumDownloader.fetchConfig(ip) }
         } catch (e: Exception) {
             Log.e(TAG, "HTTP fetchConfig failed: ${e.message}")
-            layoutProgress?.visibility = View.GONE
-            appendConnectionStep("Failed: ${e.message}")
-            closeConnectionProgressDialog("HTTP fetch failed")
-            updateStatus("⚠️ HTTP fetch failed: ${e.message}")
+            connectionFailed(
+                "Couldn't read your glasses",
+                "We connected, but couldn't get the list of files. Please try again."
+            )
             return
         }
 
-        if (files.isNotEmpty()) {
-            val totalFiles = files.size
-            appendConnectionStep("Downloading data ($totalFiles files)")
-            updateConnectionProgress(72)
-            updateStatus("📥 Found $totalFiles files. Checking local storage...")
+        showRemoteList(items.map { item ->
+            MediaFileInfo(
+                fileName = item.fileName,
+                fileType = when (item.type) {
+                    2 -> "video"
+                    3 -> "audio"
+                    else -> "photo"
+                },
+                fileSize = 0L,
+                timestamp = System.currentTimeMillis(),
+            )
+        })
+    }
 
-            // 2. Progress Bar Setup (Fixed 0% issue)
-            runOnUiThread {
-                progressBar?.isIndeterminate = false
-                progressBar?.max = totalFiles
-                progressBar?.progress = 0
-                tvProgress?.text = "0/$totalFiles"
+    /** Raw socket server: read the file list. Nothing is downloaded yet. */
+    private fun loadRemoteListViaSocket() {
+        glassHttpIp = null
+        appendConnectionStep("Fetching media list from device")
+        updateConnectionProgress(65)
+        mainScope.launch {
+            val files = try {
+                glassMediaTransfer.getMediaList()
+            } catch (e: Exception) {
+                Log.e(TAG, "Error fetching files: ${e.message}")
+                connectionFailed(
+                    "Couldn't read your glasses",
+                    "We connected, but couldn't get the list of files. Please try again."
+                )
+                return@launch
             }
+            showRemoteList(files)
+        }
+    }
 
-            // UI List Setup
-            val galleryFiles = files.map { item ->
-                GlassMediaTransfer.MediaFileInfo(
-                    fileName = item.fileName,
-                    fileType = if (item.type == 2) "video" else "photo",
-                    fileSize = 0L,
-                    timestamp = System.currentTimeMillis(),
-                    localPath = null,
-                    isDownloaded = false
+    private fun showRemoteList(files: List<MediaFileInfo>) {
+        remoteMedia.clear()
+        files.sortedByDescending { it.fileName }.forEach { f ->
+            localFileFor(f.fileName)?.let {
+                f.localPath = it.absolutePath
+                f.isDownloaded = true
+            }
+            remoteMedia += f
+        }
+        // Keep a selection made before a reconnect, minus anything now saved or gone.
+        val selectable = remoteMedia.filterNot { it.isDownloaded }.map { it.fileName }.toSet()
+        selectedFileNames.retainAll(selectable)
+
+        isMediaListLoaded = true
+        closeConnectionProgressDialog("Found ${remoteMedia.size} files on Glass")
+        if (mode != Mode.DOWNLOAD) setMode(Mode.DOWNLOAD)
+    }
+
+    /** Download only the files the user picked. */
+    private fun downloadSelected() {
+        val targets = remoteMedia.filter { it.fileName in selectedFileNames && !it.isDownloaded }
+        if (targets.isEmpty() || downloadJob?.isActive == true) return
+
+        showProgressDialog(
+            "Downloading media",
+            "Saving the files you picked to your phone."
+        ) { stopDownload() }
+        // Connected and discovered already — this is the Sync step.
+        updateProgressDialog(step = 2, status = "Preparing download…", detail = "Keep your glasses nearby.")
+        downloadJob = mainScope.launch {
+            var saved = 0
+            var cancelled = false
+            val failures = mutableListOf<DownloadFailure>()
+            try {
+                for ((index, item) in targets.withIndex()) {
+                    ensureActive()
+                    updateProgressDialog(
+                        status = "Downloading ${index + 1} of ${targets.size}…",
+                        detail = item.fileName,
+                        percent = index * 100 / targets.size
+                    )
+                    val onFileProgress: (Int) -> Unit = { pct ->
+                        runOnUiThread {
+                            if (downloadJob?.isActive == true) {
+                                updateProgressDialog(percent = (index * 100 + pct) / targets.size)
+                            }
+                        }
+                    }
+                    val (path, failure) = downloadOne(item, onFileProgress)
+                    if (path != null) {
+                        item.localPath = path
+                        item.isDownloaded = true
+                        selectedFileNames.remove(item.fileName)
+                        saved++
+                        render()
+                        continue
+                    }
+                    failures += failure ?: DownloadFailure.NETWORK
+                    // Every remaining file would fail the same way.
+                    if (failure == DownloadFailure.STORAGE) break
+                    if (failures.takeLast(2).count { it == DownloadFailure.NETWORK } == 2) break
+                }
+            } catch (e: CancellationException) {
+                cancelled = true
+                throw e
+            } finally {
+                dismissProgressDialog()
+                loadLocalFiles()
+                render()
+                reportDownloadResult(saved, targets.size, cancelled, failures)
+            }
+        }
+    }
+
+    /** Cancel/X in the download popup. The popup closes when the job unwinds. */
+    private fun stopDownload() {
+        val job = downloadJob ?: return
+        if (!job.isActive) return
+        progressDialog?.let { dialog ->
+            dialog.findViewById<View>(R.id.btnDialogCancel).isEnabled = false
+            dialog.findViewById<View>(R.id.btnDialogCancel).alpha = 0.5f
+            dialog.findViewById<View>(R.id.btnDialogClose).isEnabled = false
+        }
+        updateProgressDialog(status = "Stopping download…", detail = "Just a moment.")
+        job.cancel()
+    }
+
+    /** Returns the saved path, or null with the reason it failed. */
+    private suspend fun downloadOne(
+        item: MediaFileInfo,
+        onProgress: (Int) -> Unit,
+    ): Pair<String?, DownloadFailure?> {
+        val ip = glassHttpIp
+        if (ip != null) {
+            var failure: DownloadFailure? = null
+            val file = withContext(Dispatchers.IO) {
+                albumDownloader.downloadFile(
+                    ip, item.fileName, downloadDirFor(item),
+                    onFailure = { failure = it },
+                    progressCallback = onProgress
                 )
             }
+            return file?.absolutePath to failure
+        }
 
-            mediaFiles.clear()
-            mediaFiles.addAll(galleryFiles)
-            adapter?.notifyDataSetChanged()
+        socketProgress = onProgress
+        lastSocketError = null
+        val path = try {
+            glassMediaTransfer.downloadFile(item)
+        } finally {
+            socketProgress = null
+        }
+        val error = lastSocketError.orEmpty()
+        val failure = when {
+            path != null -> null
+            listOf("EPERM", "ENOSPC", "EACCES", "open failed").any { it in error } -> DownloadFailure.STORAGE
+            else -> DownloadFailure.NETWORK
+        }
+        return path to failure
+    }
 
-            var downloadedCount = 0
-            var skippedCount = 0
-            val outputDir = glassMediaTransfer.getPhotosDirectory()
+    private fun reportDownloadResult(
+        saved: Int,
+        total: Int,
+        cancelled: Boolean,
+        failures: List<DownloadFailure>,
+    ) {
+        val noun = if (saved == 1) "file" else "files"
+        if (cancelled) {
+            Snackbar.make(
+                recyclerView,
+                if (saved == 0) "Download stopped" else "Download stopped · $saved $noun saved",
+                Snackbar.LENGTH_LONG
+            ).show()
+            return
+        }
+        if (saved == total) {
+            Snackbar.make(recyclerView, "$saved $noun saved to your phone", Snackbar.LENGTH_LONG)
+                .setAction("View") { setMode(Mode.VIEW) }
+                .setActionTextColor(color(R.color.gm_accent))
+                .show()
+            return
+        }
 
-            // 3. Ek-ek file check aur download karo
-            files.forEachIndexed { index, item ->
-                val currentFileNum = index + 1
-                val localFile = File(outputDir, item.fileName)
-
-                // --- CHECK: Kya file pehle se hai? ---
-                if (localFile.exists() && localFile.length() > 0) {
-                    // Haan hai -> SKIP DOWNLOAD
-                    skippedCount++
-                    
-                    // UI update (Dikhao ki downloaded hai)
-                    mediaFiles.find { it.fileName == item.fileName }?.apply {
-                        localPath = localFile.absolutePath
-                        isDownloaded = true
-                    }
-                    
-                    // Progress Bar update (Silent)
-                    runOnUiThread {
-                        progressBar?.progress = currentFileNum
-                        tvProgress?.text = "$currentFileNum/$totalFiles"
-                        val popupProgress = 72 + ((currentFileNum * 26) / totalFiles)
-                        updateConnectionProgress(popupProgress)
-                    }
-                } else {
-                    // Nahi hai -> DOWNLOAD KARO
-                    runOnUiThread {
-                        progressBar?.progress = currentFileNum
-                        tvProgress?.text = "$currentFileNum/$totalFiles"
-                        val popupProgress = 72 + ((currentFileNum * 26) / totalFiles)
-                        updateConnectionProgress(popupProgress)
-                        updateStatus("Downloading $currentFileNum/$totalFiles: ${item.fileName}")
-                    }
-
-                    val file = withContext(Dispatchers.IO) { 
-                        albumDownloader.downloadFile(ip, item.fileName, outputDir) 
-                    }
-                    
-                    if (file != null) {
-                        downloadedCount++
-                        mediaFiles.find { it.fileName == item.fileName }?.apply {
-                            localPath = file.absolutePath
-                            isDownloaded = true
-                        }
-                        // Thode thode der mein UI refresh karo
-                        if (downloadedCount % 5 == 0) {
-                            runOnUiThread { adapter?.notifyDataSetChanged() }
-                        }
-                    }
-                }
-            }
-            
-            // 4. Final Result Message
-            runOnUiThread {
-                adapter?.notifyDataSetChanged()
-                layoutProgress?.visibility = View.GONE
-                
-                isDownloadComplete = true
-                if (downloadedCount == 0 && skippedCount > 0) {
-                    // Agar sab pehle se tha
-                    updateStatus("✅ All files already downloaded!")
-                    appendConnectionStep("Download completed")
-                    updateConnectionProgress(100)
-                    closeConnectionProgressDialog("Connected. Files already downloaded")
-                    Toast.makeText(this@GlassMediaGalleryActivity, "All files already exist", Toast.LENGTH_SHORT).show()
-                } else {
-                    // Agar kuch naya download hua
-                    updateStatus("✅ Complete: $downloadedCount new, $skippedCount skipped")
-                    appendConnectionStep("Download completed")
-                    updateConnectionProgress(100)
-                    closeConnectionProgressDialog("Download complete: $downloadedCount new files")
-                    Toast.makeText(this@GlassMediaGalleryActivity, "Downloaded $downloadedCount new files", Toast.LENGTH_SHORT).show()
-                }
-            }
-        } else {
-            appendConnectionStep("No files found")
-            updateConnectionProgress(100)
-            closeConnectionProgressDialog("Connected. No files found")
-            updateStatus("⚠️ No files found via HTTP")
-            layoutProgress?.visibility = View.GONE
+        val progress = if (saved == 0) "" else "$saved of $total files were saved. "
+        val stillSelected = "The rest are still selected."
+        when {
+            DownloadFailure.STORAGE in failures -> showMessageDialog(
+                title = "Couldn't save to your phone",
+                message = progress + "Your phone didn't allow the files to be saved — it's " +
+                    "probably running out of storage. Free up some space, then try again. $stillSelected",
+                primaryText = "Try again",
+                onPrimary = { downloadSelected() },
+                secondaryText = "Close"
+            )
+            DownloadFailure.SERVER in failures && DownloadFailure.NETWORK !in failures -> showMessageDialog(
+                title = if (saved == 0) "Download failed" else "Some files didn't download",
+                message = progress + "Your glasses couldn't send some files. Try again in a moment. $stillSelected",
+                primaryText = "Try again",
+                onPrimary = { downloadSelected() },
+                secondaryText = "Close"
+            )
+            else -> showMessageDialog(
+                title = if (saved == 0) "Lost connection to your glasses" else "Some files didn't download",
+                message = progress + "Your glasses stopped responding. Keep them close to your phone " +
+                    "and reconnect. $stillSelected",
+                primaryText = "Reconnect",
+                onPrimary = { startConnection() },
+                secondaryText = "Close"
+            )
         }
     }
     
@@ -1643,62 +1857,44 @@ class GlassMediaGalleryActivity : AppCompatActivity(),
         }
     }
     
-    override fun onMediaListReceived(files: List<GlassMediaTransfer.MediaFileInfo>) {
-        runOnUiThread {
-            mediaFiles.clear()
-            mediaFiles.addAll(files.sortedByDescending { it.timestamp })
-            adapter?.notifyDataSetChanged()
-            updateStatus("${files.size} files found on Glass")
-        }
+    override fun onMediaListReceived(files: List<MediaFileInfo>) {
+        // The list is handled from getMediaList()'s return value in loadRemoteListViaSocket().
+        updateStatus("${files.size} files found on Glass")
     }
     
     override fun onDownloadProgress(fileName: String, progress: Int) {
-        runOnUiThread {
-            progressBar?.progress = progress
-            tvProgress?.text = "$progress%"
-            // Socket downloads report per-file percentage; map to final stage band.
-            val popupProgress = 72 + ((progress.coerceIn(0, 100) * 26) / 100)
-            updateConnectionProgress(popupProgress)
-        }
+        runOnUiThread { socketProgress?.invoke(progress) }
     }
     
     override fun onDownloadComplete(fileName: String, localPath: String) {
-        runOnUiThread {
-            // Update the file info
-            mediaFiles.find { it.fileName == fileName }?.apply {
-                this.localPath = localPath
-                this.isDownloaded = true
-            }
-            adapter?.notifyDataSetChanged()
-            updateStatus("Downloaded: $fileName")
-
-            if (mediaFiles.isNotEmpty() && mediaFiles.all { it.isDownloaded }) {
-                appendConnectionStep("Download completed")
-                updateConnectionProgress(100)
-                closeConnectionProgressDialog("Download complete")
-            }
-        }
+        updateStatus("Downloaded: $fileName")
     }
     
     override fun onDownloadError(fileName: String, error: String) {
-        runOnUiThread {
-            updateStatus("Error: $fileName - $error")
-            Toast.makeText(this, "Download failed: $fileName", Toast.LENGTH_SHORT).show()
-        }
+        // Reported to the user once, in reportDownloadResult().
+        Log.w(TAG, "Download failed: $fileName - $error")
+        lastSocketError = error
     }
     
     override fun onError(error: String) {
         runOnUiThread {
             appendConnectionStep("Failed: $error")
-            closeConnectionProgressDialog("Connection failed")
-            updateStatus("Error: $error")
-            Toast.makeText(this, error, Toast.LENGTH_LONG).show()
-            btnConnect?.isEnabled = true
+            if (isConnecting) {
+                connectionFailed(
+                    "Couldn't connect to your glasses",
+                    "Make sure your glasses are turned on and connected in the app, then try again."
+                )
+            } else {
+                Log.w(TAG, "Transfer error: $error")
+            }
         }
     }
     
     override fun onDestroy() {
         super.onDestroy()
+        dismissProgressDialog()
+        downloadJob?.cancel()
+        connectionTimeoutJob?.cancel()
         mainScope.cancel()
         // Give the P2P network back before tearing down, so the phone returns to its
         // normal route and we don't leak the network request.
@@ -1763,8 +1959,6 @@ class GlassMediaGalleryActivity : AppCompatActivity(),
         runOnUiThread {
             discoveryRetryJob?.cancel()
             discoveryRetryJob = null
-            btnConnect?.text = "⏳ Checking server..."
-            btnConnect?.isEnabled = false
             appendConnectionStep("Device connected")
             appendConnectionStep("Verifying transfer server")
             updateConnectionProgress(50)
@@ -1781,17 +1975,16 @@ class GlassMediaGalleryActivity : AppCompatActivity(),
     override fun onP2pDisconnected() {
         runOnUiThread {
             isConnectedToGlass = false
-            if (isDownloadComplete) {
-                // Normal teardown after a successful download — don't restart
-                updateStatus("✅ Download complete. P2P disconnected.")
-                btnConnect?.text = "🔗 Connect to Glass"
-                btnConnect?.isEnabled = true
+            if (isMediaListLoaded) {
+                // Normal after the list is read; the list stays and the header says so.
+                updateStatus("P2P disconnected after media list was loaded")
+                render()
                 return@runOnUiThread
             }
-            closeConnectionProgressDialog("Disconnected from Glass")
             updateStatus("P2P Disconnected from Glass")
-            btnConnect?.text = "🔗 Connect to Glass"
-            btnConnect?.isEnabled = true
+            // While connecting this is often just the old group being torn down or a
+            // negotiation retry. Keep looking; the connection timeout reports a real failure.
+            if (isConnecting) scheduleDiscoveryRetry(2000)
         }
     }
     
@@ -1805,7 +1998,6 @@ class GlassMediaGalleryActivity : AppCompatActivity(),
         runOnUiThread {
             appendConnectionStep("P2P error: $message")
             updateStatus("P2P Error: $message. Retrying...")
-            btnConnect?.isEnabled = true
             scheduleDiscoveryRetry(1500)
         }
     }
@@ -1814,7 +2006,7 @@ class GlassMediaGalleryActivity : AppCompatActivity(),
      * Debounced discovery retry to avoid rapid reconnect loops.
      */
     private fun scheduleDiscoveryRetry(delayMs: Long) {
-        if (isConnectedToGlass || isDownloadComplete) return
+        if (!isConnecting || isConnectedToGlass || isMediaListLoaded) return
         if (discoveryRetryJob?.isActive == true) return
 
         discoveryRetryJob = mainScope.launch {
@@ -1826,99 +2018,4 @@ class GlassMediaGalleryActivity : AppCompatActivity(),
         }
     }
     
-    /**
-     * Media Adapter for RecyclerView
-     */
-    class MediaAdapter(
-        private val context: Context,
-        private val items: List<GlassMediaTransfer.MediaFileInfo>,
-        private val onTap: (GlassMediaTransfer.MediaFileInfo) -> Unit,
-        private val onLongPress: (GlassMediaTransfer.MediaFileInfo) -> Unit,
-        private val isSelectionMode: () -> Boolean,
-        private val isSelected: (GlassMediaTransfer.MediaFileInfo) -> Boolean
-    ) : RecyclerView.Adapter<MediaAdapter.ViewHolder>() {
-        
-        class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {
-            val cardRoot: MaterialCardView = view.findViewById(R.id.cardRoot)
-            val imageView: ImageView = view.findViewById(R.id.imageView)
-            val tvFileName: TextView = view.findViewById(R.id.tvFileName)
-            val videoIcon: ImageView = view.findViewById(R.id.videoIcon)
-            val videoIconContainer: FrameLayout = view.findViewById(R.id.videoIconContainer)
-        }
-        
-        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
-            val view = LayoutInflater.from(context).inflate(R.layout.item_gallery_photo, parent, false)
-            return ViewHolder(view)
-        }
-        
-        override fun onBindViewHolder(holder: ViewHolder, position: Int) {
-            val item = items[position]
-            val selected = isSelected(item)
-
-            holder.tvFileName.text = item.fileName
-            holder.cardRoot.strokeWidth = if (selected) dpToPx(2) else dpToPx(1)
-            holder.cardRoot.strokeColor = if (selected) {
-                Color.parseColor("#FFFA5A2E")
-            } else {
-                Color.parseColor("#FF202734")
-            }
-
-            // Video icon logic
-            holder.videoIconContainer.visibility = if (item.fileType == "video") View.VISIBLE else View.GONE
-
-            // Clear previous image to free memory immediately
-            holder.imageView.setImageBitmap(null)
-
-            val localPath = item.localPath
-            if (localPath != null && File(localPath).exists()) {
-                try {
-                    if (item.fileType == "video") {
-                        // Video Thumbnail (Already optimized by Android)
-                        val bitmap = android.media.ThumbnailUtils.createVideoThumbnail(
-                            localPath,
-                            android.provider.MediaStore.Images.Thumbnails.MINI_KIND
-                        )
-                        if (bitmap != null) {
-                            holder.imageView.setImageBitmap(bitmap)
-                        } else {
-                            holder.imageView.setImageResource(android.R.drawable.ic_menu_gallery)
-                        }
-                    } else {
-                        // --- PHOTO MEMORY FIX: Load smaller version ---
-                        val options = BitmapFactory.Options()
-                        options.inJustDecodeBounds = false
-                        options.inSampleSize = 8 // Load 1/8th size (Small Thumbnail)
-
-                        val bitmap = BitmapFactory.decodeFile(localPath, options)
-
-                        if (bitmap != null) {
-                            holder.imageView.setImageBitmap(bitmap)
-                        } else {
-                            holder.imageView.setImageResource(android.R.drawable.ic_menu_gallery)
-                        }
-                    }
-                } catch (e: Exception) {
-                    Log.e("GalleryAdapter", "Error loading thumbnail: ${e.message}")
-                    holder.imageView.setImageResource(android.R.drawable.ic_menu_gallery)
-                }
-            } else {
-                holder.imageView.setImageResource(android.R.drawable.ic_menu_gallery)
-            }
-
-            holder.itemView.setOnClickListener { 
-                onTap(item)
-            }
-
-            holder.itemView.setOnLongClickListener {
-                onLongPress(item)
-                true
-            }
-        }
-
-        private fun dpToPx(dp: Int): Int {
-            return (dp * context.resources.displayMetrics.density).toInt().coerceAtLeast(1)
-        }
-        
-        override fun getItemCount() = items.size
-    }
 }

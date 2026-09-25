@@ -24,7 +24,8 @@ class AuthApi(context: Context) {
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
-        .readTimeout(20, TimeUnit.SECONDS)
+        // The backend is on Render and can take 30-50s to wake from a cold start.
+        .readTimeout(60, TimeUnit.SECONDS)
         .build()
 
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
@@ -32,7 +33,8 @@ class AuthApi(context: Context) {
     sealed class Result {
         /** [user] may be null for endpoints that don't return a profile (e.g. logout). */
         data class Success(val user: JSONObject?) : Result()
-        data class Error(val message: String) : Result()
+        /** [code] is the backend's `error.code` (e.g. INVALID_CREDENTIALS), or a local one. */
+        data class Error(val message: String, val code: String? = null) : Result()
     }
 
     // ---------------------------------------------------------------------
@@ -54,7 +56,7 @@ class AuthApi(context: Context) {
         }
         postJson("$BASE_URL/v1/auth/register", body, authToken = null) { resp, err ->
             if (err != null) {
-                deliver(callback, Result.Error(err))
+                deliver(callback, Result.Error(err.message, err.code))
                 return@postJson
             }
             // Register returns the created user but no token; caller follows up with login.
@@ -73,7 +75,7 @@ class AuthApi(context: Context) {
         }
         postJson("$BASE_URL/v1/auth/login", body, authToken = null) { resp, err ->
             if (err != null) {
-                deliver(callback, Result.Error(err))
+                deliver(callback, Result.Error(err.message, err.code))
                 return@postJson
             }
             if (resp == null) {
@@ -101,7 +103,7 @@ class AuthApi(context: Context) {
             session.clear()
             if (err != null) {
                 // Local session is already gone; report softly.
-                Log.w(TAG, "Server logout failed (cleared locally anyway): $err")
+                Log.w(TAG, "Server logout failed (cleared locally anyway): ${err.message}")
             }
             deliver(callback, Result.Success(null))
         }
@@ -199,18 +201,28 @@ class AuthApi(context: Context) {
             .build()
     }
 
-    /** POST a JSON body; callback receives (parsedBody|null, errorMessage|null) on a background thread. */
+    private class ApiError(val message: String, val code: String?)
+
+    /** POST a JSON body; callback receives (parsedBody|null, error|null) on a background thread. */
     private fun postJson(
         url: String,
         body: JSONObject,
         authToken: String?,
-        onResult: (JSONObject?, String?) -> Unit
+        onResult: (JSONObject?, ApiError?) -> Unit
     ) {
         val request = buildRequest(url, body, authToken)
         client.newCall(request).enqueue(object : okhttp3.Callback {
             override fun onFailure(call: okhttp3.Call, e: IOException) {
                 Log.e(TAG, "Request to $url failed: ${e.message}")
-                onResult(null, "Network error. Please check your connection.")
+                val error = when (e) {
+                    is java.net.SocketTimeoutException ->
+                        ApiError("The server is taking too long to respond. Please try again.", CODE_TIMEOUT)
+                    is java.net.UnknownHostException, is java.net.ConnectException ->
+                        ApiError("No internet connection. Please check your network and try again.", CODE_NETWORK)
+                    else ->
+                        ApiError("Network error. Please check your connection and try again.", CODE_NETWORK)
+                }
+                onResult(null, error)
             }
 
             override fun onResponse(call: okhttp3.Call, response: okhttp3.Response) {
@@ -227,12 +239,29 @@ class AuthApi(context: Context) {
         })
     }
 
-    /** Extract `error.message` from the backend envelope, falling back to a generic message. */
-    private fun parseError(raw: String, code: Int): String {
-        return runCatching {
-            JSONObject(raw).optJSONObject("error")?.optString("message")
-        }.getOrNull()?.takeIf { it.isNotBlank() }
-            ?: "Request failed (HTTP $code)"
+    /**
+     * Turn the backend's `{ "error": { "code", "message" } }` envelope into a
+     * user-facing message. Known codes get friendly copy (same as the iOS app);
+     * validation errors keep the server's text, which names the bad field.
+     */
+    private fun parseError(raw: String, httpStatus: Int): ApiError {
+        val err = runCatching { JSONObject(raw).optJSONObject("error") }.getOrNull()
+        val code = err?.optString("code")?.takeIf { it.isNotBlank() }
+        val serverMessage = err?.optString("message")?.takeIf { it.isNotBlank() }
+        val message = when (code) {
+            CODE_INVALID_CREDENTIALS -> "Incorrect email or password. Please try again."
+            CODE_EMAIL_TAKEN -> "An account with this email already exists. Please log in instead."
+            "PASSWORD_MISMATCH" -> "Passwords do not match."
+            "VALIDATION_ERROR" -> serverMessage?.replaceFirstChar { it.uppercase() }
+            else -> null
+        } ?: when {
+            httpStatus == 401 -> "Incorrect email or password. Please try again."
+            httpStatus == 409 -> "An account with this email already exists. Please log in instead."
+            httpStatus == 429 -> "Too many attempts. Please wait a moment and try again."
+            httpStatus >= 500 -> "Our server is having trouble right now. Please try again shortly."
+            else -> serverMessage ?: "Something went wrong (error $httpStatus). Please try again."
+        }
+        return ApiError(message, code)
     }
 
     private fun deliver(callback: (Result) -> Unit, result: Result) {
@@ -243,6 +272,10 @@ class AuthApi(context: Context) {
         private const val TAG = "AuthApi"
         const val BASE_URL = "https://imi-app-backend.onrender.com"
         private const val DEFAULT_EXPIRES_IN = 3600L
+        const val CODE_INVALID_CREDENTIALS = "INVALID_CREDENTIALS"
+        const val CODE_EMAIL_TAKEN = "EMAIL_TAKEN"
+        const val CODE_TIMEOUT = "TIMEOUT"
+        const val CODE_NETWORK = "NETWORK"
         private val JSON_MEDIA = "application/json; charset=utf-8".toMediaType()
     }
 }

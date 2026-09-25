@@ -38,6 +38,7 @@ import com.sdk.glassessdksample.ui.GeminiLiveService
 class GeminiBackgroundService : Service() {
 
     companion object {
+
         private const val TAG = "GeminiBgService"
         private const val CHANNEL_ID = "imi_gemini_live_channel"
         private const val NOTIF_ID = 1002

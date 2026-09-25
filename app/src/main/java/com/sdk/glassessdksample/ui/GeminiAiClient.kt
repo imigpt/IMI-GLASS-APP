@@ -28,6 +28,7 @@ class GeminiAIClient(
         // Known-good model for this key (vision uses gemini-2.5-flash).
         const val CHAT_MODEL_FALLBACK = "gemini-2.0-flash"
         private const val DEFAULT_CHAT_MODEL = "gemini-2.5-flash"
+        private const val VISION_MODEL = "gemini-2.5-flash"
         private const val MAX_GALLERY_CONTEXT_CHARS = 900
         private const val MAX_MEMORY_CONTEXT_CHARS = 900
         private const val MAX_NOTES_CONTEXT_CHARS = 1000
@@ -250,12 +251,16 @@ class GeminiAIClient(
                 fallbackChatModelName,
                 DEFAULT_CHAT_MODEL
             ).distinct()
+            // The model that actually answered, which may be a fallback — usage is
+            // priced by this exact id.
+            var usedModel = candidateModels.first()
             val response = withContext(Dispatchers.IO) {
                 var lastError: Exception? = null
                 var result: com.google.ai.client.generativeai.type.GenerateContentResponse? = null
                 for (modelName in candidateModels) {
                     try {
                         result = createGenerativeModel(modelName).generateContent(compactPrompt)
+                        usedModel = modelName
                         if (modelName != chatModelName) {
                             Log.w(TAG, "Used fallback chat model: $modelName")
                         }
@@ -271,7 +276,7 @@ class GeminiAIClient(
                 }
                 result ?: throw (lastError ?: IllegalStateException("No chat model available"))
             }
-            TokenUsageTracker.track(context, mode, response.usageMetadata)
+            TokenUsageTracker.track(context, mode, response.usageMetadata, usedModel)
 
             val text = response.text
             if (text.isNullOrBlank()) {
@@ -354,7 +359,7 @@ class GeminiAIClient(
                 
                 // Use vision model for image analysis
                 val visionModel = GenerativeModel(
-                    modelName = "gemini-2.5-flash",
+                    modelName = VISION_MODEL,
                     apiKey = RemoteConfigManager.geminiApiKey
                 )
                 
@@ -362,7 +367,7 @@ class GeminiAIClient(
             }
             
             response?.usageMetadata?.let {
-                TokenUsageTracker.track(context, TokenUsageTracker.Mode.SEEING, it)
+                TokenUsageTracker.track(context, TokenUsageTracker.Mode.SEEING, it, VISION_MODEL)
             }
 
             val text = response?.text

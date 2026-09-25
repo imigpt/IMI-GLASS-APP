@@ -44,11 +44,23 @@ object PreferredAudioDeviceResolver {
      */
     fun rememberPairedGlassesIfUnset(context: Context, address: String?, name: String?) {
         if (address.isNullOrBlank() && name.isNullOrBlank()) return
+        // Mark 1: never record earbuds/speakers as the glasses.
+        if (!GlassDeviceFilter.accepts(context, name)) return
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val haveRecord = !prefs.getString(KEY_PAIRED_ADDRESS, null).isNullOrBlank() ||
-            !prefs.getString(KEY_PAIRED_NAME, null).isNullOrBlank()
+        val storedName = prefs.getString(KEY_PAIRED_NAME, null)
+        // A record saved before the Mark 1 name filter existed may be some other
+        // accessory; let a real Mark 1 replace it.
+        val storedIsWrongDevice = GlassDeviceFilter.isActive(context) &&
+            !GlassDeviceFilter.isMark1Name(storedName)
+        val haveRecord = !storedIsWrongDevice && (
+            !prefs.getString(KEY_PAIRED_ADDRESS, null).isNullOrBlank() || !storedName.isNullOrBlank()
+        )
         if (haveRecord) return
         prefs.edit().apply {
+            if (storedIsWrongDevice) {
+                remove(KEY_PAIRED_ADDRESS)
+                remove(KEY_PAIRED_NAME)
+            }
             if (!address.isNullOrBlank()) putString(KEY_PAIRED_ADDRESS, address)
             if (!name.isNullOrBlank()) putString(KEY_PAIRED_NAME, name)
             apply()
@@ -74,6 +86,13 @@ object PreferredAudioDeviceResolver {
      * exposed for Bluetooth devices.
      */
     fun isPairedGlasses(context: Context, info: AudioDeviceInfo): Boolean {
+        // Mark 1: whatever the stored record says, only an "F-16"-style device is the glasses.
+        if (!GlassDeviceFilter.accepts(context, info.productName?.toString())) return false
+        // …and a stored record that isn't a Mark 1 (saved before this filter) is
+        // ignored, or it would reject the real glasses on an address mismatch.
+        if (GlassDeviceFilter.isActive(context) && !GlassDeviceFilter.isMark1Name(pairedGlassesName(context))) {
+            return true
+        }
         val pairedAddress = pairedGlassesAddress(context)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && pairedAddress != null) {
             val infoAddress = try { info.address } catch (e: Exception) { null }
@@ -117,7 +136,9 @@ object PreferredAudioDeviceResolver {
         // paired to, so with no record and exactly one candidate, take it.
         val haveNoPairingRecord =
             pairedGlassesAddress(context).isNullOrBlank() && pairedGlassesName(context).isNullOrBlank()
-        if (haveNoPairingRecord && ofType.size == 1) {
+        if (haveNoPairingRecord && ofType.size == 1 &&
+            GlassDeviceFilter.accepts(context, ofType[0].productName?.toString())
+        ) {
             Log.w(TAG, "⚠️ No paired-glasses record stored — falling back to the only " +
                 "connected Bluetooth device (${ofType[0].productName}). Re-pair in the app " +
                 "to make routing explicit.")

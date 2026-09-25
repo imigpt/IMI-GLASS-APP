@@ -7,6 +7,7 @@ import com.google.ai.client.generativeai.type.generationConfig
 import com.sdk.glassessdksample.RemoteConfigManager
 import com.sdk.glassessdksample.ui.TokenUsageTracker
 import com.sdk.glassessdksample.ui.UsageLimitManager
+import com.sdk.glassessdksample.ui.sync.AIUsageReporter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -136,7 +137,7 @@ class TaskPlanner(private val context: Context?) {
                 for (modelName in CANDIDATE_MODELS) {
                     try {
                         val response = model(modelName).generateContent(prompt)
-                        TokenUsageTracker.track(context, usageMode, response.usageMetadata)
+                        TokenUsageTracker.track(context, usageMode, response.usageMetadata, modelName, AIUsageReporter.Feature.OTHER)
 
                         val text = response.text?.trim().orEmpty()
                         if (text.isBlank()) {

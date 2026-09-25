@@ -34,6 +34,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
 import com.sdk.glassessdksample.ui.ScoConnectionHelper
+import com.sdk.glassessdksample.ui.sync.AIUsageReporter
 
 
 /**
@@ -348,6 +349,13 @@ class GeminiLiveService(
         fun onAudioPlaybackEnd()
         fun onError(error: String)
         fun onConnectionStatusChanged(isConnected: Boolean)
+
+        /**
+         * The glasses were not an available audio output, so this reply was NOT
+         * played (it would otherwise have come out of the phone speaker). Its text
+         * still arrives through [onTranscriptionUpdate]/[onTurnComplete].
+         */
+        fun onReplyAudioBlocked() {}
     }
     
     /**
@@ -1289,6 +1297,88 @@ class GeminiLiveService(
         }
     }
 
+    // ─── Glasses-only playback ──────────────────────────────────────────────
+    //
+    // An AI reply must play on the glasses or not at all. Android routes our
+    // track to the phone whenever the Bluetooth route is missing, so each reply
+    // is checked before its first byte and watched while it plays. A blocked
+    // reply is dropped (its text is still shown) — see GlassesAudioOutput.
+
+    /** True while the current reply is being discarded because the glasses can't play it. */
+    @Volatile private var replyAudioBlocked = false
+
+    /** How long a reply may wait for the glasses route (e.g. SCO still handshaking). */
+    private val glassesRouteWaitMs = 1500L
+
+    /**
+     * Waits up to [glassesRouteWaitMs] for the glasses to be an audio output and
+     * pins the reply to them. Returns false if they never become available, or
+     * the track stays routed to the phone.
+     */
+    private suspend fun ensureGlassesOutputForReply(): Boolean {
+        val deadline = System.currentTimeMillis() + glassesRouteWaitMs
+        while (true) {
+            val glasses = GlassesAudioOutput.find(context, preferA2dp = HIGH_QUALITY_PLAYBACK)
+            if (glasses != null) {
+                try {
+                    audioTrack?.setPreferredDevice(glasses)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Could not pin reply to glasses: ${e.message}")
+                }
+                // Call audio (SCO) is driven by the communication device on API 31+.
+                if (glasses.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO) selectBluetoothCommunicationDevice()
+                val routed = try { audioTrack?.routedDevice } catch (_: Exception) { null }
+                if (!GlassesAudioOutput.isPhoneOutput(routed)) {
+                    Log.d(TAG, "🕶️ Reply pinned to glasses → ${glasses.productName} (routed=${routed?.productName})")
+                    return true
+                }
+            }
+            if (System.currentTimeMillis() >= deadline) {
+                Log.w(TAG, "🔇 Glasses audio not available within ${glassesRouteWaitMs}ms " +
+                    "(glasses=${glasses?.productName}) — reply will not be played on the phone")
+                return false
+            }
+            delay(100)
+        }
+    }
+
+    /** Drop the rest of this reply and silence anything already buffered. */
+    private fun blockReplyAudio(reason: String) {
+        if (replyAudioBlocked) return
+        replyAudioBlocked = true
+        Log.w(TAG, "🔇 Reply audio blocked: $reason")
+        synchronized(audioQueueLock) { audioQueue.clear() }
+        try {
+            audioTrack?.pause()
+            audioTrack?.flush()
+        } catch (_: Exception) {}
+        try { callbacks.onReplyAudioBlocked() } catch (e: Exception) {
+            Log.w(TAG, "onReplyAudioBlocked threw: ${e.message}")
+        }
+    }
+
+    /** Stops a playing reply the moment its route falls back to the phone. */
+    private fun watchPlaybackRoute() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return
+        val track = audioTrack ?: return
+        try {
+            track.addOnRoutingChangedListener({ router ->
+                if (!isAIPlaying.get() || replyAudioBlocked) return@addOnRoutingChangedListener
+                val routed = router.routedDevice
+                if (!GlassesAudioOutput.isPhoneOutput(routed)) return@addOnRoutingChangedListener
+                val glasses = GlassesAudioOutput.find(context, preferA2dp = HIGH_QUALITY_PLAYBACK)
+                if (glasses == null) {
+                    blockReplyAudio("route moved to ${routed?.productName} — glasses disconnected")
+                } else {
+                    // Glasses still there (brief route flap): put the reply back on them.
+                    try { track.setPreferredDevice(glasses) } catch (_: Exception) {}
+                }
+            }, android.os.Handler(android.os.Looper.getMainLooper()))
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not watch playback route: ${e.message}")
+        }
+    }
+
     /**
      * Take SCO back so the microphone works again once the AI has finished speaking.
      *
@@ -1746,6 +1836,11 @@ class GeminiLiveService(
                 Log.w(TAG, "Failed to set AudioTrack preferred device: ${e.message}")
             }
         }
+
+        // 9b. Glasses-only playback: if the reply's route moves to the phone
+        //     (glasses disconnected mid-reply), stop it instead of letting Android
+        //     finish it on the phone speaker.
+        watchPlaybackRoute()
 
         // 10. Check final audio routing
         val finalDevice = audioRecord?.routedDevice
@@ -2934,6 +3029,10 @@ $visionInstruction${userProfileBlock()}"""
                             delay(ROUTE_SETTLE_MS)
                             repinPlaybackToA2dp()
                         }
+                        // Glasses or nothing: never let this reply reach the phone speaker.
+                        if (!ensureGlassesOutputForReply()) {
+                            blockReplyAudio("glasses are not an available audio output")
+                        }
                         callbacks.onAudioPlaybackStart()
                         lastAudioTime = System.currentTimeMillis()
                         val why = if (flushNow) "short-reply flush after ${waitedMs}ms"
@@ -2983,6 +3082,12 @@ $visionInstruction${userProfileBlock()}"""
                                 else "fallback timeout ${AUDIO_END_TIMEOUT_MS}ms"
                             waitForTrackToDrain()
                             reacquireScoForListening()
+                            if (replyAudioBlocked) {
+                                // The track was paused and flushed when the reply was
+                                // blocked; restart it so the next reply can play.
+                                replyAudioBlocked = false
+                                try { audioTrack?.play() } catch (_: Exception) {}
+                            }
                             isAIPlaying.set(false) // Resume mic capture
                             isPreBuffering = true // Reset for next turn
                             turnAudioComplete = false // Reset for next turn
@@ -3025,6 +3130,7 @@ $visionInstruction${userProfileBlock()}"""
                 Log.v(TAG, "🔇 Audio muted - skipping playback")
                 return // Don't play audio while muted
             }
+            if (replyAudioBlocked) return // glasses unavailable: never the phone speaker
             
             // Convert byte array to short array for AudioTrack
             val shortBuffer = byteArrayToShortArray(audioData)
@@ -3282,6 +3388,15 @@ $visionInstruction${userProfileBlock()}"""
      */
     private fun handleGeminiMessage(messageMap: Map<*, *>) {
         try {
+            // usageMetadata is a top-level field that can ride along with
+            // serverContent, so read it before any branch below returns early.
+            // Reported per frame (not summed at stop) so a session killed by a
+            // dropped socket or force-quit still gets billed for what it used.
+            (messageMap["usageMetadata"] as? Map<*, *>)?.let { usage ->
+                Log.d(TAG, "📊 Live usageMetadata: $usage")
+                AIUsageReporter.reportLiveFrame(context, activeGeminiModel, usage)
+            }
+
             // Check for setupComplete
             val setupComplete = messageMap["setupComplete"] as? Map<*, *>
             if (setupComplete != null) {

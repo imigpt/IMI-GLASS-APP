@@ -96,4 +96,17 @@
     <color name="home_tile_stroke">#D87D41</color>
     <color name="home_nav_bg">#191C1B</color>
 
+
+    <!-- Glass media gallery -->
+    <color name="gm_background">#FF0B0B0D</color>
+    <color name="gm_surface">#FF1C1E22</color>
+    <color name="gm_surface_raised">#FF18191D</color>
+    <color name="gm_border">#FF2C2F35</color>
+    <color name="gm_accent">@color/home_accent_orange</color>
+    <color name="gm_on_accent">#FFFFFFFF</color>
+    <color name="gm_text_primary">#FFFFFFFF</color>
+    <color name="gm_text_secondary">#FF9A9CA3</color>
+    <color name="gm_accent_soft">#29FF7F2E</color>
+    <color name="gm_track">#2EFFFFFF</color>
+    <color name="gm_danger">#FFFF5A5F</color>
 </resources>

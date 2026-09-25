@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Gallery popups: same glass card + orange glow as the app's connecting dialog. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="rectangle">
+            <corners android:radius="28dp" />
+            <gradient
+                android:angle="90"
+                android:endColor="#FA1E2025"
+                android:startColor="#FA17181C" />
+            <stroke
+                android:width="1dp"
+                android:color="#24FFFFFF" />
+        </shape>
+    </item>
+    <item
+        android:gravity="bottom"
+        android:height="96dp">
+        <shape android:shape="rectangle">
+            <corners android:radius="28dp" />
+            <gradient
+                android:angle="90"
+                android:endColor="#00FF7F2E"
+                android:startColor="#1FFF7F2E" />
+        </shape>
+    </item>
+</layer-list>

@@ -8,6 +8,7 @@ import com.google.ai.client.generativeai.type.generationConfig
 import com.sdk.glassessdksample.RemoteConfigManager
 import com.sdk.glassessdksample.ui.TokenUsageTracker
 import com.sdk.glassessdksample.ui.UsageLimitManager
+import com.sdk.glassessdksample.ui.sync.AIUsageReporter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -129,7 +130,7 @@ class VisionPlanner(private val context: Context?) {
                                 text(prompt)
                             }
                         )
-                        TokenUsageTracker.track(context, usageMode, response.usageMetadata)
+                        TokenUsageTracker.track(context, usageMode, response.usageMetadata, modelName, AIUsageReporter.Feature.VISION)
                         val text = response.text?.trim().orEmpty()
                         if (text.isBlank()) {
                             lastError = IllegalStateException("empty response")

@@ -462,6 +462,17 @@ class GlassMediaTransfer(private val context: Context) {
         var dis: DataInputStream? = null
         var dos: DataOutputStream? = null
         var fos: FileOutputStream? = null
+        var outputFile: File? = null
+        var completed = false
+        // A blocked socket read ignores coroutine cancellation; closing the socket
+        // when this coroutine is cancelled unblocks it so Cancel works mid-file.
+        val cancelWatcher = launch {
+            try {
+                awaitCancellation()
+            } finally {
+                runCatching { socket?.close() }
+            }
+        }
         
         try {
             socket = Socket()
@@ -479,7 +490,7 @@ class GlassMediaTransfer(private val context: Context) {
             
             // Create local file path
             val localPath = getDownloadPath(fileInfo.fileName, fileInfo.fileType)
-            val outputFile = File(localPath)
+            outputFile = File(localPath)
             outputFile.parentFile?.mkdirs()
             
             fos = FileOutputStream(outputFile)
@@ -491,6 +502,7 @@ class GlassMediaTransfer(private val context: Context) {
             var lastProgressReport = 0
             
             while (totalBytesRead < fileSize) {
+                ensureActive()
                 bytesRead = dis.read(buffer)
                 if (bytesRead == -1) break
                 
@@ -508,6 +520,10 @@ class GlassMediaTransfer(private val context: Context) {
             }
             
             fos.flush()
+            if (totalBytesRead < fileSize) {
+                throw IOException("Connection closed after $totalBytesRead of $fileSize bytes")
+            }
+            completed = true
             
             Log.i(TAG, "✅ Downloaded: ${fileInfo.fileName} -> $localPath")
             
@@ -524,12 +540,15 @@ class GlassMediaTransfer(private val context: Context) {
             }
             null
         } finally {
+            cancelWatcher.cancel()
             try {
                 fos?.close()
                 dis?.close()
                 dos?.close()
                 socket?.close()
             } catch (e: Exception) { }
+            // Never leave a truncated file behind; it would look already downloaded.
+            if (!completed) outputFile?.delete()
         }
     }
     

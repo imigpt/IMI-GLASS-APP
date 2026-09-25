@@ -31,6 +31,13 @@ class MyBluetoothReceiver : QCBluetoothCallbackCloneReceiver() {
     @SuppressLint("MissingPermission")
     override fun connectStatue(device: BluetoothDevice?, connected: Boolean) {
         Log.i(TAG, "Connection Status: Device=${device?.name}, Connected=$connected")
+        if (device != null && connected && !GlassDeviceFilter.accepts(MyApplication.instance, device.name)) {
+            // Mark 1 selected and this isn't an "F-16"-style device (earbuds,
+            // speaker…). Don't announce it as the glasses.
+            Log.i(TAG, "Ignoring ${device.name}: not a Mark 1 glasses name")
+            GlassConnectionState.onConnected(MyApplication.instance, device)
+            return
+        }
         if (device != null && connected) {
             device.name?.let { DeviceManager.getInstance().deviceName = it }
             // Refresh the shared connection state and backfill the pairing record.

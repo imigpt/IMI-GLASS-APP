@@ -2,15 +2,18 @@ package com.sdk.glassessdksample
 
 import android.content.Intent
 import android.os.Bundle
+import android.widget.EditText
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import com.sdk.glassessdksample.auth.AuthApi
+import com.sdk.glassessdksample.auth.AuthFormErrors
 import com.sdk.glassessdksample.databinding.ActivitySignUpBinding
 import com.sdk.glassessdksample.utils.SystemBarsInsets
 
 class SignUpActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivitySignUpBinding
+    private lateinit var errors: AuthFormErrors
     private val authApi by lazy { AuthApi(this) }
     private var isSubmitting = false
 
@@ -24,6 +27,16 @@ class SignUpActivity : AppCompatActivity() {
     }
 
     private fun setupUI() {
+        errors = AuthFormErrors(
+            fields = mapOf(
+                binding.fullNameInput to binding.fullNameError,
+                binding.emailInput to binding.emailError,
+                binding.passwordInput to binding.passwordError,
+                binding.confirmPasswordInput to binding.confirmPasswordError
+            ),
+            formError = binding.formError
+        )
+
         // Sign Up button
         binding.signUpButton.setOnClickListener {
             performSignUp()
@@ -38,30 +51,42 @@ class SignUpActivity : AppCompatActivity() {
 
     private fun performSignUp() {
         if (isSubmitting) return
+        errors.clearAll()
 
         val fullName = binding.fullNameInput.text.toString().trim()
         val email = binding.emailInput.text.toString().trim()
         val password = binding.passwordInput.text.toString().trim()
         val confirmPassword = binding.confirmPasswordInput.text.toString().trim()
 
-        // Validation
-        if (fullName.isEmpty()) {
-            showError("Please enter your full name")
-            return
+        // Validate every field so all problems show at once; focus the first.
+        val invalid = mutableListOf<EditText>()
+        fun fail(input: EditText, message: String) {
+            errors.showField(input, message)
+            invalid += input
         }
 
-        if (email.isEmpty() || !android.util.Patterns.EMAIL_ADDRESS.matcher(email).matches()) {
-            showError("Please enter a valid email address")
-            return
+        when {
+            fullName.isEmpty() -> fail(binding.fullNameInput, "Please enter your full name")
+            fullName.length < 2 -> fail(binding.fullNameInput, "Name must be at least 2 characters")
+        }
+        when {
+            email.isEmpty() -> fail(binding.emailInput, "Please enter your email address")
+            !android.util.Patterns.EMAIL_ADDRESS.matcher(email).matches() ->
+                fail(binding.emailInput, "Please enter a valid email address (e.g. name@example.com)")
+        }
+        when {
+            password.isEmpty() -> fail(binding.passwordInput, "Please create a password")
+            // Matches the backend rule; it rejects anything shorter.
+            password.length < MIN_PASSWORD_LENGTH ->
+                fail(binding.passwordInput, "Password must be at least $MIN_PASSWORD_LENGTH characters")
+        }
+        when {
+            confirmPassword.isEmpty() -> fail(binding.confirmPasswordInput, "Please confirm your password")
+            password != confirmPassword -> fail(binding.confirmPasswordInput, "Passwords do not match")
         }
 
-        if (password.isEmpty() || password.length < 6) {
-            showError("Password must be at least 6 characters")
-            return
-        }
-
-        if (password != confirmPassword) {
-            showError("Passwords do not match")
+        if (invalid.isNotEmpty()) {
+            invalid.first().requestFocus()
             return
         }
 
@@ -74,9 +99,19 @@ class SignUpActivity : AppCompatActivity() {
                 }
                 is AuthApi.Result.Error -> {
                     setSubmitting(false)
-                    showError(result.message)
+                    showRegisterError(result)
                 }
             }
+        }
+    }
+
+    private fun showRegisterError(error: AuthApi.Result.Error) {
+        if (error.code == AuthApi.CODE_EMAIL_TAKEN) {
+            errors.showField(binding.emailInput, "An account with this email already exists")
+            errors.showForm("This email is already registered. Tap Log In below to sign in instead.")
+            binding.emailInput.requestFocus()
+        } else {
+            errors.showForm(error.message)
         }
     }
 
@@ -85,12 +120,16 @@ class SignUpActivity : AppCompatActivity() {
             setSubmitting(false)
             when (result) {
                 is AuthApi.Result.Success -> {
-                    showSuccess("Account created successfully!")
+                    Toast.makeText(this, "Account created successfully!", Toast.LENGTH_SHORT).show()
                     goToNextScreen()
                 }
                 is AuthApi.Result.Error -> {
                     // Account exists now; send them to login to finish signing in.
-                    showError("Account created. Please log in. (${result.message})")
+                    Toast.makeText(
+                        this,
+                        "Account created! Please log in to continue.",
+                        Toast.LENGTH_LONG
+                    ).show()
                     startActivity(Intent(this, LoginActivity::class.java))
                     finish()
                 }
@@ -112,11 +151,7 @@ class SignUpActivity : AppCompatActivity() {
         binding.signUpButton.text = if (submitting) "Creating account…" else "Create Account"
     }
 
-    private fun showError(message: String) {
-        Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
-    }
-
-    private fun showSuccess(message: String) {
-        Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+    companion object {
+        private const val MIN_PASSWORD_LENGTH = 8
     }
 }

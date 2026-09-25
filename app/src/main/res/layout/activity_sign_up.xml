@@ -63,8 +63,24 @@
             android:textSize="16sp"
             android:paddingStart="22dp"
             android:paddingEnd="22dp"
-            android:background="@drawable/bg_auth_input"
-            android:layout_marginBottom="20dp" />
+            android:background="@drawable/bg_auth_input" />
+        <TextView
+            android:id="@+id/fullNameError"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:paddingStart="22dp"
+            android:paddingEnd="22dp"
+            android:textColor="#FF6B6B"
+            android:textSize="13sp"
+            android:visibility="gone"
+            tools:text="Error"
+            tools:visibility="visible" />
+
+        <Space
+            android:layout_width="match_parent"
+            android:layout_height="20dp" />
+
 
         <!-- Email -->
         <TextView
@@ -86,8 +102,24 @@
             android:textSize="16sp"
             android:paddingStart="22dp"
             android:paddingEnd="22dp"
-            android:background="@drawable/bg_auth_input"
-            android:layout_marginBottom="20dp" />
+            android:background="@drawable/bg_auth_input" />
+        <TextView
+            android:id="@+id/emailError"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:paddingStart="22dp"
+            android:paddingEnd="22dp"
+            android:textColor="#FF6B6B"
+            android:textSize="13sp"
+            android:visibility="gone"
+            tools:text="Error"
+            tools:visibility="visible" />
+
+        <Space
+            android:layout_width="match_parent"
+            android:layout_height="20dp" />
+
 
         <!-- Password -->
         <TextView
@@ -103,14 +135,30 @@
             android:layout_width="match_parent"
             android:layout_height="58dp"
             android:inputType="textPassword"
-            android:hint="Create a password"
+            android:hint="Create a password (min. 8 characters)"
             android:textColor="#FFFFFF"
             android:textColorHint="#8C8077"
             android:textSize="16sp"
             android:paddingStart="22dp"
             android:paddingEnd="22dp"
-            android:background="@drawable/bg_auth_input"
-            android:layout_marginBottom="20dp" />
+            android:background="@drawable/bg_auth_input" />
+        <TextView
+            android:id="@+id/passwordError"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:paddingStart="22dp"
+            android:paddingEnd="22dp"
+            android:textColor="#FF6B6B"
+            android:textSize="13sp"
+            android:visibility="gone"
+            tools:text="Error"
+            tools:visibility="visible" />
+
+        <Space
+            android:layout_width="match_parent"
+            android:layout_height="20dp" />
+
 
         <!-- Confirm Password -->
         <TextView
@@ -132,8 +180,42 @@
             android:textSize="16sp"
             android:paddingStart="22dp"
             android:paddingEnd="22dp"
-            android:background="@drawable/bg_auth_input"
-            android:layout_marginBottom="40dp" />
+            android:background="@drawable/bg_auth_input" />
+        <TextView
+            android:id="@+id/confirmPasswordError"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:paddingStart="22dp"
+            android:paddingEnd="22dp"
+            android:textColor="#FF6B6B"
+            android:textSize="13sp"
+            android:visibility="gone"
+            tools:text="Error"
+            tools:visibility="visible" />
+
+        <Space
+            android:layout_width="match_parent"
+            android:layout_height="24dp" />
+
+
+        <!-- Form-level error (email taken, network, server) -->
+        <TextView
+            android:id="@+id/formError"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="20dp"
+            android:background="@drawable/bg_auth_error"
+            android:padding="14dp"
+            android:textColor="#FFFFFF"
+            android:textSize="14sp"
+            android:visibility="gone"
+            tools:text="An account with this email already exists."
+            tools:visibility="visible" />
+
+        <Space
+            android:layout_width="match_parent"
+            android:layout_height="16dp" />
 
         <!-- Create Account Button -->
         <androidx.appcompat.widget.AppCompatButton

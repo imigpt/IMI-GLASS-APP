@@ -12,7 +12,12 @@ import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import android.util.Log
 import android.view.LayoutInflater
+import android.view.Gravity
 import android.view.View
+import android.widget.LinearLayout
+import com.bumptech.glide.Glide
+import com.bumptech.glide.load.resource.bitmap.CenterCrop
+import com.bumptech.glide.load.resource.bitmap.RoundedCorners
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.ImageView
@@ -94,6 +99,8 @@ fun extractNotifyData(rsp: Any?): ByteArray? {
     } catch (_: Exception) {}
     return null
 }
+
+private const val READY_STATUS = "Ready — tap Capture to take a photo"
 
 class VisionChatActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
@@ -1113,7 +1120,7 @@ class VisionChatActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         override fun onP2pStateChanged(enabled: Boolean) {
             Log.d(TAG, "📶 P2P State: ${if (enabled) "ENABLED" else "DISABLED"}")
             if (!enabled) {
-                showError("WiFi Direct is disabled. Please enable WiFi.")
+                showError("Wi-Fi is off. Turn on Wi-Fi so your glasses can send the photo.")
             }
         }
         
@@ -1451,6 +1458,8 @@ class VisionChatActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     }
 
     private fun speakOut(text: String) {
+        // Glasses or nothing — never the phone speaker.
+        if (!com.sdk.glassessdksample.ui.GlassesAudioOutput.hasMediaRoute(this)) return
         if (isTtsReady && tts != null) {
             tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "vision_${System.currentTimeMillis()}")
         }
@@ -1725,7 +1734,7 @@ class VisionChatActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         streamingJob = null
         isSpeaking = false  // Reset speaking flag
         
-        updateStatus("📷 Tap button to capture from glasses")
+        updateStatus(READY_STATUS)
     }
     
     /**
@@ -1757,7 +1766,11 @@ class VisionChatActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         recyclerView.layoutManager = LinearLayoutManager(this)
         recyclerView.adapter = chatAdapter
         
-        statusText.text = "📷 Tap button to capture from glasses"
+        statusText.text = READY_STATUS
+
+        findViewById<View>(R.id.btnVisionBack).setOnClickListener {
+            onBackPressedDispatcher.onBackPressed()
+        }
         
         // ❌ SKIP introduction message if opening directly or from voice command
         // Only show introduction if user needs manual button instructions
@@ -1765,9 +1778,13 @@ class VisionChatActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         if (!autoCapture && !shouldAutoStartStreaming) {
             // Show introduction only for manual button-based workflow
             addMessage(VisionChatMessage(
-                text = "👓 Vision Chat Ready!\n\n1. Tap 'Capture from Glasses'\n2. Photo captured on glasses\n3. Auto-connect via WiFi P2P\n4. Image analyzed by AI\n\n📡 Uses WiFi Direct (automatic)",
+                text = "Hi! I can see through your glasses.\n\n" +
+                    "Tap Capture and your glasses will take a photo. I'll tell you what's in it, " +
+                    "and you can ask me follow-up questions.\n\n" +
+                    "Your glasses connect over Wi-Fi Direct automatically — just keep them nearby.",
                 isUser = false,
-                timestamp = System.currentTimeMillis()
+                timestamp = System.currentTimeMillis(),
+                kind = VisionChatMessage.Kind.INFO
             ))
         } else {
             Log.d(TAG, "📸 Skipping introduction - auto-capture mode active")
@@ -1841,6 +1858,16 @@ class VisionChatActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             return
         }
         
+        // The camera command goes over the glasses' Bluetooth link. Without it the
+        // command is never answered and the user only saw "Camera trigger failed".
+        if (!isGlassesLinked()) {
+            showError(
+                "Your glasses aren't connected. Turn them on, connect them from the Home tab, " +
+                    "then tap Capture again."
+            )
+            return
+        }
+
         // Check permissions before starting
         if (!hasNearbyPermission()) {
             Log.w(TAG, "⚠️ Missing nearby permission - requesting...")
@@ -1939,7 +1966,7 @@ class VisionChatActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                     }
 
                     if (ip == null) {
-                        showError("Glass connected but IP not found. Make sure Glass hotspot is active.")
+                        showError("Your glasses connected, but we couldn't reach them over Wi-Fi. Keep them close and try again.")
                         return@launch
                     }
 
@@ -1965,7 +1992,7 @@ class VisionChatActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                         if (camOk) break
                         if (attempt < maxRetries) delay(2000L)
                     }
-                    if (!camOk) { showError("Camera trigger failed"); return@launch }
+                    if (!camOk) { showError(cameraFailedMessage()); return@launch }
 
                     val waitTime = if (isContinuousStreaming) 3500L else 2000L
                     delay(waitTime)
@@ -1987,7 +2014,7 @@ class VisionChatActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                     if (cameraSuccess) break
                     if (attempt < maxCameraRetries && isContinuousStreaming) delay(2000L)
                 }
-                if (!cameraSuccess) { showError("Camera trigger failed"); return@launch }
+                if (!cameraSuccess) { showError(cameraFailedMessage()); return@launch }
 
                 val waitTime = if (isContinuousStreaming) 3500L else 2000L
                 delay(waitTime)
@@ -2017,6 +2044,20 @@ class VisionChatActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     /**
      * Step 1: Trigger camera on glasses via BLE
      */
+    /** The vendor SDK's Bluetooth link, which carries the camera command. */
+    private fun isGlassesLinked(): Boolean = try {
+        com.oudmon.ble.base.bluetooth.BleOperateManager.getInstance()?.isConnected ?: false
+    } catch (_: Exception) {
+        false
+    }
+
+    private fun cameraFailedMessage(): String =
+        if (!isGlassesLinked()) {
+            "Your glasses disconnected. Reconnect them from the Home tab, then tap Capture again."
+        } else {
+            "Your glasses didn't take the photo. Make sure they're on and awake, then try again."
+        }
+
     private suspend fun triggerGlassCamera(): Boolean = withContext(Dispatchers.IO) {
         var success = false
         val latch = java.util.concurrent.CountDownLatch(1)
@@ -2127,7 +2168,7 @@ class VisionChatActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             }
 
             if (resolvedIp == null) {
-                showError("Could not find Glass server. Check WiFi connection.")
+                showError("We couldn't reach your glasses over Wi-Fi. Keep them close and try again.")
                 return
             }
 
@@ -2252,7 +2293,7 @@ class VisionChatActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                     // not a "no new photo" problem. Give an actionable message.
                     showError("Couldn't reach Glass at $ip. Make sure the Glass WiFi/hotspot is on and your phone is connected to it, then try again.")
                 } else {
-                    showError("No NEW photo found. All photos already analyzed.")
+                    showError("Your glasses didn't save a new photo. Tap Capture to try again.")
                 }
                 return
             }
@@ -2277,7 +2318,7 @@ class VisionChatActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             }
             
             if (downloadedFile == null || !downloadedFile.exists()) {
-                showError("Failed to download file from Glass.")
+                showError("The photo couldn't be copied from your glasses. Try again.")
                 return
             }
             
@@ -2338,7 +2379,7 @@ class VisionChatActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                 captureButton.isEnabled = true
                 stopThinkingTune()
                 if (!isContinuousStreaming) {
-                    updateStatus("📷 Tap button to capture from glasses")
+                    updateStatus(READY_STATUS)
                 }
             }
         }
@@ -2361,7 +2402,7 @@ class VisionChatActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             
             if (bitmap == null) {
                 stopThinkingTune()
-                showError("Failed to decode image")
+                showError("The photo from your glasses couldn't be opened. Try taking another one.")
                 return
             }
             
@@ -2390,7 +2431,7 @@ class VisionChatActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             }
 
             response.usageMetadata?.let {
-                TokenUsageTracker.track(this@VisionChatActivity, TokenUsageTracker.Mode.SEEING, it)
+                TokenUsageTracker.track(this@VisionChatActivity, TokenUsageTracker.Mode.SEEING, it, generativeModel.modelName)
             }
             
             // 🆕 Stop thinking tune before speaking result
@@ -2431,7 +2472,7 @@ class VisionChatActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             if (isContinuousStreaming) {
                 updateStatus("🎥 Live vision active (capturing every ${STREAMING_INTERVAL_MS / 1000}s)")
             } else {
-                updateStatus("📷 Tap button to capture from glasses")
+                updateStatus(READY_STATUS)
             }
         }
     }
@@ -2591,7 +2632,7 @@ class VisionChatActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             
             val bitmap = lastCapturedBitmap ?: run {
                 stopThinkingTune()
-                showError("No previous image available")
+                showError("There's no photo to ask about yet. Tap Capture first.")
                 return
             }
             
@@ -2615,7 +2656,7 @@ class VisionChatActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             }
 
             response.usageMetadata?.let {
-                TokenUsageTracker.track(this@VisionChatActivity, TokenUsageTracker.Mode.SEEING, it)
+                TokenUsageTracker.track(this@VisionChatActivity, TokenUsageTracker.Mode.SEEING, it, generativeModel.modelName)
             }
             
             stopThinkingTune()
@@ -2645,7 +2686,7 @@ class VisionChatActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         } finally {
             isProcessing = false
             captureButton.isEnabled = true
-            updateStatus("📷 Tap button to capture from glasses")
+            updateStatus(READY_STATUS)
         }
     }
     
@@ -3034,18 +3075,20 @@ class VisionChatActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     
     private fun showError(message: String) {
         runOnUiThread {
+            stopThinkingTune()
+            // Shown once, in the chat. A toast on top duplicated it over the buttons.
             addMessage(VisionChatMessage(
-                text = "❌ $message",
+                text = message,
                 isUser = false,
-                timestamp = System.currentTimeMillis()
+                timestamp = System.currentTimeMillis(),
+                kind = VisionChatMessage.Kind.ERROR
             ))
             // TTS disabled - using Gemini Live voice instead
             // speakOut("Error ho gaya. $message")
-            Toast.makeText(this, message, Toast.LENGTH_LONG).show()
             isProcessing = false
             isWaitingForConnection = false
             captureButton.isEnabled = true
-            updateStatus("📷 Tap button to capture from glasses")
+            updateStatus(READY_STATUS)
         }
     }
     
@@ -3386,8 +3429,12 @@ data class VisionChatMessage(
     val text: String,
     val isUser: Boolean,
     val timestamp: Long,
-    val imagePath: String? = null
-)
+    val imagePath: String? = null,
+    val kind: Kind = Kind.ANSWER,
+) {
+    /** ANSWER = AI reply (can be searched), INFO = tips, ERROR = something went wrong. */
+    enum class Kind { ANSWER, INFO, ERROR }
+}
 
 // RecyclerView Adapter for vision chat
 class VisionChatAdapter(private val messages: List<VisionChatMessage>) :
@@ -3398,6 +3445,8 @@ class VisionChatAdapter(private val messages: List<VisionChatMessage>) :
         val timestampText: TextView = view.findViewById(R.id.timestampText)
         val messageImage: android.widget.ImageView = view.findViewById(R.id.messageImage)
         val searchWebRow: android.view.View? = view.findViewById(R.id.searchWebRow)
+        val bubble: LinearLayout = view.findViewById(R.id.messageBubble)
+        val errorIcon: View = view.findViewById(R.id.messageErrorIcon)
         val btnSearchWebVision: TextView? = view.findViewById(R.id.btnSearchWebVision)
     }
 
@@ -3410,19 +3459,43 @@ class VisionChatAdapter(private val messages: List<VisionChatMessage>) :
         val message = messages[position]
         holder.messageText.text = message.text
 
+        // AI on the left in a dark bubble; the user on the right in orange.
+        val bubbleParams = holder.bubble.layoutParams as LinearLayout.LayoutParams
+        bubbleParams.gravity = if (message.isUser) Gravity.END else Gravity.START
+        holder.bubble.layoutParams = bubbleParams
+        holder.bubble.setBackgroundResource(
+            when {
+                message.isUser -> R.drawable.bg_vc_bubble_user
+                message.kind == VisionChatMessage.Kind.ERROR -> R.drawable.bg_vc_bubble_error
+                else -> R.drawable.bg_vc_bubble_ai
+            }
+        )
+        holder.errorIcon.visibility =
+            if (message.kind == VisionChatMessage.Kind.ERROR) View.VISIBLE else View.GONE
+        holder.timestampText.setTextColor(
+            if (message.isUser) 0xCCFFFFFF.toInt()
+            else ContextCompat.getColor(holder.itemView.context, R.color.gm_text_secondary)
+        )
+
         val timeFormat = SimpleDateFormat("HH:mm", Locale.US)
         holder.timestampText.text = timeFormat.format(Date(message.timestamp))
 
         if (message.imagePath != null) {
             holder.messageImage.visibility = View.VISIBLE
-            val bitmap = BitmapFactory.decodeFile(message.imagePath)
-            holder.messageImage.setImageBitmap(bitmap)
+            // Glide decodes a screen-sized copy off the main thread (a full photo
+            // decoded here used to stutter scrolling and risk running out of memory).
+            val radius = (14 * holder.itemView.resources.displayMetrics.density).toInt()
+            Glide.with(holder.messageImage)
+                .load(java.io.File(message.imagePath))
+                .transform(CenterCrop(), RoundedCorners(radius))
+                .into(holder.messageImage)
         } else {
+            Glide.with(holder.messageImage).clear(holder.messageImage)
             holder.messageImage.visibility = View.GONE
         }
 
         // Show "Search on Web" button only for non-empty AI messages
-        if (!message.isUser && message.text.isNotBlank()) {
+        if (!message.isUser && message.kind == VisionChatMessage.Kind.ANSWER && message.text.isNotBlank()) {
             holder.searchWebRow?.visibility = View.VISIBLE
             holder.searchWebRow?.setOnClickListener {
                 val query = Uri.encode(message.text.take(500))

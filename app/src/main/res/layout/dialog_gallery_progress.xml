@@ -1,0 +1,360 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Progress popup for the glass media gallery (connecting and downloading).
+    Header badge, a Connect → Discover → Sync stepper, a spinner around the
+    glasses glyph, the current status, a progress bar and Cancel.
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="@drawable/bg_gm_dialog"
+    android:orientation="vertical"
+    android:paddingStart="22dp"
+    android:paddingTop="22dp"
+    android:paddingEnd="22dp"
+    android:paddingBottom="22dp">
+
+    <!-- Header -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <FrameLayout
+            android:layout_width="60dp"
+            android:layout_height="60dp">
+
+            <ProgressBar
+                style="?android:attr/progressBarStyleHorizontal"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:indeterminate="false"
+                android:max="100"
+                android:progress="62"
+                android:progressDrawable="@drawable/gm_ring_badge" />
+
+            <ImageView
+                android:layout_width="30dp"
+                android:layout_height="30dp"
+                android:layout_gravity="center"
+                android:importantForAccessibility="no"
+                android:src="@drawable/ic_gm_glasses"
+                app:tint="@color/gm_text_primary" />
+
+            <View
+                android:layout_width="10dp"
+                android:layout_height="10dp"
+                android:layout_gravity="bottom|end"
+                android:layout_marginEnd="6dp"
+                android:layout_marginBottom="6dp"
+                android:background="@drawable/bg_gm_step_done" />
+        </FrameLayout>
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="14dp"
+            android:layout_marginEnd="10dp"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/tvDialogTitle"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:fontFamily="@font/neue_plak_regular"
+                android:textColor="@color/gm_text_primary"
+                android:textSize="22sp"
+                android:textStyle="bold"
+                tools:text="Connect to Glass" />
+
+            <TextView
+                android:id="@+id/tvDialogSubtitle"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:fontFamily="@font/neue_plak_regular"
+                android:textColor="@color/gm_text_secondary"
+                android:textSize="14sp"
+                tools:text="Access your photos and videos from your smart glasses." />
+        </LinearLayout>
+
+        <ImageView
+            android:id="@+id/btnDialogClose"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:layout_gravity="top"
+            android:background="@drawable/bg_gm_circle_button"
+            android:clickable="true"
+            android:contentDescription="Close"
+            android:focusable="true"
+            android:padding="12dp"
+            android:src="@drawable/ic_close"
+            app:tint="@color/gm_text_primary" />
+    </LinearLayout>
+
+    <!-- Stepper -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="26dp"
+        android:orientation="horizontal">
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:gravity="center_horizontal"
+            android:minWidth="72dp"
+            android:orientation="vertical">
+
+            <FrameLayout
+                android:id="@+id/stepCircle1"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:background="@drawable/bg_gm_step_pending">
+
+                <TextView
+                    android:id="@+id/stepNumber1"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:fontFamily="@font/neue_plak_regular"
+                    android:gravity="center"
+                    android:text="1"
+                    android:textColor="@color/gm_text_primary"
+                    android:textSize="16sp"
+                    android:textStyle="bold" />
+
+                <ImageView
+                    android:id="@+id/stepCheck1"
+                    android:layout_width="20dp"
+                    android:layout_height="20dp"
+                    android:layout_gravity="center"
+                    android:importantForAccessibility="no"
+                    android:src="@drawable/ic_gm_check"
+                    android:visibility="gone"
+                    app:tint="@color/gm_on_accent" />
+            </FrameLayout>
+
+            <TextView
+                android:id="@+id/stepLabel1"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:fontFamily="@font/neue_plak_regular"
+                android:text="Connect"
+                android:textColor="@color/gm_text_secondary"
+                android:textSize="14sp" />
+        </LinearLayout>
+
+        <View
+            android:id="@+id/stepLine1"
+            android:layout_width="0dp"
+            android:layout_height="1.5dp"
+            android:layout_marginTop="20dp"
+            android:layout_weight="1"
+            android:background="@color/gm_border" />
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:gravity="center_horizontal"
+            android:minWidth="72dp"
+            android:orientation="vertical">
+
+            <FrameLayout
+                android:id="@+id/stepCircle2"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:background="@drawable/bg_gm_step_pending">
+
+                <TextView
+                    android:id="@+id/stepNumber2"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:fontFamily="@font/neue_plak_regular"
+                    android:gravity="center"
+                    android:text="2"
+                    android:textColor="@color/gm_text_primary"
+                    android:textSize="16sp"
+                    android:textStyle="bold" />
+
+                <ImageView
+                    android:id="@+id/stepCheck2"
+                    android:layout_width="20dp"
+                    android:layout_height="20dp"
+                    android:layout_gravity="center"
+                    android:importantForAccessibility="no"
+                    android:src="@drawable/ic_gm_check"
+                    android:visibility="gone"
+                    app:tint="@color/gm_on_accent" />
+            </FrameLayout>
+
+            <TextView
+                android:id="@+id/stepLabel2"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:fontFamily="@font/neue_plak_regular"
+                android:text="Discover"
+                android:textColor="@color/gm_text_secondary"
+                android:textSize="14sp" />
+        </LinearLayout>
+
+        <View
+            android:id="@+id/stepLine2"
+            android:layout_width="0dp"
+            android:layout_height="1.5dp"
+            android:layout_marginTop="20dp"
+            android:layout_weight="1"
+            android:background="@color/gm_border" />
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:gravity="center_horizontal"
+            android:minWidth="72dp"
+            android:orientation="vertical">
+
+            <FrameLayout
+                android:id="@+id/stepCircle3"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:background="@drawable/bg_gm_step_pending">
+
+                <TextView
+                    android:id="@+id/stepNumber3"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:fontFamily="@font/neue_plak_regular"
+                    android:gravity="center"
+                    android:text="3"
+                    android:textColor="@color/gm_text_primary"
+                    android:textSize="16sp"
+                    android:textStyle="bold" />
+
+                <ImageView
+                    android:id="@+id/stepCheck3"
+                    android:layout_width="20dp"
+                    android:layout_height="20dp"
+                    android:layout_gravity="center"
+                    android:importantForAccessibility="no"
+                    android:src="@drawable/ic_gm_check"
+                    android:visibility="gone"
+                    app:tint="@color/gm_on_accent" />
+            </FrameLayout>
+
+            <TextView
+                android:id="@+id/stepLabel3"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:fontFamily="@font/neue_plak_regular"
+                android:text="Sync"
+                android:textColor="@color/gm_text_secondary"
+                android:textSize="14sp" />
+        </LinearLayout>
+
+    </LinearLayout>
+
+    <!-- Spinner around the glasses -->
+    <FrameLayout
+        android:layout_width="96dp"
+        android:layout_height="96dp"
+        android:layout_gravity="center_horizontal"
+        android:layout_marginTop="26dp">
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="@drawable/gm_spinner_track" />
+
+        <ProgressBar
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:indeterminate="true"
+            android:indeterminateDrawable="@drawable/gm_spinner_arc"
+            android:indeterminateDuration="1100" />
+
+        <ImageView
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:layout_gravity="center"
+            android:importantForAccessibility="no"
+            android:src="@drawable/ic_gm_glasses"
+            app:tint="@color/gm_accent" />
+    </FrameLayout>
+
+    <TextView
+        android:id="@+id/tvDialogStatus"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="18dp"
+        android:fontFamily="@font/neue_plak_regular"
+        android:gravity="center"
+        android:textColor="@color/gm_text_primary"
+        android:textSize="19sp"
+        android:textStyle="bold"
+        tools:text="Connecting to your glasses…" />
+
+    <TextView
+        android:id="@+id/tvDialogDetail"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:ellipsize="middle"
+        android:fontFamily="@font/neue_plak_regular"
+        android:gravity="center"
+        android:maxLines="1"
+        android:textColor="@color/gm_text_secondary"
+        android:textSize="14sp"
+        tools:text="Keep your glasses nearby." />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="18dp"
+        android:layout_marginTop="20dp"
+        android:layout_marginEnd="18dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <ProgressBar
+            android:id="@+id/dialogProgress"
+            style="?android:attr/progressBarStyleHorizontal"
+            android:layout_width="0dp"
+            android:layout_height="6dp"
+            android:layout_weight="1"
+            android:max="100"
+            android:progressDrawable="@drawable/gm_progress_linear"
+            tools:progress="42" />
+
+        <TextView
+            android:id="@+id/tvDialogPercent"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="10dp"
+            android:fontFamily="@font/neue_plak_regular"
+            android:minWidth="36dp"
+            android:gravity="end"
+            android:textColor="@color/gm_text_secondary"
+            android:textSize="12sp"
+            tools:text="42%" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/btnDialogCancel"
+        android:layout_width="match_parent"
+        android:layout_height="56dp"
+        android:layout_marginTop="24dp"
+        android:background="@drawable/bg_gm_button_outline"
+        android:clickable="true"
+        android:focusable="true"
+        android:fontFamily="@font/neue_plak_regular"
+        android:gravity="center"
+        android:text="Cancel"
+        android:textColor="@color/gm_text_primary"
+        android:textSize="17sp" />
+</LinearLayout>

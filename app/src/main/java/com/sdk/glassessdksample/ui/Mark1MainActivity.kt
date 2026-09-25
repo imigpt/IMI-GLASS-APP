@@ -424,10 +424,16 @@ class Mark1MainActivity : AppCompatActivity(), GeminiLiveService.GeminiLiveCallb
                 "Bluetooth is turned off on this phone. Turn it on to connect your IMI glasses, then tap Retry."
             binding.btnBleGateRetry.text = "Open Bluetooth Settings"
         } else {
-            binding.tvBleGateHeadline.text = "no device"
+            val otherDevice = GlassConnectionState.otherConnectedDeviceName(this)
+            binding.tvBleGateHeadline.text = if (otherDevice != null) "wrong device" else "no device"
             binding.tvBleGateTitle.text = "connected."
-            binding.tvBleGateDescription.text =
+            binding.tvBleGateDescription.text = if (otherDevice != null) {
+                // Something is connected, but it isn't a Mark 1 ("F-16"-style name).
+                "\"$otherDevice\" is connected, but it isn't IMI glasses. " +
+                    "Connect your IMI glasses (named like F-16) in your phone's Bluetooth settings, then tap Retry."
+            } else {
                 "Connect your IMI glasses via your phone's Bluetooth settings, then tap Retry."
+            }
             binding.btnBleGateRetry.text = "Retry"
         }
     }
@@ -737,9 +743,8 @@ class Mark1MainActivity : AppCompatActivity(), GeminiLiveService.GeminiLiveCallb
         if (!GlassConnectionState.isConnected(this)) {
             val message = "No device is connected. Please connect your glasses."
             Toast.makeText(this, message, Toast.LENGTH_LONG).show()
-            // Spoken too — the user may be wearing the glasses and not looking
-            // at the phone at all.
-            tts?.speak(message, TextToSpeech.QUEUE_FLUSH, null, "no_glasses")
+            // Not spoken: with no glasses connected it could only come out of the
+            // phone speaker, and IMI never speaks through the phone.
             checkBleAndShowGate()
             return
         }
@@ -1416,6 +1421,12 @@ class Mark1MainActivity : AppCompatActivity(), GeminiLiveService.GeminiLiveCallb
             // instead, same as MainActivity's equivalent handler does.
             Toast.makeText(this, "$error — tap Quick Start to retry", Toast.LENGTH_LONG).show()
             stopConversation()
+        }
+    }
+
+    override fun onReplyAudioBlocked() {
+        runOnUiThread {
+            Toast.makeText(this, "IMI's reply is on screen — glasses audio isn't connected, so it wasn't played on the phone.", Toast.LENGTH_LONG).show()
         }
     }
 

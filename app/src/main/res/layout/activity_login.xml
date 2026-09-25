@@ -65,6 +65,22 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent" />
 
+    <TextView
+        android:id="@+id/tvEmailError"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:paddingStart="22dp"
+        android:paddingEnd="22dp"
+        android:textColor="#FF6B6B"
+        android:textSize="13sp"
+        android:visibility="gone"
+        tools:text="Error"
+        tools:visibility="visible"
+        app:layout_constraintTop_toBottomOf="@id/etUserId"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
+
     <!-- Password Input -->
     <EditText
         android:id="@+id/etPassword"
@@ -79,7 +95,40 @@
         android:inputType="textPassword"
         android:paddingStart="22dp"
         android:paddingEnd="22dp"
-        app:layout_constraintTop_toBottomOf="@id/etUserId"
+        app:layout_constraintTop_toBottomOf="@id/tvEmailError"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
+
+    <TextView
+        android:id="@+id/tvPasswordError"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:paddingStart="22dp"
+        android:paddingEnd="22dp"
+        android:textColor="#FF6B6B"
+        android:textSize="13sp"
+        android:visibility="gone"
+        tools:text="Error"
+        tools:visibility="visible"
+        app:layout_constraintTop_toBottomOf="@id/etPassword"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
+
+    <!-- Form-level error (wrong credentials, network, server) -->
+    <TextView
+        android:id="@+id/tvFormError"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="24dp"
+        android:background="@drawable/bg_auth_error"
+        android:padding="14dp"
+        android:textColor="#FFFFFF"
+        android:textSize="14sp"
+        android:visibility="gone"
+        tools:text="Incorrect email or password."
+        tools:visibility="visible"
+        app:layout_constraintTop_toBottomOf="@id/tvPasswordError"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent" />
 
@@ -88,7 +137,7 @@
         android:id="@+id/btnLogin"
         android:layout_width="0dp"
         android:layout_height="56dp"
-        android:layout_marginTop="48dp"
+        android:layout_marginTop="24dp"
         android:layout_marginStart="8dp"
         android:layout_marginEnd="8dp"
         android:background="@drawable/bg_auth_button"
@@ -97,7 +146,7 @@
         android:textSize="17sp"
         android:textAllCaps="false"
         android:stateListAnimator="@null"
-        app:layout_constraintTop_toBottomOf="@id/etPassword"
+        app:layout_constraintTop_toBottomOf="@id/tvFormError"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent" />
 

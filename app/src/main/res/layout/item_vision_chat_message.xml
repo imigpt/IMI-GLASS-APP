@@ -1,79 +1,114 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- One Vision Chat message. The adapter aligns it and picks the AI or user bubble. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/messageRow"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:orientation="vertical"
-    android:padding="8dp">
+    android:paddingTop="6dp"
+    android:paddingBottom="6dp">
 
     <LinearLayout
+        android:id="@+id/messageBubble"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_gravity="start"
-        android:background="#E3F2FD"
+        android:background="@drawable/bg_vc_bubble_ai"
         android:orientation="vertical"
-        android:padding="12dp">
+        android:padding="14dp">
 
-        <!-- Image Preview -->
+        <!-- Photo from the glasses -->
         <ImageView
             android:id="@+id/messageImage"
-            android:layout_width="200dp"
-            android:layout_height="200dp"
-            android:layout_marginBottom="8dp"
+            android:layout_width="240dp"
+            android:layout_height="180dp"
+            android:layout_marginBottom="10dp"
+            android:contentDescription="Photo from your glasses"
             android:scaleType="centerCrop"
             android:visibility="gone" />
 
-        <!-- Message Text -->
-        <TextView
-            android:id="@+id/messageText"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:maxWidth="280dp"
-            android:text="Message"
-            android:textColor="#000000"
-            android:textSize="14sp" />
-
-        <!-- Timestamp -->
-        <TextView
-            android:id="@+id/timestampText"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:text="00:00"
-            android:textColor="#999999"
-            android:textSize="10sp" />
-
-        <!-- Search on Web button (AI messages only) -->
         <LinearLayout
-            android:id="@+id/searchWebRow"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="6dp"
-            android:background="@drawable/bg_chat_bubble_user_v2"
-            android:gravity="center_vertical"
-            android:orientation="horizontal"
-            android:paddingStart="10dp"
-            android:paddingTop="5dp"
-            android:paddingEnd="12dp"
-            android:paddingBottom="5dp"
-            android:visibility="gone">
+            android:orientation="horizontal">
 
+            <!-- Error messages only -->
             <ImageView
-                android:layout_width="14dp"
-                android:layout_height="14dp"
-                android:src="@drawable/ic_search"
-                android:contentDescription="Search"
-                app:tint="#FFFFFF"
-                xmlns:app="http://schemas.android.com/apk/res-auto" />
+                android:id="@+id/messageErrorIcon"
+                android:layout_width="20dp"
+                android:layout_height="20dp"
+                android:layout_marginTop="1dp"
+                android:layout_marginEnd="10dp"
+                android:importantForAccessibility="no"
+                android:src="@drawable/ic_vc_warning"
+                android:visibility="gone"
+                app:tint="@color/gm_danger" />
 
             <TextView
-                android:id="@+id/btnSearchWebVision"
+                android:id="@+id/messageText"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="5dp"
-                android:text="Search on Web"
-                android:textColor="#FFFFFF"
-                android:textSize="12sp"
-                android:textStyle="bold" />
+                android:fontFamily="@font/neue_plak_regular"
+                android:lineSpacingExtra="3dp"
+                android:maxWidth="270dp"
+                android:textColor="@color/gm_text_primary"
+                android:textIsSelectable="true"
+                android:textSize="15sp"
+                tools:text="A desk with a laptop and a coffee mug." />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <!-- Search on Web (AI messages only) -->
+            <LinearLayout
+                android:id="@+id/searchWebRow"
+                android:layout_width="wrap_content"
+                android:layout_height="32dp"
+                android:layout_marginEnd="10dp"
+                android:background="@drawable/bg_vc_chip_outline"
+                android:clickable="true"
+                android:focusable="true"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingStart="10dp"
+                android:paddingEnd="12dp"
+                android:visibility="gone"
+                tools:visibility="visible">
+
+                <ImageView
+                    android:layout_width="15dp"
+                    android:layout_height="15dp"
+                    android:importantForAccessibility="no"
+                    android:src="@drawable/ic_search"
+                    app:tint="@color/gm_accent" />
+
+                <TextView
+                    android:id="@+id/btnSearchWebVision"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="6dp"
+                    android:fontFamily="@font/neue_plak_regular"
+                    android:text="Search on Web"
+                    android:textColor="@color/gm_accent"
+                    android:textSize="13sp"
+                    android:textStyle="bold" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/timestampText"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:fontFamily="@font/neue_plak_regular"
+                android:textColor="@color/gm_text_secondary"
+                android:textSize="11sp"
+                tools:text="12:11" />
         </LinearLayout>
     </LinearLayout>
 

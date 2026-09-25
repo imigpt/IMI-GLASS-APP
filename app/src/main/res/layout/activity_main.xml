@@ -332,7 +332,6 @@
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:minHeight="62dp"
-                            android:layout_marginBottom="8dp"
                             android:background="@drawable/bg_home_secondary_btn"
                             android:gravity="center_vertical"
                             android:orientation="horizontal"
@@ -378,11 +377,17 @@
                         </LinearLayout>
 
 
+                        <!-- Silent Mode (took the Interrupt toggle's slot; same
+                             behaviour as the Mark I Silent Mode pill). -->
                         <LinearLayout
+                            android:id="@+id/btnMuteAi"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
                             android:minHeight="62dp"
                             android:background="@drawable/bg_home_secondary_btn"
+                            android:clickable="true"
+                            android:focusable="true"
                             android:gravity="center_vertical"
                             android:orientation="horizontal"
                             android:paddingStart="10dp"
@@ -394,7 +399,7 @@
                                 android:layout_width="20dp"
                                 android:layout_height="20dp"
                                 android:layout_marginEnd="6dp"
-                                android:src="@android:drawable/ic_media_pause"
+                                android:src="@drawable/ic_silent_mode"
                                 app:tint="#ADADAD" />
 
                             <LinearLayout
@@ -404,11 +409,12 @@
                                 android:orientation="vertical">
 
                                 <TextView
+                                    android:id="@+id/tvMuteLabel"
                                     android:layout_width="wrap_content"
                                     android:layout_height="wrap_content"
                                     android:ellipsize="end"
                                     android:maxLines="1"
-                                    android:text="Interrupt"
+                                    android:text="Silent Mode"
                                     android:textColor="#FFFFFF"
                                     android:textSize="11sp" />
 
@@ -417,20 +423,10 @@
                                     android:layout_height="wrap_content"
                                     android:ellipsize="end"
                                     android:maxLines="1"
-                                    android:text="Smart pause"
+                                    android:text="Mute IMI"
                                     android:textColor="#9A9A9A"
                                     android:textSize="9sp" />
                             </LinearLayout>
-
-                            <androidx.appcompat.widget.SwitchCompat
-                                android:id="@+id/switchInterruptMode"
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:checked="true"
-                                android:scaleX="0.82"
-                                android:scaleY="0.82"
-                                app:thumbTint="#FFFFFFFF"
-                                app:trackTint="#FFFF7F2E" />
                         </LinearLayout>
                     </LinearLayout>
                 </LinearLayout>
@@ -785,10 +781,13 @@
                 android:layout_height="0dp"
                 android:visibility="gone" />
 
-            <Button
-                android:id="@+id/btnMuteAi"
+            <!-- Interrupt toggle is no longer on Home; kept hidden so the
+                 existing binding still works. Checked = barge-in stays ON. -->
+            <androidx.appcompat.widget.SwitchCompat
+                android:id="@+id/switchInterruptMode"
                 android:layout_width="0dp"
                 android:layout_height="0dp"
+                android:checked="true"
                 android:visibility="gone" />
 
             <LinearLayout

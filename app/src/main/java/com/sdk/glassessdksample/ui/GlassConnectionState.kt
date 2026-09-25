@@ -28,12 +28,22 @@ import androidx.core.content.ContextCompat
  * than occasionally counting a non-glasses accessory. Routing to the *wrong*
  * device is a separate concern already handled by
  * [PreferredAudioDeviceResolver.hasMultipleBluetoothAudioDevicesConnected].
+ *
+ * Exception — Mark 1: with Mark 1 selected, only devices named like "F-16" count
+ * (see [GlassDeviceFilter]). Every source below is then checked by device name, and
+ * the name-less "is anything on this profile?" probe is skipped.
  */
 object GlassConnectionState {
     private const val TAG = "GlassConnState"
 
     /** Why [isConnected] said no, for the gate UI and for logging. */
-    enum class Reason { CONNECTED, BLUETOOTH_OFF, NO_DEVICE }
+    enum class Reason {
+        CONNECTED,
+        BLUETOOTH_OFF,
+        NO_DEVICE,
+        /** Mark 1: a Bluetooth device is connected, but its name isn't a Mark 1's. */
+        WRONG_DEVICE,
+    }
 
     // The bonded-device reflection loop in step 4 is not cheap, and start() /
     // rearmWakeWord() fire in bursts. Serve a very short cache; any connect or
@@ -71,7 +81,18 @@ object GlassConnectionState {
     fun describe(context: Context): Reason {
         val adapter = adapterOrNull(context)
         if (adapter == null || !adapter.isEnabled) return Reason.BLUETOOTH_OFF
-        return if (isConnected(context)) Reason.CONNECTED else Reason.NO_DEVICE
+        if (isConnected(context)) return Reason.CONNECTED
+        return if (otherConnectedDeviceName(context) != null) Reason.WRONG_DEVICE else Reason.NO_DEVICE
+    }
+
+    /**
+     * Mark 1 only: the name of a connected Bluetooth device that was rejected
+     * because it isn't a Mark 1 (e.g. "boAt Stone 650"), so the gate can say so.
+     */
+    fun otherConnectedDeviceName(context: Context): String? {
+        if (!GlassDeviceFilter.isActive(context)) return null
+        val adapter = adapterOrNull(context) ?: return null
+        return connectedDeviceNames(context, adapter).firstOrNull { !GlassDeviceFilter.isMark1Name(it) }
     }
 
     /**
@@ -84,6 +105,13 @@ object GlassConnectionState {
         if (device != null) {
             val address = try { device.address } catch (e: SecurityException) { null }
             val name = try { device.name } catch (e: SecurityException) { null }
+            if (!GlassDeviceFilter.accepts(context, name)) {
+                // Earbuds, a speaker… connected. Not the glasses: don't record them
+                // as paired, and report whatever the real state is.
+                Log.i(TAG, "Ignoring connected device \"$name\" — not a Mark 1 (F-16 style) name")
+                notifyListeners(isConnected(context))
+                return
+            }
             try {
                 PreferredAudioDeviceResolver.rememberPairedGlassesIfUnset(context, address, name)
             } catch (e: Exception) {
@@ -122,6 +150,8 @@ object GlassConnectionState {
         val adapter = adapterOrNull(context)
         if (adapter == null || !adapter.isEnabled) return false
 
+        if (GlassDeviceFilter.isActive(context)) return computeMark1(context, adapter)
+
         // 2. A Bluetooth audio endpoint. connectedBluetoothAudioDevices() already
         //    de-duplicates SCO/A2DP pairs and — importantly on OnePlus builds —
         //    filters out the phantom entry that is really the phone itself.
@@ -156,6 +186,54 @@ object GlassConnectionState {
         //    reflection probe. Moved verbatim from Mark1MainActivity.isGlassConnected()
         //    so the existing BLE gate keeps behaving exactly as it did.
         return legacyProfileCascade(context, adapter)
+    }
+
+    /**
+     * Mark 1: connected only if a device NAMED like a Mark 1 is connected. The same
+     * sources as [compute], but each one is checked by device name.
+     */
+    private fun computeMark1(context: Context, adapter: BluetoothAdapter): Boolean {
+        val names = connectedDeviceNames(context, adapter)
+        val match = names.firstOrNull { GlassDeviceFilter.isMark1Name(it) }
+        if (match == null && names.isNotEmpty()) {
+            Log.d(TAG, "Mark 1 not connected — other device(s) connected: $names")
+        }
+        return match != null
+    }
+
+    /**
+     * Names of every Bluetooth device the phone reports as connected: audio
+     * endpoints, GATT links, and bonded devices whose link is up.
+     */
+    private fun connectedDeviceNames(context: Context, adapter: BluetoothAdapter): List<String> {
+        val names = LinkedHashSet<String>()
+        try {
+            PreferredAudioDeviceResolver.connectedBluetoothAudioDevices(context)
+                .mapNotNullTo(names) { it.productName?.toString()?.takeIf(String::isNotBlank) }
+        } catch (e: Exception) {
+            Log.w(TAG, "Audio-device name check failed: ${e.message}")
+        }
+        try {
+            val bm = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
+            (bm?.getConnectedDevices(BluetoothProfile.GATT).orEmpty() +
+                bm?.getConnectedDevices(BluetoothProfile.GATT_SERVER).orEmpty())
+                .mapNotNullTo(names) { it.name?.takeIf(String::isNotBlank) }
+        } catch (e: SecurityException) {
+            Log.w(TAG, "No BLUETOOTH_CONNECT permission for GATT names: ${e.message}")
+        }
+        try {
+            for (device in adapter.bondedDevices.orEmpty()) {
+                val connected = try {
+                    device.javaClass.getMethod("isConnected").invoke(device) as? Boolean ?: false
+                } catch (e: Exception) {
+                    false
+                }
+                if (connected) device.name?.takeIf(String::isNotBlank)?.let(names::add)
+            }
+        } catch (e: SecurityException) {
+            Log.w(TAG, "No permission to read bonded devices: ${e.message}")
+        }
+        return names.toList()
     }
 
     private fun legacyProfileCascade(context: Context, adapter: BluetoothAdapter): Boolean {
